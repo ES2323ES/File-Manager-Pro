@@ -18,8 +18,8 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.cardview.widget.CardView;
 import androidx.core.app.ActivityCompat;
@@ -28,14 +28,22 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.android.material.button.MaterialButton;
 
-import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQ_MEDIA_PERMS = 1001;
+
+    private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
+    private final Map<String, TextView> subtitleViewsById = new HashMap<>();
+    private StorageUtils.CategoryBytesSummary cachedSizes = new StorageUtils.CategoryBytesSummary();
+    private long lastBackPressedMs = 0L;
 
     private LinearLayout rootContainer;
     private LinearLayout topBar;
@@ -68,7 +76,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // סידור מדויק של 4 שורות × 3 עמודות משמאל לימין לפי סעיף יא
+    // סידור מדויק של 4 שורות × 3 עמודות משמאל לימין
     private static final HomeCategory[][] HOME_ROWS_LTR = new HomeCategory[][]{
             // שורה ראשונה משמאל לימין: אחסון ראשי, כרטיס SD, הורדות
             {
@@ -102,10 +110,55 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         bindViews();
+        setupDoubleBackToExit();
         ensureStorageAndMediaPermissions();
+        checkPostUpdateConfirmation();
 
         if (PrefsManager.isAutoCheckUpdates(this)) {
             UpdateChecker.checkForUpdates(this, false);
+        }
+    }
+
+    // סעיף כ: ביציאה מהאפליקציה — "לחץ שוב כדי לצאת"
+    private void setupDoubleBackToExit() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                long now = System.currentTimeMillis();
+                if (now - lastBackPressedMs < 2000L) {
+                    finish();
+                } else {
+                    lastBackPressedMs = now;
+                    Toast.makeText(MainActivity.this, "לחץ שוב כדי לצאת", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+    }
+
+    // סעיף ו: הודעה מסודרת בסיום עדכון האפליקציה — "File Manager Pro עודכן בהצלחה"
+    private void checkPostUpdateConfirmation() {
+        String lastVer = PrefsManager.getLastKnownAppVersion(this);
+        boolean pendingBanner = PrefsManager.isPendingUpdateSuccessBanner(this);
+        boolean upgraded = !lastVer.isEmpty() && UpdateChecker.compareSemver(BuildConfig.VERSION_NAME, lastVer) > 0;
+
+        if (upgraded || pendingBanner) {
+            PrefsManager.setPendingUpdateSuccessBanner(this, false);
+            PrefsManager.setLastKnownAppVersion(this, BuildConfig.VERSION_NAME);
+            UpdateInstallReceiver.postSuccessNotification(this);
+            ThemedDialogHelper.showCustomDialog(
+                    this,
+                    "File Manager Pro עודכן בהצלחה",
+                    "האפליקציה שודרגה בהצלחה לגירסה " + BuildConfig.VERSION_NAME + ".\n\n"
+                            + "כלל הקבצים, ההרשאות וההגדרות האישיות שלך נשמרו במלואם וכעת כל היכולות החדשות זמינות לשימושך.",
+                    null,
+                    "הבנתי",
+                    null,
+                    null,
+                    null,
+                    false
+            );
+        } else if (lastVer.isEmpty()) {
+            PrefsManager.setLastKnownAppVersion(this, BuildConfig.VERSION_NAME);
         }
     }
 
@@ -146,7 +199,7 @@ public class MainActivity extends AppCompatActivity {
         btnOpenAnalyzerFromAlert.setOnClickListener(v ->
                 startActivity(new Intent(this, StorageAnalyzerActivity.class)));
 
-        // החלקה מלמעלה למטה לרענון כל הקבצים (סעיף יד)
+        // החלקה מלמעלה למטה לרענון הקבצים
         swipeRefreshHome.setColorSchemeColors(0xFF1D4ED8, 0xFF0284C7, 0xFF0D9488);
         swipeRefreshHome.setOnRefreshListener(() -> {
             applyCurrentThemeAndRefresh(true);
@@ -187,10 +240,24 @@ public class MainActivity extends AppCompatActivity {
 
         refreshStorageSummaryAnd96Alert();
         buildHomeGrid(cardBg, textPrimary, textSecondary);
+        refreshCategoryVolumesAsync();
 
         if (showToast) {
             Toast.makeText(this, "כל הקבצים והנפחים רועננו בהצלחה", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void refreshCategoryVolumesAsync() {
+        final boolean showHidden = PrefsManager.isShowHidden(this);
+        bgExecutor.execute(() -> {
+            StorageUtils.CategoryBytesSummary fresh = StorageUtils.computeCategorySizes(this, showHidden);
+            runOnUiThread(() -> {
+                cachedSizes = fresh;
+                for (Map.Entry<String, TextView> entry : subtitleViewsById.entrySet()) {
+                    entry.getValue().setText(getCategorySubtitle(entry.getKey()));
+                }
+            });
+        });
     }
 
     private void refreshStorageSummaryAnd96Alert() {
@@ -230,6 +297,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void buildHomeGrid(int cardBg, int textPrimary, int textSecondary) {
         gridRowsContainer.removeAllViews();
+        subtitleViewsById.clear();
         LayoutInflater inflater = LayoutInflater.from(this);
 
         for (HomeCategory[] rowItems : HOME_ROWS_LTR) {
@@ -258,6 +326,7 @@ public class MainActivity extends AppCompatActivity {
                 tvTitle.setTextColor(textPrimary);
                 tvSub.setText(getCategorySubtitle(item.id));
                 tvSub.setTextColor(textSecondary);
+                subtitleViewsById.put(item.id, tvSub);
 
                 tile.setOnClickListener(v -> onCategoryClicked(item));
                 rowLayout.addView(tile);
@@ -267,6 +336,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // סעיפים כב, כג: הצגת הנפח שכל קטגוריה תופסת במקום "פתיחה", ו-"חותך אודיו מקצועי" / "חותך וידאו מקצועי"
     private String getCategorySubtitle(String id) {
         if (FileBrowserActivity.MODE_INTERNAL.equals(id)) {
             StorageUtils.StorageStat st = StorageUtils.getInternalStorageStat();
@@ -274,19 +344,35 @@ public class MainActivity extends AppCompatActivity {
         }
         if (FileBrowserActivity.MODE_SD_CARD.equals(id)) {
             StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
-            return sd.available ? StorageUtils.formatSize(sd.freeBytes) + " פנוי" : "חיצוני";
+            return sd.available ? StorageUtils.formatSize(sd.freeBytes) + " פנוי" : "לא מחובר";
         }
         if (FileBrowserActivity.MODE_DOWNLOADS.equals(id)) {
-            File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            File[] list = dl.listFiles();
-            return (list != null ? list.length : 0) + " פריטים";
+            return StorageUtils.formatSize(cachedSizes.downloadsBytes);
+        }
+        if (FileBrowserActivity.MODE_IMAGES.equals(id)) {
+            return StorageUtils.formatSize(cachedSizes.imagesBytes);
+        }
+        if (FileBrowserActivity.MODE_AUDIO.equals(id)) {
+            return StorageUtils.formatSize(cachedSizes.audioBytes);
+        }
+        if (FileBrowserActivity.MODE_VIDEOS.equals(id)) {
+            return StorageUtils.formatSize(cachedSizes.videosBytes);
+        }
+        if (FileBrowserActivity.MODE_DOCUMENTS.equals(id)) {
+            return StorageUtils.formatSize(cachedSizes.documentsBytes);
+        }
+        if (FileBrowserActivity.MODE_APPS.equals(id)) {
+            return StorageUtils.formatSize(cachedSizes.appsBytes);
+        }
+        if (FileBrowserActivity.MODE_RECENT.equals(id)) {
+            return StorageUtils.formatSize(cachedSizes.recentBytes);
         }
         if (FileBrowserActivity.MODE_RECYCLE_BIN.equals(id)) {
-            return RecycleBinManager.getTrashItemCount(this) + " בסל";
+            return StorageUtils.formatSize(cachedSizes.recycleBinBytes);
         }
-        if ("TOOL_AUDIO_CUTTER".equals(id)) return "חיתוך מהיר";
-        if ("TOOL_VIDEO_CUTTER".equals(id)) return "חיתוך מדויק";
-        return "פתיחה";
+        if ("TOOL_AUDIO_CUTTER".equals(id)) return "חותך אודיו מקצועי";
+        if ("TOOL_VIDEO_CUTTER".equals(id)) return "חותך וידאו מקצועי";
+        return "";
     }
 
     private void onCategoryClicked(HomeCategory item) {
@@ -334,10 +420,13 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-            new AlertDialog.Builder(this)
-                    .setTitle("גישה מלאה לעריכת כל הקבצים")
-                    .setMessage("כדי לאפשר העתקה, העברה, שינוי שם ומחיקה של כל סוגי הקבצים באחסון הראשי ובכרטיס ה-SD, אנא אשר הרשאת גישה לכל הקבצים עבור File Manager Pro.")
-                    .setPositiveButton("אשר הרשאה", (d, w) -> {
+            ThemedDialogHelper.showCustomDialog(
+                    this,
+                    "גישה מלאה לעריכת כל הקבצים",
+                    "כדי לאפשר פתיחת קבצים, חילוץ, העתקה, העברה ומחיקה באחסון הראשי ובכרטיס ה-SD, אנא אשר הרשאת גישה לכל הקבצים עבור File Manager Pro.",
+                    null,
+                    "אשר הרשאה",
+                    () -> {
                         try {
                             Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                                     Uri.parse("package:" + getPackageName()));
@@ -345,9 +434,11 @@ public class MainActivity extends AppCompatActivity {
                         } catch (Exception e) {
                             startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
                         }
-                    })
-                    .setNegativeButton("אחר כך", null)
-                    .show();
+                    },
+                    "סגור",
+                    null,
+                    false
+            );
         }
     }
 
@@ -355,5 +446,11 @@ public class MainActivity extends AppCompatActivity {
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         applyCurrentThemeAndRefresh(false);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        bgExecutor.shutdownNow();
     }
 }

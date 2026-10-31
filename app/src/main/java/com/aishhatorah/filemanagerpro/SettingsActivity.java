@@ -1,6 +1,5 @@
 package com.aishhatorah.filemanagerpro;
 
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -14,7 +13,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -22,6 +20,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+
+import java.util.Arrays;
 
 public class SettingsActivity extends AppCompatActivity {
 
@@ -46,7 +46,7 @@ public class SettingsActivity extends AppCompatActivity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(bgColor);
 
-        // סרגל כותרת עליון
+        // סרגל כותרת עליון — סעיף י: "הגדרות" במקום "הגדרות האפליקציה"
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -61,7 +61,7 @@ public class SettingsActivity extends AppCompatActivity {
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("הגדרות האפליקציה");
+        tvTitle.setText("הגדרות");
         tvTitle.setTextSize(18f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
@@ -76,11 +76,11 @@ public class SettingsActivity extends AppCompatActivity {
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(32, 28, 32, 48);
 
-        // 1. גוון התאורה של האפליקציה: בהיר, כהה, ניאון (סעיף ו)
+        // 1. גוון התאורה של האפליקציה: בהיר, כהה, ניאון
         addSectionTitle(body, "גוון התאורה וערכת נושא", accent);
         LinearLayout themeCard = createSectionCard(cardColor);
         TextView tvThemeSub = new TextView(this);
-        tvThemeSub.setText("בחר את גוון התאורה של File Manager Pro (מצב נוכחי: " + ThemeHelper.getThemeNameHe(theme) + ")");
+        tvThemeSub.setText("בחר את גוון התאורה של האפליקציה (מצב נוכחי: " + ThemeHelper.getThemeNameHe(theme) + ")");
         tvThemeSub.setTextColor(textSecondary);
         tvThemeSub.setTextSize(13f);
         tvThemeSub.setPadding(0, 0, 0, 20);
@@ -90,14 +90,23 @@ public class SettingsActivity extends AppCompatActivity {
         themeButtonsRow.setOrientation(LinearLayout.HORIZONTAL);
         themeButtonsRow.setWeightSum(3f);
 
-        themeButtonsRow.addView(createThemeButton("בהיר", PrefsManager.THEME_LIGHT, theme == PrefsManager.THEME_LIGHT, accent));
-        themeButtonsRow.addView(createThemeButton("כהה", PrefsManager.THEME_DARK, theme == PrefsManager.THEME_DARK, accent));
-        themeButtonsRow.addView(createThemeButton("ניאון", PrefsManager.THEME_NEON, theme == PrefsManager.THEME_NEON, accent));
+        themeButtonsRow.addView(createOptionButton("בהיר", theme == PrefsManager.THEME_LIGHT, accent, () -> {
+            PrefsManager.setThemeMode(this, PrefsManager.THEME_LIGHT);
+            renderSettingsUi();
+        }));
+        themeButtonsRow.addView(createOptionButton("כהה", theme == PrefsManager.THEME_DARK, accent, () -> {
+            PrefsManager.setThemeMode(this, PrefsManager.THEME_DARK);
+            renderSettingsUi();
+        }));
+        themeButtonsRow.addView(createOptionButton("ניאון", theme == PrefsManager.THEME_NEON, accent, () -> {
+            PrefsManager.setThemeMode(this, PrefsManager.THEME_NEON);
+            renderSettingsUi();
+        }));
 
         themeCard.addView(themeButtonsRow);
         body.addView(themeCard);
 
-        // 2. ניתוח ובדיקת הקבצים הגדולים ביותר + התרעת 96% (סעיף טו)
+        // 2. ניתוח ובדיקת הקבצים הגדולים ביותר + התרעת 96%
         addSectionTitle(body, "ניתוח נפח אחסון והתרעות זיכרון", accent);
         LinearLayout analyzerCard = createSectionCard(cardColor);
 
@@ -126,9 +135,36 @@ public class SettingsActivity extends AppCompatActivity {
 
         body.addView(analyzerCard);
 
-        // 3. תצוגת קבצים ומיון
-        addSectionTitle(body, "תצוגת קבצים, תיקיות ומיון", accent);
+        // 3. סעיף יד: בחירת התצוגה בתוך תוכן התיקיות (תצוגת רשימה / תצוגת רשת) + מיון
+        addSectionTitle(body, "תצוגת התוכן בתיקיות ומיון", accent);
         LinearLayout displayCard = createSectionCard(cardColor);
+
+        TextView tvLayoutLabel = new TextView(this);
+        tvLayoutLabel.setText("בחירת אופן התצוגה בתוך התיקיות:");
+        tvLayoutLabel.setTextColor(textPrimary);
+        tvLayoutLabel.setTextSize(14f);
+        tvLayoutLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvLayoutLabel.setPadding(0, 0, 0, 14);
+        displayCard.addView(tvLayoutLabel);
+
+        boolean isGrid = PrefsManager.isGridLayout(this);
+        LinearLayout viewModeRow = new LinearLayout(this);
+        viewModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        viewModeRow.setWeightSum(2f);
+
+        viewModeRow.addView(createOptionButton("תצוגת רשימה", !isGrid, accent, () -> {
+            PrefsManager.setGridLayout(this, false);
+            renderSettingsUi();
+        }));
+        viewModeRow.addView(createOptionButton("תצוגת רשת", isGrid, accent, () -> {
+            PrefsManager.setGridLayout(this, true);
+            renderSettingsUi();
+        }));
+        LinearLayout.LayoutParams vmLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        vmLp.bottomMargin = 14;
+        viewModeRow.setLayoutParams(vmLp);
+        displayCard.addView(viewModeRow);
 
         addSwitchRow(displayCard,
                 "הצגת קבצים מוסתרים",
@@ -136,13 +172,6 @@ public class SettingsActivity extends AppCompatActivity {
                 PrefsManager.isShowHidden(this),
                 textPrimary, textSecondary,
                 checked -> PrefsManager.setShowHidden(this, checked));
-
-        addSwitchRow(displayCard,
-                "תצוגת רשת (Grid) במקום רשימה",
-                "הצג קבצים בשתי עמודות בסייר הקבצים",
-                PrefsManager.isGridLayout(this),
-                textPrimary, textSecondary,
-                checked -> PrefsManager.setGridLayout(this, checked));
 
         addSwitchRow(displayCard,
                 "הצגת תמונות ממוזערות למדיה",
@@ -169,7 +198,7 @@ public class SettingsActivity extends AppCompatActivity {
         displayCard.addView(btnSortField);
         body.addView(displayCard);
 
-        // 4. סל מיחזור ואבטחת מחיקה
+        // 4. סל מיחזור ואבטחת מחיקה (סעיף טו: בקשת אישור + אישור נוסף בריקון סל המיחזור)
         addSectionTitle(body, "סל מיחזור ומחיקת קבצים", accent);
         LinearLayout trashCard = createSectionCard(cardColor);
 
@@ -187,18 +216,16 @@ public class SettingsActivity extends AppCompatActivity {
                 textPrimary, textSecondary,
                 checked -> PrefsManager.setConfirmDelete(this, checked));
 
+        int trashCount = RecycleBinManager.getTrashItemCount(this);
+        String trashSize = StorageUtils.formatSize(RecycleBinManager.getTrashTotalBytes(this));
         Button btnEmptyTrashNow = createSubtleButton(
-                "ריקון סל המיחזור כעת (" + RecycleBinManager.getTrashItemCount(this) + " פריטים)",
+                "ריקון סל המיחזור (" + trashCount + " פריטים • " + trashSize + ")",
                 cardColor, Color.parseColor("#DC2626"),
-                v -> {
-                    int deleted = RecycleBinManager.emptyTrash(this);
-                    Toast.makeText(this, "רוקנו " + deleted + " פריטים מסל המיחזור", Toast.LENGTH_SHORT).show();
-                    renderSettingsUi();
-                });
+                v -> confirmEmptyRecycleBinTwoStep());
         trashCard.addView(btnEmptyTrashNow);
         body.addView(trashCard);
 
-        // 5. הרשאות מערכת, מדיה והתקנת עדכונים (סעיף ז)
+        // 5. הרשאות מערכת, מדיה והתקנת עדכונים
         addSectionTitle(body, "הרשאות גישה למדיה, אחסון ועריכה", accent);
         LinearLayout permsCard = createSectionCard(cardColor);
 
@@ -223,28 +250,21 @@ public class SettingsActivity extends AppCompatActivity {
                 v -> openAppSystemSettings()));
         body.addView(permsCard);
 
-        // 6. עדכוני GitHub ואיפוס
-        addSectionTitle(body, "עדכונים מ-GitHub ואיפוס הגדרות", accent);
+        // 6. סעיפים ט, יא, טו: "עידכונים ואיפוס הגדרות" + "בדיקת עדכונים אוטומטית בהפעלה" (ללא הגדרת מאגר, ועם אישור נוסף באיפוס)
+        addSectionTitle(body, "עידכונים ואיפוס הגדרות", accent);
         LinearLayout updateCard = createSectionCard(cardColor);
 
         addSwitchRow(updateCard,
                 "בדיקת עדכונים אוטומטית בהפעלה",
-                "בדוק בגייטהאב אם שוחררה גירסה חדשה (V2 / V3) בעת פתיחת האפליקציה",
+                "בדוק אוטומטית בעת הכניסה לאפליקציה אם זמינה גירסה חדשה והצע עדכון רק כשקיים עדכון",
                 PrefsManager.isAutoCheckUpdates(this),
                 textPrimary, textSecondary,
                 checked -> PrefsManager.setAutoCheckUpdates(this, checked));
 
         updateCard.addView(createSubtleButton(
-                "הגדרת מאגר GitHub לעדכונים (" + PrefsManager.getGithubRepo(this) + ")",
-                cardColor, accent, v -> promptEditGithubRepo()));
-
-        updateCard.addView(createSubtleButton(
                 "איפוס כל ההגדרות לברירת מחדל",
-                cardColor, Color.parseColor("#DC2626"), v -> {
-                    PrefsManager.resetAll(this);
-                    Toast.makeText(this, "כל ההגדרות אופסו לברירת המחדל", Toast.LENGTH_SHORT).show();
-                    renderSettingsUi();
-                }));
+                cardColor, Color.parseColor("#DC2626"),
+                v -> confirmResetSettingsTwoStep()));
 
         body.addView(updateCard);
 
@@ -253,6 +273,64 @@ public class SettingsActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+    }
+
+    // סעיף טו: בקשת אישור נוסף אחרי לחיצה על ריקון סל המיחזור
+    private void confirmEmptyRecycleBinTwoStep() {
+        ThemedDialogHelper.showCustomDialog(
+                this,
+                "ריקון סל המיחזור",
+                "האם ברצונך לרוקן את סל המיחזור?",
+                null,
+                "המשך",
+                () -> ThemedDialogHelper.showCustomDialog(
+                        this,
+                        "אישור נוסף למחיקה לצמיתות",
+                        "שים לב: כל הקבצים בסל המיחזור יימחקו לצמיתות ולא ניתן יהיה לשחזרם. לאשר ריקון סופי?",
+                        null,
+                        "כן, רוקן לצמיתות",
+                        () -> {
+                            int deleted = RecycleBinManager.emptyTrash(this);
+                            Toast.makeText(this, "רוקנו לצמיתות " + deleted + " פריטים מסל המיחזור", Toast.LENGTH_SHORT).show();
+                            renderSettingsUi();
+                        },
+                        "סגור",
+                        null,
+                        true
+                ),
+                "סגור",
+                null,
+                false
+        );
+    }
+
+    // סעיף טו: בקשת אישור נוסף אחרי לחיצה על איפוס ההגדרות לברירת מחדל
+    private void confirmResetSettingsTwoStep() {
+        ThemedDialogHelper.showCustomDialog(
+                this,
+                "איפוס הגדרות לברירת מחדל",
+                "האם ברצונך לאפס את הגדרות האפליקציה?",
+                null,
+                "המשך",
+                () -> ThemedDialogHelper.showCustomDialog(
+                        this,
+                        "אישור נוסף לאיפוס הגדרות",
+                        "כל ההעדפות האישיות (גוון תאורה, תצוגה ומיון) יוחזרו לברירת המחדל. לאשר איפוס?",
+                        null,
+                        "כן, אפס הגדרות",
+                        () -> {
+                            PrefsManager.resetAll(this);
+                            Toast.makeText(this, "כל ההגדרות אופסו לברירת המחדל", Toast.LENGTH_SHORT).show();
+                            renderSettingsUi();
+                        },
+                        "סגור",
+                        null,
+                        true
+                ),
+                "סגור",
+                null,
+                false
+        );
     }
 
     private void addSectionTitle(LinearLayout parent, String title, int color) {
@@ -280,7 +358,7 @@ public class SettingsActivity extends AppCompatActivity {
         return card;
     }
 
-    private Button createThemeButton(String label, int mode, boolean active, int accent) {
+    private Button createOptionButton(String label, boolean active, int accent, Runnable onClick) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
@@ -296,10 +374,7 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         lp.setMargins(6, 0, 6, 0);
         b.setLayoutParams(lp);
-        b.setOnClickListener(v -> {
-            PrefsManager.setThemeMode(this, mode);
-            renderSettingsUi();
-        });
+        b.setOnClickListener(v -> onClick.run());
         return b;
     }
 
@@ -362,34 +437,17 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void showSortModeDialog() {
-        String[] modes = {"לפי שם (א-ת)", "לפי משקל קובץ", "לפי תאריך שינוי", "לפי סוג קובץ"};
-        int current = PrefsManager.getSortMode(this);
-        new AlertDialog.Builder(this)
-                .setTitle("מיון ברירת מחדל")
-                .setSingleChoiceItems(modes, current, (d, which) -> {
+        String[] modes = {"לפי שם (עברית תחילה)", "לפי משקל קובץ", "לפי תאריך שינוי", "לפי סוג קובץ"};
+        ThemedDialogHelper.showThemedMenu(
+                this,
+                "מיון ברירת מחדל",
+                "בחר כיצד למיין את תוכן התיקיות והקטגוריות:",
+                Arrays.asList(modes),
+                which -> {
                     PrefsManager.setSortMode(this, which);
-                    d.dismiss();
                     Toast.makeText(this, "המיון עודכן: " + modes[which], Toast.LENGTH_SHORT).show();
-                })
-                .show();
-    }
-
-    private void promptEditGithubRepo() {
-        EditText input = new EditText(this);
-        input.setText(PrefsManager.getGithubRepo(this));
-        new AlertDialog.Builder(this)
-                .setTitle("מאגר GitHub לבדיקת עדכונים")
-                .setMessage("הזן בפורמט owner/repo:")
-                .setView(input)
-                .setPositiveButton("שמור", (d, w) -> {
-                    String slug = input.getText().toString().trim();
-                    if (slug.contains("/")) {
-                        PrefsManager.setGithubRepo(this, slug);
-                        renderSettingsUi();
-                    }
-                })
-                .setNegativeButton("ביטול", null)
-                .show();
+                }
+        );
     }
 
     private void openAppSystemSettings() {

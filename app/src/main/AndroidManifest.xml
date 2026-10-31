@@ -68,6 +68,14 @@
             android:name=".VideoCutterActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".BuiltInViewerActivity"
+            android:exported="false" />
+
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

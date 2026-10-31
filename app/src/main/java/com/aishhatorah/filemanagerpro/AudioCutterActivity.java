@@ -18,12 +18,14 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.nio.ByteBuffer;
@@ -33,10 +35,12 @@ import java.util.concurrent.Executors;
 
 public class AudioCutterActivity extends AppCompatActivity {
 
+    public static final String EXTRA_INITIAL_PATH = "extra_initial_path";
     private static final int REQ_PICK_AUDIO = 2001;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private Uri selectedAudioUri = null;
+    private File lastCutOutputFile = null;
     private long durationMs = 0;
     private long startMs = 0;
     private long endMs = 0;
@@ -48,6 +52,7 @@ public class AudioCutterActivity extends AppCompatActivity {
     private SeekBar seekEnd;
     private Button btnPlayPreview;
     private Button btnCutSave;
+    private Button btnShareCut;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,10 +78,7 @@ public class AudioCutterActivity extends AppCompatActivity {
         topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
         topBar.setPadding(24, 22, 24, 22);
 
-        Button btnBack = new Button(this);
-        btnBack.setText("חזרה");
-        btnBack.setTextColor(accent);
-        btnBack.setBackgroundColor(Color.TRANSPARENT);
+        Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
         btnBack.setOnClickListener(v -> finish());
         topBar.addView(btnBack);
 
@@ -86,10 +88,11 @@ public class AudioCutterActivity extends AppCompatActivity {
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpTitle.setMarginStart(14);
+        lpTitle.setMarginStart(16);
         topBar.addView(tvTitle, lpTitle);
         root.addView(topBar);
 
+        ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(36, 36, 36, 36);
@@ -171,9 +174,32 @@ public class AudioCutterActivity extends AppCompatActivity {
         btnCutSave.setEnabled(false);
         card.addView(btnCutSave);
 
+        // סעיף כד: שיתוף הקובץ שנחתך ישירות מחותך האודיו
+        btnShareCut = createActionButton("שיתוף הקובץ שנחתך", Color.parseColor("#0284C7"), v -> {
+            if (lastCutOutputFile != null && lastCutOutputFile.exists()) {
+                shareAudioFile(lastCutOutputFile);
+            } else {
+                Toast.makeText(this, "חתוך ושמור קובץ אודיו תחילה כדי לשתף אותו", Toast.LENGTH_SHORT).show();
+            }
+        });
+        btnShareCut.setEnabled(false);
+        btnShareCut.setAlpha(0.55f);
+        card.addView(btnShareCut);
+
         body.addView(card);
-        root.addView(body);
+        scroll.addView(body);
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
+
+        String initialPath = getIntent().getStringExtra(EXTRA_INITIAL_PATH);
+        if (initialPath != null && !initialPath.isEmpty()) {
+            File initialFile = new File(initialPath);
+            if (initialFile.exists()) {
+                selectedAudioUri = Uri.fromFile(initialFile);
+                loadAudioMetadata(selectedAudioUri, initialFile.getName());
+            }
+        }
     }
 
     private Button createActionButton(String text, int bgColor, View.OnClickListener listener) {
@@ -200,11 +226,11 @@ public class AudioCutterActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_PICK_AUDIO && resultCode == RESULT_OK && data != null && data.getData() != null) {
             selectedAudioUri = data.getData();
-            loadAudioMetadata(selectedAudioUri);
+            loadAudioMetadata(selectedAudioUri, selectedAudioUri.getLastPathSegment());
         }
     }
 
-    private void loadAudioMetadata(Uri uri) {
+    private void loadAudioMetadata(Uri uri, String displayName) {
         try {
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             mmr.setDataSource(this, uri);
@@ -221,7 +247,7 @@ public class AudioCutterActivity extends AppCompatActivity {
             btnPlayPreview.setEnabled(true);
             btnCutSave.setEnabled(true);
 
-            tvSelectedFile.setText("קובץ נבחר: " + uri.getLastPathSegment());
+            tvSelectedFile.setText("קובץ נבחר: " + (displayName != null ? displayName : uri.toString()));
             updateRangeLabel();
         } catch (Exception e) {
             Toast.makeText(this, "שגיאה בטעינת קובץ האודיו: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -328,10 +354,24 @@ public class AudioCutterActivity extends AppCompatActivity {
                 }
 
                 muxer.stop();
-                final String savedPath = outFile.getAbsolutePath();
+                final File finalOut = outFile;
                 runOnUiThread(() -> {
+                    lastCutOutputFile = finalOut;
                     btnCutSave.setEnabled(true);
-                    Toast.makeText(this, "נשמר בהצלחה: " + savedPath, Toast.LENGTH_LONG).show();
+                    btnShareCut.setEnabled(true);
+                    btnShareCut.setAlpha(1.0f);
+                    ThemedDialogHelper.showCustomDialog(
+                            this,
+                            "קובץ השמע נחתך בהצלחה",
+                            "הקובץ החדש נשמר בתיקיית המוזיקה:\n" + finalOut.getName() +
+                                    "\n\nתוכל לשתף את הקובץ שנחתך כעת:",
+                            null,
+                            "שיתוף הקובץ שנחתך",
+                            () -> shareAudioFile(finalOut),
+                            "סגור",
+                            null,
+                            false
+                    );
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -345,6 +385,19 @@ public class AudioCutterActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+    private void shareAudioFile(File file) {
+        try {
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("audio/*");
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(share, "שיתוף קובץ האודיו שנחתך"));
+        } catch (Exception e) {
+            Toast.makeText(this, "שגיאה בשיתוף הקובץ: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override

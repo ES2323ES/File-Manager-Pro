@@ -5,10 +5,12 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.view.Gravity;
 import android.view.View;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -19,19 +21,17 @@ public class AboutDialogHelper {
 
     public static void show(Activity activity) {
         int theme = PrefsManager.getThemeMode(activity);
-        int bgColor = ThemeHelper.getCardColor(theme);
         int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
         int accent = ThemeHelper.getAccentColor(theme);
 
         ScrollView scroll = new ScrollView(activity);
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setPadding(52, 48, 52, 36);
-        root.setBackgroundColor(bgColor);
+        root.setPadding(50, 48, 50, 38);
+        root.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
-        // גירסת האפליקציה למעלה (סעיף ג)
+        // גירסת האפליקציה למעלה
         TextView tvVersionBadge = new TextView(activity);
         tvVersionBadge.setText("File Manager Pro  •  גירסה " + BuildConfig.VERSION_NAME);
         tvVersionBadge.setTextColor(accent);
@@ -51,50 +51,51 @@ public class AboutDialogHelper {
         TextView tvTitle = new TextView(activity);
         tvTitle.setText("מנהל קבצים מתקדם לאנדרואיד");
         tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(18f);
+        tvTitle.setTextSize(17.5f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setGravity(Gravity.CENTER);
+        tvTitle.setPadding(0, 0, 0, 22);
         root.addView(tvTitle);
 
-        // קרדיט למפתח אש התורה (סעיף ב)
-        TextView tvCredit = new TextView(activity);
-        tvCredit.setText("פיתוח והנדסת תוכנה: אש התורה\nכתוב ב-Java נייטיב מלא • חתום במפתח קבוע");
-        tvCredit.setTextColor(textSecondary);
-        tvCredit.setTextSize(13.5f);
-        tvCredit.setGravity(Gravity.CENTER);
-        tvCredit.setPadding(0, 12, 0, 28);
-        root.addView(tvCredit);
-
-        // קישור לפרופיל של אש התורה במתמחים טופ
+        // סעיף ג: @ אש התורה עם קישור ישיר למתמחים טופ (סעיף ב: ללא המילים "כתוב ב-Java נייטיב מלא • חתום במפתח קבוע")
         root.addView(buildActionButton(
                 activity,
-                "פרופיל אש התורה במתמחים טופ",
+                "@ אש התורה",
                 Color.parseColor("#1D4ED8"),
                 Color.WHITE,
                 v -> activity.startActivity(new Intent(Intent.ACTION_VIEW,
                         Uri.parse(activity.getString(R.string.mitmachim_url))))
         ));
 
-        // קישור לפרופיל ב-GitHub
+        // סעיף ד: פרופיל המפתח בגייטהאב
         root.addView(buildActionButton(
                 activity,
-                "הפרופיל שלי ב-GitHub (ES2323ES)",
+                "פרופיל המפתח בגייטהאב",
                 Color.parseColor("#0F172A"),
                 Color.WHITE,
                 v -> activity.startActivity(new Intent(Intent.ACTION_VIEW,
                         Uri.parse(activity.getString(R.string.github_profile_url))))
         ));
 
-        // בדיקת עדכון ב-GitHub כולל הורדה ישירה והתקנה (סעיף ד)
+        // סעיף ח: בדיקת עידכונים והתקנה אוטומטית
         root.addView(buildActionButton(
                 activity,
-                "בדיקת עדכונים ב-GitHub והתקנה ישירה",
+                "בדיקת עידכונים והתקנה אוטומטית",
                 Color.parseColor("#0284C7"),
                 Color.WHITE,
                 v -> UpdateChecker.checkForUpdates(activity, true)
         ));
 
-        // מדריך למשתמש מפורט ומפואר (סעיף טז)
+        // סעיף ז: יומן שינויים
+        root.addView(buildActionButton(
+                activity,
+                "יומן שינויים",
+                Color.parseColor("#7C3AED"),
+                Color.WHITE,
+                v -> ChangelogDialogHelper.show(activity)
+        ));
+
+        // מדריך למשתמש מפורט ומפואר
         root.addView(buildActionButton(
                 activity,
                 "מדריך למשתמש",
@@ -103,12 +104,27 @@ public class AboutDialogHelper {
                 v -> UserGuideDialogHelper.show(activity)
         ));
 
-        scroll.addView(root);
-
-        new AlertDialog.Builder(activity)
+        AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setView(scroll)
-                .setNegativeButton("סגור", null)
-                .show();
+                .create();
+
+        // סעיף יח: כפתור סגור בצבע ברור התואם לגוון האפליקציה
+        Button btnClose = ThemedDialogHelper.createThemedButton(activity, "סגור", theme, false, false);
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        closeLp.topMargin = 10;
+        btnClose.setLayoutParams(closeLp);
+        btnClose.setOnClickListener(v -> dialog.dismiss());
+        root.addView(btnClose);
+
+        scroll.addView(root);
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        }
     }
 
     private static Button buildActionButton(Activity activity, String text, int bg, int fg, View.OnClickListener listener) {
@@ -128,7 +144,7 @@ public class AboutDialogHelper {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        lp.bottomMargin = 18;
+        lp.bottomMargin = 16;
         btn.setLayoutParams(lp);
         btn.setPadding(24, 24, 24, 24);
         btn.setOnClickListener(listener);

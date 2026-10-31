@@ -268,7 +268,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
                     android:gravity="center"
-                    android:text="החלק מלמעלה למטה לרענון כל הקבצים והנפחים"
+                    android:text="החלק מלמעלה למטה לרענון הקבצים"
                     android:textSize="12sp" />
             </LinearLayout>
         </ScrollView>

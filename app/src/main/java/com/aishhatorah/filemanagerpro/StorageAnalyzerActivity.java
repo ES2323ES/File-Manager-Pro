@@ -1,6 +1,6 @@
 package com.aishhatorah.filemanagerpro;
 
-import android.app.AlertDialog;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -24,6 +24,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -63,10 +64,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
         topBar.setPadding(24, 22, 24, 22);
 
-        Button btnBack = new Button(this);
-        btnBack.setText("חזרה");
-        btnBack.setTextColor(accent);
-        btnBack.setBackgroundColor(Color.TRANSPARENT);
+        Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
         btnBack.setOnClickListener(v -> finish());
         topBar.addView(btnBack);
 
@@ -79,10 +77,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         lpTitle.setMarginStart(14);
         topBar.addView(tvTitle, lpTitle);
 
-        Button btnRescan = new Button(this);
-        btnRescan.setText("סרוק שוב");
-        btnRescan.setTextColor(accent);
-        btnRescan.setBackgroundColor(Color.TRANSPARENT);
+        Button btnRescan = ThemedDialogHelper.createThemedButton(this, "סרוק שוב", theme, true, false);
         btnRescan.setOnClickListener(v -> runHeavyFilesScan());
         topBar.addView(btnRescan);
 
@@ -161,6 +156,49 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         }
     }
 
+    private void showHeavyFileActions(File f) {
+        List<String> options = Arrays.asList(
+                "פתיחה בתוך האפליקציה",
+                "העבר לסל המיחזור (" + StorageUtils.formatSize(f.length()) + ")",
+                "מחק לצמיתות"
+        );
+        ThemedDialogHelper.showThemedMenu(
+                this,
+                f.getName(),
+                "משקל: " + StorageUtils.formatSize(f.length()) + "\n" + f.getAbsolutePath(),
+                options,
+                index -> {
+                    if (index == 0) {
+                        Intent viewer = new Intent(this, BuiltInViewerActivity.class);
+                        viewer.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, f.getAbsolutePath());
+                        startActivity(viewer);
+                    } else if (index == 1) {
+                        if (RecycleBinManager.moveToTrash(this, f)) {
+                            Toast.makeText(this, "הועבר לסל המיחזור", Toast.LENGTH_SHORT).show();
+                            runHeavyFilesScan();
+                        }
+                    } else if (index == 2) {
+                        ThemedDialogHelper.showCustomDialog(
+                                this,
+                                "מחיקה לצמיתות",
+                                "האם למחוק לצמיתות את הקובץ \"" + f.getName() + "\" ולפנות " + StorageUtils.formatSize(f.length()) + "?",
+                                null,
+                                "מחק לצמיתות",
+                                () -> {
+                                    if (StorageUtils.deleteRecursively(f)) {
+                                        Toast.makeText(this, "נמחק לצמיתות ופינה מקום", Toast.LENGTH_SHORT).show();
+                                        runHeavyFilesScan();
+                                    }
+                                },
+                                "סגור",
+                                null,
+                                true
+                        );
+                    }
+                }
+        );
+    }
+
     private class HeavyAdapter extends RecyclerView.Adapter<HeavyAdapter.VH> {
         private final int cardBg;
         private final int textPrimary;
@@ -189,27 +227,12 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
             h.tvName.setTextColor(textPrimary);
             h.tvMeta.setText(StorageUtils.formatSize(f.length()) + "  •  " + f.getParent());
             h.tvMeta.setTextColor(textSecondary);
-            h.tvHint.setText(StorageUtils.formatSize(f.length()));
-            h.tvHint.setTextSize(12f);
+            h.tvHint.setText("⋮");
             h.tvHint.setTextColor(accent);
 
-            h.rowCard.setOnClickListener(v -> new AlertDialog.Builder(StorageAnalyzerActivity.this)
-                    .setTitle(f.getName())
-                    .setMessage("משקל: " + StorageUtils.formatSize(f.length()) + "\nנתיב מלא:\n" + f.getAbsolutePath())
-                    .setPositiveButton("העבר לסל מיחזור", (d, w) -> {
-                        if (RecycleBinManager.moveToTrash(StorageAnalyzerActivity.this, f)) {
-                            Toast.makeText(StorageAnalyzerActivity.this, "הועבר לסל המיחזור ופינה מקום", Toast.LENGTH_SHORT).show();
-                            runHeavyFilesScan();
-                        }
-                    })
-                    .setNeutralButton("מחק לצמיתות", (d, w) -> {
-                        if (StorageUtils.deleteRecursively(f)) {
-                            Toast.makeText(StorageAnalyzerActivity.this, "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
-                            runHeavyFilesScan();
-                        }
-                    })
-                    .setNegativeButton("סגור", null)
-                    .show());
+            View.OnClickListener openMenu = v -> showHeavyFileActions(f);
+            h.rowCard.setOnClickListener(openMenu);
+            h.tvHint.setOnClickListener(openMenu);
         }
 
         @Override

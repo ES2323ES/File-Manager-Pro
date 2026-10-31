@@ -18,6 +18,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -25,6 +26,7 @@ import android.widget.VideoView;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.nio.ByteBuffer;
@@ -34,10 +36,12 @@ import java.util.concurrent.Executors;
 
 public class VideoCutterActivity extends AppCompatActivity {
 
+    public static final String EXTRA_INITIAL_PATH = "extra_initial_path";
     private static final int REQ_PICK_VIDEO = 3001;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private Uri selectedVideoUri = null;
+    private File lastCutVideoFile = null;
     private long durationMs = 0;
     private long startMs = 0;
     private long endMs = 0;
@@ -48,6 +52,7 @@ public class VideoCutterActivity extends AppCompatActivity {
     private SeekBar seekStart;
     private SeekBar seekEnd;
     private Button btnCutVideo;
+    private Button btnShareCutVideo;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,7 +65,6 @@ public class VideoCutterActivity extends AppCompatActivity {
         int cardBg = ThemeHelper.getCardColor(theme);
         int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
         int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -73,10 +77,7 @@ public class VideoCutterActivity extends AppCompatActivity {
         topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
         topBar.setPadding(24, 22, 24, 22);
 
-        Button btnBack = new Button(this);
-        btnBack.setText("חזרה");
-        btnBack.setTextColor(accent);
-        btnBack.setBackgroundColor(Color.TRANSPARENT);
+        Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
         btnBack.setOnClickListener(v -> finish());
         topBar.addView(btnBack);
 
@@ -86,10 +87,11 @@ public class VideoCutterActivity extends AppCompatActivity {
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpTitle.setMarginStart(14);
+        lpTitle.setMarginStart(16);
         topBar.addView(tvTitle, lpTitle);
         root.addView(topBar);
 
+        ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(32, 28, 32, 32);
@@ -164,9 +166,32 @@ public class VideoCutterActivity extends AppCompatActivity {
         btnCutVideo.setEnabled(false);
         card.addView(btnCutVideo);
 
+        // סעיף כד: שיתוף הסרטון שנחתך ישירות מחותך הוידאו
+        btnShareCutVideo = createButton("שיתוף הסרטון שנחתך", Color.parseColor("#0D9488"), v -> {
+            if (lastCutVideoFile != null && lastCutVideoFile.exists()) {
+                shareVideoFile(lastCutVideoFile);
+            } else {
+                Toast.makeText(this, "חתוך ושמור סרטון תחילה כדי לשתף אותו", Toast.LENGTH_SHORT).show();
+            }
+        });
+        btnShareCutVideo.setEnabled(false);
+        btnShareCutVideo.setAlpha(0.55f);
+        card.addView(btnShareCutVideo);
+
         body.addView(card);
-        root.addView(body);
+        scroll.addView(body);
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
+
+        String initialPath = getIntent().getStringExtra(EXTRA_INITIAL_PATH);
+        if (initialPath != null && !initialPath.isEmpty()) {
+            File initialFile = new File(initialPath);
+            if (initialFile.exists()) {
+                selectedVideoUri = Uri.fromFile(initialFile);
+                loadSelectedVideo(selectedVideoUri, initialFile.getName());
+            }
+        }
     }
 
     private Button createButton(String text, int bgColor, View.OnClickListener l) {
@@ -193,27 +218,33 @@ public class VideoCutterActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_PICK_VIDEO && resultCode == RESULT_OK && data != null && data.getData() != null) {
             selectedVideoUri = data.getData();
-            try {
-                MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-                mmr.setDataSource(this, selectedVideoUri);
-                String dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                durationMs = dur != null ? Long.parseLong(dur) : 0;
-                mmr.release();
+            loadSelectedVideo(selectedVideoUri, selectedVideoUri.getLastPathSegment());
+        }
+    }
 
-                startMs = 0;
-                endMs = durationMs;
-                seekStart.setEnabled(true);
-                seekEnd.setEnabled(true);
-                seekStart.setProgress(0);
-                seekEnd.setProgress(1000);
-                btnCutVideo.setEnabled(true);
+    private void loadSelectedVideo(Uri uri, String displayName) {
+        try {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            mmr.setDataSource(this, uri);
+            String dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            durationMs = dur != null ? Long.parseLong(dur) : 0;
+            mmr.release();
 
-                tvSelectedVideo.setText("סרטון נבחר: " + selectedVideoUri.getLastPathSegment());
-                videoView.setVideoURI(selectedVideoUri);
-                videoView.start();
-            } catch (Exception e) {
-                Toast.makeText(this, "שגיאה בטעינת הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            }
+            startMs = 0;
+            endMs = durationMs;
+            seekStart.setEnabled(true);
+            seekEnd.setEnabled(true);
+            seekStart.setProgress(0);
+            seekEnd.setProgress(1000);
+            btnCutVideo.setEnabled(true);
+
+            tvSelectedVideo.setText("סרטון נבחר: " + (displayName != null ? displayName : uri.toString()));
+            tvVideoRange.setText(String.format(Locale.US, "התחלה: 00:00  •  סיום: %02d:%02d",
+                    (endMs / 1000) / 60, (endMs / 1000) % 60));
+            videoView.setVideoURI(uri);
+            videoView.start();
+        } catch (Exception e) {
+            Toast.makeText(this, "שגיאה בטעינת הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -279,10 +310,24 @@ public class VideoCutterActivity extends AppCompatActivity {
                 }
 
                 muxer.stop();
-                final String outPath = outFile.getAbsolutePath();
+                final File finalOut = outFile;
                 runOnUiThread(() -> {
+                    lastCutVideoFile = finalOut;
                     btnCutVideo.setEnabled(true);
-                    Toast.makeText(this, "הסרטון החתוך נשמר: " + outPath, Toast.LENGTH_LONG).show();
+                    btnShareCutVideo.setEnabled(true);
+                    btnShareCutVideo.setAlpha(1.0f);
+                    ThemedDialogHelper.showCustomDialog(
+                            this,
+                            "הסרטון נחתך ונשמר בהצלחה",
+                            "הסרטון החתוך נשמר בתיקיית הסרטונים:\n" + finalOut.getName() +
+                                    "\n\nתוכל לשתף את הסרטון שנחתך כעת:",
+                            null,
+                            "שיתוף הסרטון שנחתך",
+                            () -> shareVideoFile(finalOut),
+                            "סגור",
+                            null,
+                            false
+                    );
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -296,5 +341,18 @@ public class VideoCutterActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+    private void shareVideoFile(File file) {
+        try {
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("video/mp4");
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(share, "שיתוף הסרטון שנחתך"));
+        } catch (Exception e) {
+            Toast.makeText(this, "שגיאה בשיתוף הסרטון: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
     }
 }

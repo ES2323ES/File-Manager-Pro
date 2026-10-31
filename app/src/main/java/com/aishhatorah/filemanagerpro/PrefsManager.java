@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 
 public class PrefsManager {
     private static final String PREFS_NAME = "file_manager_pro_prefs";
+    public static final String FIXED_GITHUB_REPO = "ES2323ES/File-Manager-Pro";
 
     public static final int THEME_LIGHT = 0;
     public static final int THEME_DARK = 1;
@@ -108,14 +109,27 @@ public class PrefsManager {
     }
 
     public static String getGithubRepo(Context context) {
-        return prefs(context).getString("github_repo", "ES2323ES/File-Manager-Pro");
+        return FIXED_GITHUB_REPO;
     }
 
-    public static void setGithubRepo(Context context, String repo) {
-        prefs(context).edit().putString("github_repo", repo).apply();
+    public static String getLastKnownAppVersion(Context context) {
+        return prefs(context).getString("last_known_app_version", "");
+    }
+
+    public static void setLastKnownAppVersion(Context context, String version) {
+        prefs(context).edit().putString("last_known_app_version", version).apply();
+    }
+
+    public static boolean isPendingUpdateSuccessBanner(Context context) {
+        return prefs(context).getBoolean("pending_update_success_banner", false);
+    }
+
+    public static void setPendingUpdateSuccessBanner(Context context, boolean pending) {
+        prefs(context).edit().putBoolean("pending_update_success_banner", pending).apply();
     }
 
     public static void resetAll(Context context) {
-        prefs(context).edit().clear().apply();
+        String currentKnown = getLastKnownAppVersion(context);
+        prefs(context).edit().clear().putString("last_known_app_version", currentKnown).apply();
     }
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">File Manager Pro</string>
-    <string name="app_version_display">גירסה 0.2.2</string>
+    <string name="app_version_display">גירסה 0.2.3</string>
     <string name="btn_about">אודות</string>
     <string name="btn_settings">הגדרות</string>
 
@@ -20,7 +20,8 @@
     <string name="cat_video_cutter">חותך וידאו</string>
 
     <!-- קרדיטים וקישורים -->
-    <string name="developer_credit">פיתוח: אש התורה</string>
+    <string name="developer_credit">@ אש התורה</string>
+    <string name="github_profile_label">פרופיל המפתח בגייטהאב</string>
     <string name="mitmachim_url">https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94</string>
     <string name="github_profile_url">https://github.com/ES2323ES</string>
     <string name="github_repo_slug">ES2323ES/File-Manager-Pro</string>

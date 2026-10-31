@@ -146,6 +146,29 @@ public class RecycleBinManager {
         return c;
     }
 
+    public static long getTrashTotalBytes(Context context) {
+        File trashDir = getTrashDir(context);
+        File[] files = trashDir.listFiles();
+        if (files == null) return 0L;
+        long total = 0L;
+        for (File f : files) {
+            if (MANIFEST_FILE.equals(f.getName())) continue;
+            total += computeFileOrDirBytes(f);
+        }
+        return total;
+    }
+
+    private static long computeFileOrDirBytes(File f) {
+        if (f == null || !f.exists()) return 0L;
+        if (!f.isDirectory()) return f.length();
+        long sum = 0L;
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) sum += computeFileOrDirBytes(c);
+        }
+        return sum;
+    }
+
     private static List<TrashEntry> readEntries(Context context) {
         List<TrashEntry> list = new ArrayList<>();
         File mf = new File(getTrashDir(context), MANIFEST_FILE);

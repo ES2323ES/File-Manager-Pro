@@ -4,9 +4,9 @@
     android:id="@+id/rowCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginStart="10dp"
+    android:layout_marginStart="8dp"
     android:layout_marginTop="4dp"
-    android:layout_marginEnd="10dp"
+    android:layout_marginEnd="8dp"
     android:layout_marginBottom="4dp"
     android:clickable="true"
     android:focusable="true"
@@ -14,14 +14,16 @@
     app:cardCornerRadius="12dp"
     app:cardElevation="0dp">
 
+    <!-- סעיף יב: פריסת LTR מפורשת כך שסימון התיקייה/קובץ תמיד מצד שמאל ושלוש הנקודות תמיד מצד ימין -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
-        android:layoutDirection="rtl"
+        android:layoutDirection="ltr"
         android:orientation="horizontal"
         android:padding="12dp">
 
+        <!-- צד שמאל: סימון התיקייה / קובץ -->
         <ImageView
             android:id="@+id/ivFileIcon"
             android:layout_width="34dp"
@@ -29,12 +31,14 @@
             android:importantForAccessibility="no"
             android:src="@drawable/ic_file_generic" />
 
+        <!-- מרכז: שם הפריט ופרטי נפח/תאריך -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="8dp"
+            android:layout_marginLeft="12dp"
+            android:layout_marginRight="10dp"
             android:layout_weight="1"
+            android:gravity="right"
             android:orientation="vertical">
 
             <TextView
@@ -42,8 +46,9 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="middle"
+                android:gravity="right"
                 android:maxLines="1"
-                android:textAlignment="viewStart"
+                android:textDirection="anyRtl"
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
@@ -53,18 +58,22 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
+                android:gravity="right"
                 android:maxLines="1"
-                android:textAlignment="viewStart"
-                android:textSize="12sp" />
+                android:textDirection="anyRtl"
+                android:textSize="11.5sp" />
         </LinearLayout>
 
+        <!-- צד ימין: שלוש הנקודות לפתיחת תפריט הפעולות -->
         <TextView
             android:id="@+id/tvFileActionHint"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:gravity="center"
+            android:minWidth="32dp"
             android:padding="6dp"
             android:text="⋮"
-            android:textSize="18sp"
+            android:textSize="19sp"
             android:textStyle="bold" />
     </LinearLayout>
 </androidx.cardview.widget.CardView>
