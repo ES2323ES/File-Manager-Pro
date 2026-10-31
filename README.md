@@ -2,6 +2,8 @@
 
 # File Manager Pro — מנהל קבצים מתקדם לאנדרואיד (Java Native)
 
+[![Build Signed APK & Publish Release](https://github.com/ES2323ES/File-Manager-Pro/actions/workflows/release.yml/badge.svg)](https://github.com/ES2323ES/File-Manager-Pro/actions/workflows/release.yml)
+
 **גירסה נוכחית:** `0.2.2` | **שפת פיתוח:** `100% Native Java` | **מפתח:** [אש התורה — מתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) · [פרופיל GitHub](https://github.com/ES2323ES)
 
 ---

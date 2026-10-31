@@ -10,21 +10,25 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -34,7 +38,7 @@ jobs:
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Setup Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
 
@@ -69,29 +73,45 @@ jobs:
               NEXT_TAG="V${NEXT_NUM}"
             fi
           fi
-          echo "tag=$NEXT_TAG" >> $GITHUB_OUTPUT
+          echo "tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release (${{ steps.calc_tag.outputs.tag }})
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.calc_tag.outputs.tag }}
-          name: "${{ steps.calc_tag.outputs.tag }} — File Manager Pro v0.2.2"
-          body: |
-            ## File Manager Pro — גירסה 0.2.2 (${{ steps.calc_tag.outputs.tag }})
-            אפליקציית מנהל קבצים מתקדמת בנייטיב מלא ב-**Java** לאנדרואיד, בפיתוח **אש התורה**.
-
-            ### הורדה ישירה
-            - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** `File-Manager-Pro.apk`
-            - **קובץ קוד מקור מלא של הפרויקט (ZIP):** `File-Manager-Pro-v0.2.2-Source.zip`
-
-            ### פרטים טכניים
-            - **חתימה דיגיטלית קבועה (SHA-256):** `09:9C:06:BB:29:BB:25:9F:4F:AF:72:94:24:1C:3F:A5:0B:39:89:B3:AD:E6:E5:47:40:EA:77:57:37:2C:FC:DF`
-            - **מפתח:** [אש התורה במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [פרופיל GitHub](https://github.com/${{ github.repository_owner }})
-          files: |
-            dist-artifacts/File-Manager-Pro.apk
-            dist-artifacts/File-Manager-Pro-v0.2.2.apk
-            dist-artifacts/File-Manager-Pro-v0.2.2-Source.zip
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.calc_tag.outputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          cat <<EOF > release-notes.md
+          ## File Manager Pro — גירסה 0.2.2 (${TAG})
+          אפליקציית מנהל קבצים מתקדמת בנייטיב מלא ב-**Java** לאנדרואיד, בפיתוח **אש התורה**.
+
+          ### הורדה ישירה
+          - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.2.2-Source.zip\`
+
+          ### פרטים טכניים
+          - **חתימה דיגיטלית קבועה (SHA-256):** \`09:9C:06:BB:29:BB:25:9F:4F:AF:72:94:24:1C:3F:A5:0B:39:89:B3:AD:E6:E5:47:40:EA:77:57:37:2C:FC:DF\`
+          - **מפתח:** [אש התורה במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [פרופיל GitHub](https://github.com/${OWNER})
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
+            gh release edit "$TAG" \
+              --title "${TAG} — File Manager Pro v0.2.2" \
+              --notes-file release-notes.md \
+              --draft=false \
+              --prerelease=false
+            gh release upload "$TAG" \
+              dist-artifacts/File-Manager-Pro.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.2.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.2-Source.zip \
+              --clobber
+          else
+            gh release create "$TAG" \
+              dist-artifacts/File-Manager-Pro.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.2.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.2-Source.zip \
+              --target "$GITHUB_SHA" \
+              --title "${TAG} — File Manager Pro v0.2.2" \
+              --notes-file release-notes.md
+          fi
