@@ -1,22 +1,25 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.provider.Settings;
 import android.text.Editable;
+import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -92,6 +95,15 @@ public class FileBrowserActivity extends AppCompatActivity {
     private FileAdapter adapter;
     private AudioPlayerManager.PlaybackListener miniAudioListener;
 
+    // סעיף ט: פס הרצה מהיר בצד ימין לגלילה מלמעלה למטה בכל התיקיות ובכל הקטגוריות של הקבצים בלבד
+    private FrameLayout rightFastScrollContainer;
+    private View rightFastScrollThumb;
+    private boolean isDraggingFastScroll = false;
+
+    private int dp(float val) {
+        return Math.round(val * getResources().getDisplayMetrics().density);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -115,42 +127,57 @@ public class FileBrowserActivity extends AppCompatActivity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(bgColor);
 
-        // סרגל עליון של סייר הקבצים (RTL: ימין = חזרה + כותרת, שמאל = סימן + ליצירת תיקייה או קובץ חדש)
+        // סרגל עליון מותאם לכל גודלי המסכים (סעיף ז)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
-        topBar.setPadding(24, 20, 24, 20);
+        topBar.setPadding(dp(10), dp(8), dp(10), dp(8));
 
         Button btnBack = new Button(this);
         btnBack.setText("חזרה");
+        btnBack.setAllCaps(false);
         btnBack.setTextColor(accent);
+        btnBack.setTextSize(13.5f);
+        btnBack.setTypeface(Typeface.DEFAULT_BOLD);
+        btnBack.setMinWidth(0);
+        btnBack.setMinimumWidth(0);
+        btnBack.setMinHeight(0);
+        btnBack.setMinimumHeight(0);
+        btnBack.setPadding(dp(10), dp(6), dp(10), dp(6));
         btnBack.setBackgroundColor(Color.TRANSPARENT);
         btnBack.setOnClickListener(v -> navigateUpOrFinish());
         topBar.addView(btnBack);
 
         tvHeaderTitle = new TextView(this);
         tvHeaderTitle.setText(title);
-        tvHeaderTitle.setTextSize(17f);
+        tvHeaderTitle.setTextSize(16.5f);
         tvHeaderTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvHeaderTitle.setTextColor(textPrimary);
+        tvHeaderTitle.setMaxLines(1);
+        tvHeaderTitle.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        titleLp.setMarginStart(16);
+        titleLp.setMarginStart(dp(6));
+        titleLp.setMarginEnd(dp(6));
         topBar.addView(tvHeaderTitle, titleLp);
 
         // סעיף יז: למעלה משמאל סימן של פלוס (+) הפותח בחירה בין "תיקייה חדשה" או "קובץ חדש"
         if (isDirectoryMode()) {
             Button btnPlus = new Button(this);
             btnPlus.setText("+");
-            btnPlus.setTextSize(20f);
+            btnPlus.setTextSize(19f);
             btnPlus.setTypeface(Typeface.DEFAULT_BOLD);
             btnPlus.setTextColor(accent);
             GradientDrawable plusShape = new GradientDrawable();
-            plusShape.setCornerRadius(22f);
+            plusShape.setCornerRadius(dp(10));
             plusShape.setColor(Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)));
-            plusShape.setStroke(2, accent);
+            plusShape.setStroke(Math.max(2, dp(1)), accent);
             btnPlus.setBackground(plusShape);
-            LinearLayout.LayoutParams plusLp = new LinearLayout.LayoutParams(112, 104);
+            btnPlus.setMinWidth(0);
+            btnPlus.setMinimumWidth(0);
+            btnPlus.setMinHeight(0);
+            btnPlus.setMinimumHeight(0);
+            LinearLayout.LayoutParams plusLp = new LinearLayout.LayoutParams(dp(40), dp(38));
             btnPlus.setLayoutParams(plusLp);
             btnPlus.setPadding(0, 0, 0, 0);
             btnPlus.setOnClickListener(v -> showCreatePlusMenu());
@@ -166,12 +193,16 @@ public class FileBrowserActivity extends AppCompatActivity {
             btnToggleViewMode.setTextSize(12f);
             btnToggleViewMode.setTypeface(Typeface.DEFAULT_BOLD);
             btnToggleViewMode.setTextColor(accent);
+            btnToggleViewMode.setMinWidth(0);
+            btnToggleViewMode.setMinimumWidth(0);
+            btnToggleViewMode.setMinHeight(0);
+            btnToggleViewMode.setMinimumHeight(0);
             GradientDrawable vmShape = new GradientDrawable();
-            vmShape.setCornerRadius(20f);
+            vmShape.setCornerRadius(dp(10));
             vmShape.setColor(Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)));
-            vmShape.setStroke(2, accent);
+            vmShape.setStroke(Math.max(2, dp(1)), accent);
             btnToggleViewMode.setBackground(vmShape);
-            btnToggleViewMode.setPadding(22, 10, 22, 10);
+            btnToggleViewMode.setPadding(dp(10), dp(6), dp(10), dp(6));
             updateToggleViewButtonLabel();
             btnToggleViewMode.setOnClickListener(v -> {
                 boolean nextGrid = !PrefsManager.isGridLayoutForMode(this, currentMode);
@@ -181,6 +212,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 if (adapter != null) {
                     adapter.notifyDataSetChanged();
                 }
+                recyclerView.post(this::syncRightFastScrollerFromRecycler);
             });
             topBar.addView(btnToggleViewMode);
         }
@@ -189,8 +221,8 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         tvPathBreadcrumb = new TextView(this);
         tvPathBreadcrumb.setTextColor(textSecondary);
-        tvPathBreadcrumb.setTextSize(12f);
-        tvPathBreadcrumb.setPadding(32, 12, 32, 8);
+        tvPathBreadcrumb.setTextSize(11.5f);
+        tvPathBreadcrumb.setPadding(dp(14), dp(5), dp(14), dp(3));
         root.addView(tvPathBreadcrumb);
 
         // תיבת חיפוש מהירה
@@ -198,14 +230,15 @@ public class FileBrowserActivity extends AppCompatActivity {
         etSearch.setHint("חיפוש קובץ או תיקייה...");
         etSearch.setTextColor(textPrimary);
         etSearch.setHintTextColor(textSecondary);
+        etSearch.setTextSize(13.5f);
         GradientDrawable searchBg = new GradientDrawable();
-        searchBg.setCornerRadius(22f);
+        searchBg.setCornerRadius(dp(11));
         searchBg.setColor(cardColor);
         etSearch.setBackground(searchBg);
-        etSearch.setPadding(32, 22, 32, 22);
+        etSearch.setPadding(dp(13), dp(9), dp(13), dp(9));
         LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        searchLp.setMargins(28, 8, 28, 12);
+        searchLp.setMargins(dp(11), dp(4), dp(11), dp(6));
         root.addView(etSearch, searchLp);
         etSearch.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -218,22 +251,24 @@ public class FileBrowserActivity extends AppCompatActivity {
         clipboardBar.setOrientation(LinearLayout.HORIZONTAL);
         clipboardBar.setGravity(Gravity.CENTER_VERTICAL);
         clipboardBar.setBackgroundColor(Color.parseColor("#1D4ED8"));
-        clipboardBar.setPadding(28, 16, 28, 16);
+        clipboardBar.setPadding(dp(12), dp(6), dp(12), dp(6));
         clipboardBar.setVisibility(View.GONE);
 
         tvClipboardStatus = new TextView(this);
         tvClipboardStatus.setTextColor(Color.WHITE);
-        tvClipboardStatus.setTextSize(13f);
+        tvClipboardStatus.setTextSize(12.5f);
         clipboardBar.addView(tvClipboardStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button btnPasteHere = new Button(this);
         btnPasteHere.setText("הדבק כאן");
+        btnPasteHere.setAllCaps(false);
         btnPasteHere.setTextColor(Color.WHITE);
         btnPasteHere.setOnClickListener(v -> executePasteHere());
         clipboardBar.addView(btnPasteHere);
 
         Button btnCancelClip = new Button(this);
         btnCancelClip.setText("ביטול");
+        btnCancelClip.setAllCaps(false);
         btnCancelClip.setTextColor(Color.WHITE);
         btnCancelClip.setBackgroundColor(Color.TRANSPARENT);
         btnCancelClip.setOnClickListener(v -> {
@@ -244,32 +279,48 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         root.addView(clipboardBar);
 
+        // מסגרת מרכזית (LTR מפורש כך שפס ההרצה בצד ימין תמיד צמוד לדופן הימנית הפיזית של המסך!)
+        FrameLayout listStageFrame = new FrameLayout(this);
+        listStageFrame.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+
         swipeRefresh = new SwipeRefreshLayout(this);
         swipeRefresh.setColorSchemeColors(0xFF1D4ED8, 0xFF0284C7);
-        // סעיף ז: העיגול מופיע עד לסיום הסריקה האמיתית, וההודעה מופיעה רק בסיום הסריקה עם הטקסט "כל הקבצים רועננו בהצלחה"
         swipeRefresh.setOnRefreshListener(() -> loadFilesForCurrentMode(true));
 
-        LinearLayout contentFrame = new LinearLayout(this);
-        contentFrame.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout innerSwipeContent = new FrameLayout(this);
 
         tvEmptyState = new TextView(this);
         tvEmptyState.setText("לא נמצאו קבצים בתיקייה או בקטגוריה זו");
         tvEmptyState.setTextColor(textSecondary);
         tvEmptyState.setTextSize(14f);
         tvEmptyState.setGravity(Gravity.CENTER);
-        tvEmptyState.setPadding(40, 90, 40, 40);
+        tvEmptyState.setPadding(dp(20), dp(44), dp(20), dp(20));
         tvEmptyState.setVisibility(View.GONE);
-        contentFrame.addView(tvEmptyState);
+        innerSwipeContent.addView(tvEmptyState, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
         recyclerView = new RecyclerView(this);
+        recyclerView.setClipToPadding(false);
+        // ריווח עדין בצד ימין עבור פס ההרצה המהיר כדי שלא יסתיר את תוכן הכרטיסים
+        recyclerView.setPadding(dp(5), dp(3), dp(20), dp(12));
         applyFolderLayoutMode();
         adapter = new FileAdapter(cardColor, textPrimary, textSecondary, accent);
         recyclerView.setAdapter(adapter);
-        contentFrame.addView(recyclerView, new LinearLayout.LayoutParams(
+        innerSwipeContent.addView(recyclerView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        swipeRefresh.addView(contentFrame);
-        root.addView(swipeRefresh, new LinearLayout.LayoutParams(
+        swipeRefresh.setOnChildScrollUpCallback((parent, child) ->
+                recyclerView != null && recyclerView.canScrollVertically(-1));
+        swipeRefresh.addView(innerSwipeContent, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        listStageFrame.addView(swipeRefresh, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // סעיף ט: פס הרצה בצד ימין לגלילה מהירה מלמעלה למטה בכל התיקיות ובכל קטגוריות הקבצים בלבד
+        buildRightFastScrollerOverlay(listStageFrame, accent, theme);
+
+        root.addView(listStageFrame, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // סעיף יב: שורת השיר התחתונה ביציאה מהנגן (עם השהיה והחלקה לעצירת השיר)
@@ -287,6 +338,117 @@ public class FileBrowserActivity extends AppCompatActivity {
         initInitialDirectory();
         updateClipboardBar();
         loadFilesForCurrentMode(false);
+    }
+
+    private void buildRightFastScrollerOverlay(FrameLayout hostFrame, int accent, int theme) {
+        rightFastScrollContainer = new FrameLayout(this);
+        rightFastScrollContainer.setPadding(dp(4), dp(8), dp(3), dp(8));
+        rightFastScrollContainer.setVisibility(View.GONE);
+
+        // פס מסילה עדין בצד ימין
+        View trackLine = new View(this);
+        GradientDrawable trackBg = new GradientDrawable();
+        trackBg.setCornerRadius(dp(3));
+        trackBg.setColor(Color.argb(theme == PrefsManager.THEME_LIGHT ? 36 : 58,
+                Color.red(accent), Color.green(accent), Color.blue(accent)));
+        trackLine.setBackground(trackBg);
+        FrameLayout.LayoutParams trackLp = new FrameLayout.LayoutParams(dp(4), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER_HORIZONTAL);
+        rightFastScrollContainer.addView(trackLine, trackLp);
+
+        // ידית גרירה (Thumb) לגלילה מהירה מלמעלה למטה
+        rightFastScrollThumb = new View(this);
+        GradientDrawable thumbBg = new GradientDrawable();
+        thumbBg.setCornerRadius(dp(6));
+        int thumbColor = theme == PrefsManager.THEME_NEON ? Color.parseColor("#00E5FF") : accent;
+        thumbBg.setColor(thumbColor);
+        rightFastScrollThumb.setBackground(thumbBg);
+        FrameLayout.LayoutParams thumbLp = new FrameLayout.LayoutParams(dp(8), dp(48), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        rightFastScrollContainer.addView(rightFastScrollThumb, thumbLp);
+
+        FrameLayout.LayoutParams scrollerLp = new FrameLayout.LayoutParams(
+                dp(22), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.RIGHT);
+        hostFrame.addView(rightFastScrollContainer, scrollerLp);
+
+        rightFastScrollContainer.setOnTouchListener((v, event) -> {
+            if (displayedFiles.isEmpty() || recyclerView == null) return false;
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
+                isDraggingFastScroll = true;
+                if (v.getParent() != null) {
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                }
+                rightFastScrollThumb.setScaleX(1.25f);
+                int topPad = rightFastScrollContainer.getPaddingTop();
+                int botPad = rightFastScrollContainer.getPaddingBottom();
+                int thumbH = rightFastScrollThumb.getHeight() > 0 ? rightFastScrollThumb.getHeight() : dp(48);
+                int trackH = Math.max(1, rightFastScrollContainer.getHeight() - topPad - botPad - thumbH);
+                float clampedY = Math.max(0f, Math.min(trackH, event.getY() - topPad - (thumbH * 0.5f)));
+                float fraction = clampedY / (float) trackH;
+                rightFastScrollThumb.setTranslationY(clampedY);
+
+                int count = displayedFiles.size();
+                int targetPos = Math.max(0, Math.min(count - 1, Math.round(fraction * (count - 1))));
+                RecyclerView.LayoutManager lm = recyclerView.getLayoutManager();
+                if (lm instanceof LinearLayoutManager) {
+                    ((LinearLayoutManager) lm).scrollToPositionWithOffset(targetPos, 0);
+                } else {
+                    recyclerView.scrollToPosition(targetPos);
+                }
+                return true;
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                isDraggingFastScroll = false;
+                rightFastScrollThumb.setScaleX(1.0f);
+                syncRightFastScrollerFromRecycler();
+                return true;
+            }
+            return false;
+        });
+
+        recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                if (!isDraggingFastScroll) {
+                    syncRightFastScrollerFromRecycler();
+                }
+            }
+        });
+    }
+
+    private void syncRightFastScrollerFromRecycler() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        if (displayedFiles.isEmpty()) {
+            rightFastScrollContainer.setVisibility(View.GONE);
+            return;
+        }
+        int range = recyclerView.computeVerticalScrollRange();
+        int extent = recyclerView.computeVerticalScrollExtent();
+        int offset = recyclerView.computeVerticalScrollOffset();
+
+        if (range <= extent + dp(10) && displayedFiles.size() <= 6) {
+            rightFastScrollContainer.setVisibility(View.GONE);
+            return;
+        }
+        rightFastScrollContainer.setVisibility(View.VISIBLE);
+
+        int topPad = rightFastScrollContainer.getPaddingTop();
+        int botPad = rightFastScrollContainer.getPaddingBottom();
+        int thumbH = rightFastScrollThumb.getHeight() > 0 ? rightFastScrollThumb.getHeight() : dp(48);
+        int trackH = Math.max(1, rightFastScrollContainer.getHeight() - topPad - botPad - thumbH);
+        int maxScroll = Math.max(1, range - extent);
+        float fraction = Math.max(0f, Math.min(1f, (float) offset / (float) maxScroll));
+        rightFastScrollThumb.setTranslationY(fraction * trackH);
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (recyclerView != null) {
+            applyFolderLayoutMode();
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
+            recyclerView.post(this::syncRightFastScrollerFromRecycler);
+        }
     }
 
     @Override
@@ -335,9 +497,19 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
     }
 
+    // סעיפים ז + ח: תצוגת רשת של 3 עמודות כמו במסך הראשי, ומותאמת אוטומטית למסכים קטנים/רחבים/טאבלטים
+    private int computeResponsiveGridColumns() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float widthDp = dm.widthPixels / dm.density;
+        if (widthDp < 280f) return 2;
+        if (widthDp >= 780f) return 5;
+        if (widthDp >= 530f) return 4;
+        return 3;
+    }
+
     private void applyFolderLayoutMode() {
         if (PrefsManager.isGridLayoutForMode(this, currentMode)) {
-            recyclerView.setLayoutManager(new GridLayoutManager(this, 2));
+            recyclerView.setLayoutManager(new GridLayoutManager(this, computeResponsiveGridColumns()));
         } else {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));
         }
@@ -555,7 +727,6 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (a.isDirectory() != b.isDirectory()) {
                 return a.isDirectory() ? -1 : 1;
             }
-            // עבור תיקיות: תמיד תיקיות בעברית לפני תיקיות באנגלית
             if (a.isDirectory() && b.isDirectory()) {
                 boolean aHeb = StorageUtils.startsWithHebrew(a.getName());
                 boolean bHeb = StorageUtils.startsWithHebrew(b.getName());
@@ -592,6 +763,9 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
         tvEmptyState.setVisibility(displayedFiles.isEmpty() ? View.VISIBLE : View.GONE);
         adapter.notifyDataSetChanged();
+        if (recyclerView != null) {
+            recyclerView.post(this::syncRightFastScrollerFromRecycler);
+        }
     }
 
     // סעיף יז: לחיצה על + פותחת בחירה בין תיקייה חדשה או קובץ חדש
@@ -619,11 +793,11 @@ public class FileBrowserActivity extends AppCompatActivity {
         input.setTextColor(ThemeHelper.getPrimaryTextColor(theme));
         input.setHintTextColor(ThemeHelper.getSecondaryTextColor(theme));
         GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(18f);
+        bg.setCornerRadius(dp(9));
         bg.setColor(ThemeHelper.getBgColor(theme));
-        bg.setStroke(2, ThemeHelper.getAccentColor(theme));
+        bg.setStroke(Math.max(2, dp(1)), ThemeHelper.getAccentColor(theme));
         input.setBackground(bg);
-        input.setPadding(28, 22, 28, 22);
+        input.setPadding(dp(12), dp(10), dp(12), dp(10));
         return input;
     }
 
@@ -664,7 +838,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         etContent.setMinLines(3);
         LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cLp.topMargin = 16;
+        cLp.topMargin = dp(8);
         etContent.setLayoutParams(cLp);
 
         form.addView(etFileName);
@@ -749,7 +923,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         );
     }
 
-    // סעיף א: פתיחה פנימית מלאה של תמונות, אודיו, וידאו, מסמכים וחילוץ ארכיונים בתוך האפליקציה עצמה ללא "פתח באמצעות"
+    // פתיחה פנימית מלאה של תמונות, אודיו, וידאו, מסמכים, התקנת כל סוגי האפליקציות וחילוץ ארכיונים
     private void onFileClicked(File file) {
         if (MODE_RECYCLE_BIN.equals(currentMode)) {
             showFileOperationsMenu(file);
@@ -782,7 +956,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         startActivity(viewer);
     }
 
-    // סעיף יב: תמיכה בהתקנת כל סוגי האפליקציות (.apk, .apks, .apkm, .xapk)
+    // סעיף יב: תמיכה בהתקנת כל סוגי האפליקציות ללא יוצא מן הכלל (.apk, .apkx, .apk+, .apks, .apkm, .xapk)
     private void promptDirectApkInstallOrInspect(File apkFile) {
         ThemedDialogHelper.showThemedMenu(
                 this,
@@ -801,7 +975,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         );
     }
 
-    // סעיפים יג, טז: תפריט תואם לגוון האפליקציה + אופציה מסודרת לדחיסה ל-קובץ ZIP וחילוץ ZIP
     private void showFileOperationsMenu(File file) {
         String subInfo = file.isDirectory()
                 ? "תיקייה • " + file.getAbsolutePath()
@@ -837,8 +1010,12 @@ public class FileBrowserActivity extends AppCompatActivity {
         List<String> actions = new ArrayList<>();
         if (isAppPkg) {
             actions.add("התקנת האפליקציה במכשיר");
+            actions.add("צפייה בתוכן החבילה וחילוץ פנימי");
         } else if (!file.isDirectory()) {
             actions.add(isZip ? "פתיחה וחילוץ קובץ ZIP" : "פתיחה בתוך האפליקציה");
+            if (isZip) {
+                actions.add("התקנת אפליקציה מתוך הארכיון");
+            }
         }
         actions.add("דחיסה לקובץ ZIP");
         actions.add("העתקה");
@@ -859,8 +1036,15 @@ public class FileBrowserActivity extends AppCompatActivity {
                     String chosen = actions.get(which);
                     switch (chosen) {
                         case "התקנת האפליקציה במכשיר":
+                        case "התקנת אפליקציה מתוך הארכיון":
                             AppPackageInstaller.installAnyPackage(this, file);
                             break;
+                        case "צפייה בתוכן החבילה וחילוץ פנימי": {
+                            Intent viewer = new Intent(this, BuiltInViewerActivity.class);
+                            viewer.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
+                            startActivity(viewer);
+                            break;
+                        }
                         case "פתיחה וחילוץ קובץ ZIP":
                         case "פתיחה בתוך האפליקציה":
                             onFileClicked(file);
@@ -897,7 +1081,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         );
     }
 
-    // סעיף טז: יצירת קובץ ZIP עם טקסט מסודר וברור
     private void promptCompressToZip(File sourceFile) {
         String baseName = sourceFile.isDirectory()
                 ? sourceFile.getName()
@@ -1106,31 +1289,41 @@ public class FileBrowserActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             File f = displayedFiles.get(position);
+            boolean isGrid = getItemViewType(position) == 1;
             h.rowCard.setCardBackgroundColor(cardBg);
             h.tvName.setText(f.getName());
             h.tvName.setTextColor(textPrimary);
             h.tvHint.setTextColor(accent);
 
-            // סעיף ד: הצגת האייקון האמיתי של אותו קובץ (שירים, תמונות, אפליקציות, סירטונים ותיקיות)
             FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
 
+            // סעיף ח: בתצוגת רשת (כמו במסך הראשי) כיתוב משנה תמציתי וממורכז מתחת לשם הפריט
             if (f.isDirectory()) {
                 if (isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
                     Integer matched = categoryFolderCounts.get(f.getAbsolutePath());
                     int count = matched != null ? matched : 0;
                     String unit = MODE_IMAGES.equals(currentMode) ? "תמונות" : "סירטונים";
-                    h.tvMeta.setText(count + " " + unit + " • " + df.format(new Date(f.lastModified())));
+                    h.tvMeta.setText(isGrid
+                            ? (count + " " + unit)
+                            : (count + " " + unit + " • " + df.format(new Date(f.lastModified()))));
                 } else {
                     File[] sub = f.listFiles();
                     int count = sub != null ? sub.length : 0;
-                    h.tvMeta.setText(count + " פריטים • " + df.format(new Date(f.lastModified())));
+                    h.tvMeta.setText(isGrid
+                            ? (count + " פריטים")
+                            : (count + " פריטים • " + df.format(new Date(f.lastModified()))));
                 }
             } else {
-                h.tvMeta.setText(StorageUtils.formatSize(f.length()) + " • " + df.format(new Date(f.lastModified())));
+                h.tvMeta.setText(isGrid
+                        ? StorageUtils.formatSize(f.length())
+                        : (StorageUtils.formatSize(f.length()) + " • " + df.format(new Date(f.lastModified()))));
             }
             h.tvMeta.setTextColor(textSecondary);
+            if (isGrid) {
+                h.tvMeta.setSelected(true);
+            }
 
-            // סעיף ח: לחיצה על האייקון בצד שמאל של קובץ או תיקייה פותחת את אפשרויות העריכה (במקום שלוש הנקודות מימין)
+            // לחיצה על האייקון פותחת את אפשרויות העריכה, ולחיצה על האריח/שורה פותחת את הפריט
             h.ivIcon.setOnClickListener(v -> showFileOperationsMenu(f));
             h.rowCard.setOnClickListener(v -> onFileClicked(f));
             h.rowCard.setOnLongClickListener(v -> {

@@ -39,7 +39,10 @@ public class AboutDialogHelper {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(50, 48, 50, 38);
+        float d = activity.getResources().getDisplayMetrics().density;
+        int hPad = Math.round(18 * d);
+        int vPad = Math.round(16 * d);
+        root.setPadding(hPad, vPad, hPad, Math.round(14 * d));
         root.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
         // סעיף כ: גירסת האפליקציה למעלה + "רשמית" החל מגירסה 0.2.5
@@ -53,12 +56,13 @@ public class AboutDialogHelper {
         root.addView(tvVersionBadge, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        int logoPx = Math.round(54 * d);
         ImageView logo = new ImageView(activity);
         logo.setImageResource(R.drawable.ic_app_logo);
-        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(148, 148);
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(logoPx, logoPx);
         logoLp.gravity = Gravity.CENTER_HORIZONTAL;
-        logoLp.topMargin = 24;
-        logoLp.bottomMargin = 16;
+        logoLp.topMargin = Math.round(9 * d);
+        logoLp.bottomMargin = Math.round(6 * d);
         root.addView(logo, logoLp);
 
         TextView tvTitle = new TextView(activity);
@@ -89,7 +93,7 @@ public class AboutDialogHelper {
         creditCard.setBackground(creditBg);
 
         TextView tvDevLine = new TextView(activity);
-        tvDevLine.setText("פיתוח והנדסה:@ אש התורה");
+        tvDevLine.setText("פיתוח והנדסה: @אש התורה");
         tvDevLine.setTextColor(textPrimary);
         tvDevLine.setTextSize(15.5f);
         tvDevLine.setTypeface(Typeface.DEFAULT_BOLD);

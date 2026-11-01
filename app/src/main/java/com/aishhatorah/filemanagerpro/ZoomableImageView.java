@@ -12,9 +12,18 @@ import android.view.ScaleGestureDetector;
 import androidx.appcompat.widget.AppCompatImageView;
 
 /**
- * סעיף יד: מציג תמונות עם הגדלה והקטנה חלקה ביד (Pinch-to-Zoom + גרירה ביד)
+ * סעיפים א, ג, ד, ה:
+ * - ד: הגדלה עמוקה וחזקה מאוד של התמונה ביד (עד פי 25x!) + לחיצה כפולה מרובת שלבים
+ * - ה: הצגה צלולה וחדה מאוד של התמונות (סינון בילינארי איכותי ללא ירידת איכות)
+ * - א: הקשה בודדת מציגה את התמונה בלבד ללא שאר האופציות, ובהקשה שנייה מחזירה את האופציות
+ * - ג: החלקה אופקית (כשהתמונה אינה מוגדלת) למעבר מהיר לתמונה הבאה או הקודמת בתיקייה
  */
 public class ZoomableImageView extends AppCompatImageView {
+
+    public interface HorizontalSwipeListener {
+        void onSwipeToNext();
+        void onSwipeToPrevious();
+    }
 
     private final Matrix matrix = new Matrix();
     private final float[] matrixValues = new float[9];
@@ -23,11 +32,14 @@ public class ZoomableImageView extends AppCompatImageView {
 
     private float currentScale = 1f;
     private float minScale = 1f;
-    private float maxScale = 6f;
+    private float maxScale = 25f;
 
     private float baseScale = 1f;
     private final PointF lastTouch = new PointF();
     private boolean isDragging = false;
+
+    private Runnable singleTapListener = null;
+    private HorizontalSwipeListener horizontalSwipeListener = null;
 
     public ZoomableImageView(Context context) {
         super(context);
@@ -56,24 +68,79 @@ public class ZoomableImageView extends AppCompatImageView {
 
         gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                if (singleTapListener != null) {
+                    singleTapListener.run();
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
             public boolean onDoubleTap(MotionEvent e) {
-                if (currentScale > minScale * 1.15f) {
-                    fitImageToCenter();
-                } else {
-                    float boost = 2.5f;
-                    currentScale = minScale * boost;
-                    matrix.postScale(boost, boost, e.getX(), e.getY());
+                if (minScale <= 0f) return true;
+                float ratio = currentScale / minScale;
+                if (ratio < 2.8f) {
+                    float target = minScale * 3.5f;
+                    float factor = target / currentScale;
+                    currentScale = target;
+                    matrix.postScale(factor, factor, e.getX(), e.getY());
                     fixTranslationBounds();
                     setImageMatrix(matrix);
+                } else if (ratio < 8.5f) {
+                    float target = Math.min(maxScale, minScale * 10.0f);
+                    float factor = target / currentScale;
+                    currentScale = target;
+                    matrix.postScale(factor, factor, e.getX(), e.getY());
+                    fixTranslationBounds();
+                    setImageMatrix(matrix);
+                } else {
+                    fitImageToCenter();
                 }
                 return true;
             }
+
+            @Override
+            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+                if (horizontalSwipeListener == null || e1 == null || e2 == null) return false;
+                if (currentScale > minScale * 1.06f) return false;
+                float dx = e2.getX() - e1.getX();
+                float dy = e2.getY() - e1.getY();
+                float minSwipePx = 70f * getResources().getDisplayMetrics().density;
+                if (Math.abs(dx) > Math.abs(dy) * 1.35f && Math.abs(dx) > minSwipePx && Math.abs(velocityX) > 220f) {
+                    if (dx < 0) {
+                        horizontalSwipeListener.onSwipeToNext();
+                    } else {
+                        horizontalSwipeListener.onSwipeToPrevious();
+                    }
+                    return true;
+                }
+                return false;
+            }
         });
+    }
+
+    public void setOnSingleTapListener(Runnable listener) {
+        this.singleTapListener = listener;
+    }
+
+    public void setOnHorizontalSwipeListener(HorizontalSwipeListener listener) {
+        this.horizontalSwipeListener = listener;
     }
 
     @Override
     public void setImageBitmap(Bitmap bm) {
         super.setImageBitmap(bm);
+        Drawable d = getDrawable();
+        if (d != null) {
+            d.setFilterBitmap(true);
+            d.setDither(false);
+        }
         post(this::fitImageToCenter);
     }
 
@@ -86,6 +153,7 @@ public class ZoomableImageView extends AppCompatImageView {
     public void fitImageToCenter() {
         Drawable d = getDrawable();
         if (d == null || getWidth() <= 0 || getHeight() <= 0) return;
+        d.setFilterBitmap(true);
         int dw = d.getIntrinsicWidth();
         int dh = d.getIntrinsicHeight();
         if (dw <= 0 || dh <= 0) return;
@@ -94,7 +162,8 @@ public class ZoomableImageView extends AppCompatImageView {
         float scaleY = (float) getHeight() / (float) dh;
         baseScale = Math.min(scaleX, scaleY);
         minScale = baseScale;
-        maxScale = baseScale * 6f;
+        // סעיף ד: אפשרות להגדיל את התמונה הרבה מאוד במידת הצורך (עד פי 25 מגודל ההתאמה!)
+        maxScale = Math.max(baseScale * 25f, 25f);
         currentScale = baseScale;
 
         float dx = (getWidth() - dw * baseScale) * 0.5f;

@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -17,10 +18,28 @@ import android.widget.TextView;
 
 import java.util.List;
 
+/**
+ * סעיף ז: התאמה אוטומטית מלאה של כלל הדיאלוגים והתפריטים לכל גודלי המסכים (מסכים קטנים, טלפונים רגילים, מתקפלים וטאבלטים)
+ */
 public class ThemedDialogHelper {
 
     public interface MenuSelectionListener {
         void onSelected(int index);
+    }
+
+    private static int dp(Activity activity, float value) {
+        return Math.round(value * activity.getResources().getDisplayMetrics().density);
+    }
+
+    private static void applyResponsiveDialogWindow(Activity activity, AlertDialog dialog) {
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            DisplayMetrics dm = activity.getResources().getDisplayMetrics();
+            int maxWidth = dp(activity, 500);
+            int targetWidth = Math.min(Math.round(dm.widthPixels * 0.94f), maxWidth);
+            window.setLayout(targetWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
     }
 
     public static GradientDrawable createDialogBackground(int theme) {
@@ -42,7 +61,7 @@ public class ThemedDialogHelper {
 
         int accent = ThemeHelper.getAccentColor(theme);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(22f);
+        shape.setCornerRadius(dp(activity, 11));
 
         if (destructive) {
             int danger = Color.parseColor("#DC2626");
@@ -51,13 +70,13 @@ public class ThemedDialogHelper {
                 btn.setTextColor(Color.WHITE);
             } else {
                 shape.setColor(Color.argb(28, 220, 38, 38));
-                shape.setStroke(2, danger);
+                shape.setStroke(Math.max(2, dp(activity, 1)), danger);
                 btn.setTextColor(theme == PrefsManager.THEME_LIGHT ? danger : Color.parseColor("#F87171"));
             }
         } else if (filledPrimary) {
             if (theme == PrefsManager.THEME_NEON) {
                 shape.setColor(Color.parseColor("#00B4D8"));
-                shape.setStroke(2, accent);
+                shape.setStroke(Math.max(2, dp(activity, 1)), accent);
                 btn.setTextColor(Color.parseColor("#030712"));
             } else {
                 shape.setColor(accent);
@@ -66,12 +85,14 @@ public class ThemedDialogHelper {
         } else {
             shape.setColor(Color.argb(theme == PrefsManager.THEME_LIGHT ? 22 : 38,
                     Color.red(accent), Color.green(accent), Color.blue(accent)));
-            shape.setStroke(2, accent);
+            shape.setStroke(Math.max(2, dp(activity, 1)), accent);
             btn.setTextColor(accent);
         }
 
         btn.setBackground(shape);
-        btn.setPadding(32, 22, 32, 22);
+        btn.setMinHeight(0);
+        btn.setMinimumHeight(0);
+        btn.setPadding(dp(activity, 14), dp(activity, 10), dp(activity, 14), dp(activity, 10));
         return btn;
     }
 
@@ -91,19 +112,24 @@ public class ThemedDialogHelper {
         int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
         int accent = ThemeHelper.getAccentColor(theme);
 
+        ScrollView scroll = new ScrollView(activity);
+        scroll.setFillViewport(true);
+
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        outer.setPadding(48, 44, 48, 38);
+        int hPad = dp(activity, 18);
+        int vPad = dp(activity, 16);
+        outer.setPadding(hPad, vPad, hPad, dp(activity, 14));
         outer.setBackground(createDialogBackground(theme));
 
         if (title != null && !title.isEmpty()) {
             TextView tvTitle = new TextView(activity);
             tvTitle.setText(title);
             tvTitle.setTextColor(theme == PrefsManager.THEME_NEON ? accent : textPrimary);
-            tvTitle.setTextSize(17f);
+            tvTitle.setTextSize(16.5f);
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-            tvTitle.setPadding(0, 0, 0, 18);
+            tvTitle.setPadding(0, 0, 0, dp(activity, 8));
             outer.addView(tvTitle);
         }
 
@@ -111,16 +137,16 @@ public class ThemedDialogHelper {
             TextView tvMsg = new TextView(activity);
             tvMsg.setText(message);
             tvMsg.setTextColor(textSecondary);
-            tvMsg.setTextSize(14f);
-            tvMsg.setLineSpacing(6f, 1.15f);
-            tvMsg.setPadding(0, 0, 0, 24);
+            tvMsg.setTextSize(13.5f);
+            tvMsg.setLineSpacing(dp(activity, 2), 1.15f);
+            tvMsg.setPadding(0, 0, 0, dp(activity, 12));
             outer.addView(tvMsg);
         }
 
         if (customBody != null) {
             LinearLayout.LayoutParams bodyLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            bodyLp.bottomMargin = 24;
+            bodyLp.bottomMargin = dp(activity, 12);
             outer.addView(customBody, bodyLp);
         }
 
@@ -128,8 +154,10 @@ public class ThemedDialogHelper {
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         btnRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
 
+        scroll.addView(outer);
+
         AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setView(outer)
+                .setView(scroll)
                 .create();
 
         if (negativeLabel != null && !negativeLabel.isEmpty()) {
@@ -137,7 +165,7 @@ public class ThemedDialogHelper {
             LinearLayout.LayoutParams negLp = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             if (positiveLabel != null && !positiveLabel.isEmpty()) {
-                negLp.setMarginEnd(14);
+                negLp.setMarginEnd(dp(activity, 6));
             }
             btnNeg.setLayoutParams(negLp);
             btnNeg.setOnClickListener(v -> {
@@ -162,10 +190,7 @@ public class ThemedDialogHelper {
         outer.addView(btnRow);
 
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
+        applyResponsiveDialogWindow(activity, dialog);
         return dialog;
     }
 
@@ -185,13 +210,14 @@ public class ThemedDialogHelper {
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        outer.setPadding(44, 42, 44, 36);
+        int hPad = dp(activity, 17);
+        outer.setPadding(hPad, dp(activity, 16), hPad, dp(activity, 14));
         outer.setBackground(createDialogBackground(theme));
 
         TextView tvTitle = new TextView(activity);
         tvTitle.setText(title);
         tvTitle.setTextColor(theme == PrefsManager.THEME_NEON ? accent : textPrimary);
-        tvTitle.setTextSize(16.5f);
+        tvTitle.setTextSize(16f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         outer.addView(tvTitle);
 
@@ -199,11 +225,11 @@ public class ThemedDialogHelper {
             TextView tvSub = new TextView(activity);
             tvSub.setText(subtitle);
             tvSub.setTextColor(textSecondary);
-            tvSub.setTextSize(12.5f);
-            tvSub.setPadding(0, 6, 0, 18);
+            tvSub.setTextSize(12f);
+            tvSub.setPadding(0, dp(activity, 3), 0, dp(activity, 9));
             outer.addView(tvSub);
         } else {
-            tvTitle.setPadding(0, 0, 0, 18);
+            tvTitle.setPadding(0, 0, 0, dp(activity, 9));
         }
 
         AlertDialog dialog = new AlertDialog.Builder(activity)
@@ -220,27 +246,29 @@ public class ThemedDialogHelper {
             itemBtn.setAllCaps(false);
             itemBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             itemBtn.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
-            itemBtn.setTextSize(14f);
+            itemBtn.setTextSize(13.5f);
             itemBtn.setTypeface(Typeface.DEFAULT_BOLD);
             itemBtn.setTextColor(isDanger
                     ? (theme == PrefsManager.THEME_LIGHT ? Color.parseColor("#DC2626") : Color.parseColor("#F87171"))
                     : textPrimary);
 
             GradientDrawable itemShape = new GradientDrawable();
-            itemShape.setCornerRadius(20f);
+            itemShape.setCornerRadius(dp(activity, 10));
             int rowBg = theme == PrefsManager.THEME_LIGHT
                     ? Color.parseColor("#F1F5F9")
                     : (theme == PrefsManager.THEME_NEON ? Color.parseColor("#111D42") : Color.parseColor("#0F172A"));
             itemShape.setColor(rowBg);
-            itemShape.setStroke(2, isDanger
+            itemShape.setStroke(Math.max(2, dp(activity, 1)), isDanger
                     ? Color.argb(90, 220, 38, 38)
                     : Color.argb(55, Color.red(accent), Color.green(accent), Color.blue(accent)));
             itemBtn.setBackground(itemShape);
-            itemBtn.setPadding(32, 24, 32, 24);
+            itemBtn.setMinHeight(0);
+            itemBtn.setMinimumHeight(0);
+            itemBtn.setPadding(dp(activity, 13), dp(activity, 10), dp(activity, 13), dp(activity, 10));
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.bottomMargin = 14;
+            lp.bottomMargin = dp(activity, 6);
             itemBtn.setLayoutParams(lp);
             itemBtn.setOnClickListener(v -> {
                 dialog.dismiss();
@@ -252,16 +280,13 @@ public class ThemedDialogHelper {
         Button btnClose = createThemedButton(activity, "סגור", theme, false, false);
         LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        closeLp.topMargin = 10;
+        closeLp.topMargin = dp(activity, 4);
         btnClose.setLayoutParams(closeLp);
         btnClose.setOnClickListener(v -> dialog.dismiss());
         outer.addView(btnClose);
 
         scroll.addView(outer);
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
+        applyResponsiveDialogWindow(activity, dialog);
     }
 }

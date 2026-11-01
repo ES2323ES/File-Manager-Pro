@@ -4,70 +4,65 @@
     android:id="@+id/rowCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_margin="6dp"
+    android:layout_margin="5dp"
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    app:cardCornerRadius="14dp"
+    app:cardCornerRadius="16dp"
     app:cardElevation="1dp">
 
+    <!-- סעיף ח: תצוגת רשת זהה בעיצובה לאריחי המסך הראשי (אייקון ממורכז למעלה, שם מתחתיו ומידע בתחתית) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:gravity="center"
+        android:minHeight="108dp"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="8dp">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:layoutDirection="ltr"
-            android:orientation="horizontal">
-
-            <ImageView
-                android:id="@+id/ivFileIcon"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:contentDescription="אפשרויות עריכה"
-                android:focusable="true"
-                android:padding="2dp"
-                android:scaleType="fitCenter"
-                android:src="@drawable/ic_file_generic" />
-
-            <View
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
-
-            <TextView
-                android:id="@+id/tvFileActionHint"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-        </LinearLayout>
+        <ImageView
+            android:id="@+id/ivFileIcon"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:contentDescription="אפשרויות עריכה"
+            android:focusable="true"
+            android:padding="2dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_file_generic" />
 
         <TextView
             android:id="@+id/tvFileName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="right"
-            android:lineSpacingExtra="2dp"
+            android:layout_marginTop="7dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="2"
+            android:textAlignment="center"
             android:textDirection="anyRtl"
-            android:textSize="13.5sp"
+            android:textSize="12.5sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tvFileMeta"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
-            android:ellipsize="end"
-            android:gravity="right"
-            android:maxLines="1"
+            android:layout_marginTop="2dp"
+            android:ellipsize="marquee"
+            android:gravity="center"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true"
+            android:singleLine="true"
+            android:textAlignment="center"
             android:textDirection="anyRtl"
-            android:textSize="11sp" />
+            android:textSize="10.5sp" />
+
+        <TextView
+            android:id="@+id/tvFileActionHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
     </LinearLayout>
 </androidx.cardview.widget.CardView>

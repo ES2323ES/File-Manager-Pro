@@ -31,7 +31,7 @@ public final class MediaFormatHelper {
     };
 
     private static final String[] APP_PACKAGE_EXTS = {
-            ".apk", ".apks", ".apkm", ".xapk"
+            ".apk", ".apkx", ".apk+", ".apks", ".apkm", ".xapk", ".apkp", ".apk1", ".apks+"
     };
 
     private static final String[] ARCHIVE_EXTS = {
@@ -62,11 +62,17 @@ public final class MediaFormatHelper {
     }
 
     public static boolean isInstallableAppPackage(String fileName) {
-        return endsWithAny(fileName, APP_PACKAGE_EXTS);
+        if (fileName == null) return false;
+        String trimmed = fileName.trim().toLowerCase(Locale.ROOT);
+        if (endsWithAny(trimmed, APP_PACKAGE_EXTS)) return true;
+        return trimmed.matches(".*\\.apk[x+0-9_]+$");
     }
 
     public static boolean isSplitAppBundle(String fileName) {
-        return endsWithAny(fileName, ".apks", ".apkm", ".xapk");
+        if (fileName == null) return false;
+        String trimmed = fileName.trim().toLowerCase(Locale.ROOT);
+        return endsWithAny(trimmed, ".apkx", ".apk+", ".apks", ".apkm", ".xapk", ".apkp", ".apks+")
+                || trimmed.matches(".*\\.apk[x+]+$");
     }
 
     public static boolean isZipOrArchiveFile(String fileName) {

@@ -4,16 +4,15 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -21,12 +20,17 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * סעיפים טו, טז, כ: יומן שינויים מעוצב:
- * - כותרת נקייה: "יומן שינויים" ומתחתיה "File Manager Pro" (ללא "מפואר" וללא שורת המשנה הישנה)
- * - גירסה 0.2.5 מסומנת כ-"גירסה 0.2.5 רשמית" (ללא "רשמית" בגרסאות 0.2.2–0.2.4)
- * - בגירסה 0.2.2: "השקת האפליקציה" והסרת המילים "השקת ליבת Java נייטיב מלאה:"
+ * יומן שינויים מעוצב ומותאם לכל גודלי המסכים (גירסה 0.2.7 רשמית).
  */
 public class ChangelogDialogHelper {
+
+    private static int dp(Activity activity, float value) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value,
+                activity.getResources().getDisplayMetrics()
+        ));
+    }
 
     public static void show(Activity activity) {
         int theme = PrefsManager.getThemeMode(activity);
@@ -41,34 +45,35 @@ public class ChangelogDialogHelper {
         int cCyan = isLight ? Color.parseColor("#0E7490") : Color.parseColor("#22D3EE");
 
         ScrollView scroll = new ScrollView(activity);
+        scroll.setFillViewport(true);
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        outer.setPadding(44, 44, 44, 36);
+        outer.setPadding(dp(activity, 16), dp(activity, 16), dp(activity, 16), dp(activity, 14));
         outer.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
-        // סעיף טו: כותרת יומן השינויים — "יומן שינויים" ומתחתיו "File Manager Pro"
         LinearLayout heroBanner = new LinearLayout(activity);
         heroBanner.setOrientation(LinearLayout.VERTICAL);
         heroBanner.setGravity(Gravity.CENTER);
-        heroBanner.setPadding(32, 30, 32, 30);
+        heroBanner.setPadding(dp(activity, 14), dp(activity, 14), dp(activity, 14), dp(activity, 14));
 
         GradientDrawable heroShape = new GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 new int[]{Color.parseColor("#1E3A8A"), Color.parseColor("#4C1D95"), Color.parseColor("#0F766E")}
         );
-        heroShape.setCornerRadius(30f);
+        heroShape.setCornerRadius(dp(activity, 18));
         heroBanner.setBackground(heroShape);
 
         ImageView heroIcon = new ImageView(activity);
         heroIcon.setImageResource(R.drawable.ic_app_logo);
-        LinearLayout.LayoutParams hIcLp = new LinearLayout.LayoutParams(108, 108);
-        hIcLp.bottomMargin = 14;
+        int heroLogoPx = dp(activity, 48);
+        LinearLayout.LayoutParams hIcLp = new LinearLayout.LayoutParams(heroLogoPx, heroLogoPx);
+        hIcLp.bottomMargin = dp(activity, 8);
         heroBanner.addView(heroIcon, hIcLp);
 
         TextView tvHeader = new TextView(activity);
         tvHeader.setText("יומן שינויים");
-        tvHeader.setTextSize(18.5f);
+        tvHeader.setTextSize(18f);
         tvHeader.setTypeface(Typeface.DEFAULT_BOLD);
         tvHeader.setTextColor(Color.WHITE);
         tvHeader.setGravity(Gravity.CENTER);
@@ -77,18 +82,35 @@ public class ChangelogDialogHelper {
 
         TextView tvSub = new TextView(activity);
         tvSub.setText("File Manager Pro");
-        tvSub.setTextSize(14.5f);
+        tvSub.setTextSize(14f);
         tvSub.setTypeface(Typeface.DEFAULT_BOLD);
         tvSub.setTextColor(Color.parseColor("#E0E7FF"));
         tvSub.setGravity(Gravity.CENTER);
         tvSub.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        tvSub.setPadding(0, 6, 0, 0);
+        tvSub.setPadding(0, dp(activity, 3), 0, 0);
         heroBanner.addView(tvSub);
 
         LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        heroLp.bottomMargin = 24;
+        heroLp.bottomMargin = dp(activity, 12);
         outer.addView(heroBanner, heroLp);
+
+        // ===================== גירסה 0.2.7 רשמית =====================
+        SpannableStringBuilder v27 = new SpannableStringBuilder();
+        appendRichBullet(v27, "תצוגת מדיה נקייה בהקשה ומסך מלא בסיבוב: ", cBlue,
+                "בהקשה על תמונה או וידאו מוצגים התמונה או הוידאו בלבד ללא שאר האופציות ובהקשה שנייה האופציות חוזרות, ובסיבוב מסך הוידאו מוצג במסך מלא ללא מעיכה ובחדות גבוהה.", textPrimary);
+        appendRichBullet(v27, "\n\nדפדוף בין תמונות והגדלה עמוקה בחדות מלאה: ", cViolet,
+                "אפשרות להעביר קדימה ואחורה לכל התמונות שבתיקייה (בלחצנים או בהחלקה), הגדלה עמוקה מאוד (עד פי 25) והצגה צלולה וברורה מאוד לתמונות ולוידאו.", textPrimary);
+        appendRichBullet(v27, "\n\nתיקון תצוגת רשת ופס הרצה מהיר בצד ימין: ", cEmerald,
+                "תצוגת הרשת בתיקיות ובקטגוריות מותאמת בדיוק לסגנון המסך הראשי, ונוסף פס הרצה בצד ימין לגלילה מהירה מלמעלה למטה בכל התיקיות ובכל קטגוריות הקבצים.", textPrimary);
+        appendRichBullet(v27, "\n\nהתקנת קובצי APKX ו-APK+ וזיהוי גירסה חדשה מותקנת: ", cAmber,
+                "תמיכה מלאה בהתקנת כל סוגי האפליקציות ללא יוצא מן הכלל כולל APKX ו-APK+, והתראה מפורטת כאשר מותקנת במכשיר גירסה חדשה יותר כולל פרטי שתי הגירסאות.", textPrimary);
+        appendRichBullet(v27, "\n\nהתאמה מלאה לכל גודלי המסכים: ", cCyan,
+                "התאמה אוטומטית של כל מסכי האפליקציה, הכפתורים והחלונות לכל גודלי המסכים באשר הם.", textPrimary);
+
+        addLuxuriousVersionCard(outer, activity, theme,
+                "גירסה 0.2.7 רשמית", "הגירסה הנוכחית והחדשה ביותר",
+                Color.parseColor("#1D4ED8"), R.drawable.ic_app_logo, v27);
 
         // ===================== גירסה 0.2.6 רשמית =====================
         SpannableStringBuilder v26 = new SpannableStringBuilder();
@@ -102,8 +124,8 @@ public class ChangelogDialogHelper {
                 "הוסר הכיתוב המיותר 'קטגוריה: שמע' וכדומה בכניסה לקטגוריות השונות.", textPrimary);
 
         addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.6 רשמית", "הגירסה הנוכחית והחדשה ביותר",
-                Color.parseColor("#1D4ED8"), R.drawable.ic_app_logo, v26);
+                "גירסה 0.2.6 רשמית", "תצוגת תיקיות ברשת ועורך טקסט מובנה",
+                Color.parseColor("#2563EB"), R.drawable.ic_app_logo, v26);
 
         // ===================== גירסה 0.2.5 רשמית =====================
         SpannableStringBuilder v25 = new SpannableStringBuilder();
@@ -154,7 +176,7 @@ public class ChangelogDialogHelper {
                 "גירסה 0.2.3", "מנוע מדיה וארכיונים מובנה",
                 Color.parseColor("#7C3AED"), R.drawable.ic_folder, v23);
 
-        // ===================== גירסה 0.2.2 (סעיף טז) =====================
+        // ===================== גירסה 0.2.2 =====================
         SpannableStringBuilder v22 = new SpannableStringBuilder();
         appendRichBullet(v22, "", cAmber,
                 "מסך בית 4×3 בעברית מלאה, ערכות נושא בהיר / כהה / ניאון, כלי ניתוח הקבצים הכבדים ביותר, התרעת 96% תפוסה וסל מיחזור חכם.", textPrimary);
@@ -172,17 +194,14 @@ public class ChangelogDialogHelper {
         btnClose.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        closeLp.topMargin = 8;
+        closeLp.topMargin = dp(activity, 4);
         btnClose.setLayoutParams(closeLp);
         btnClose.setOnClickListener(v -> dialog.dismiss());
         outer.addView(btnClose);
 
         scroll.addView(outer);
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
+        ThemedDialogHelper.applyResponsiveDialogWindow(dialog, activity);
     }
 
     private static void appendRichBullet(
@@ -219,31 +238,33 @@ public class ChangelogDialogHelper {
     ) {
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(32, 28, 32, 28);
+        card.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
 
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(28f);
+        shape.setCornerRadius(dp(activity, 16));
         int innerBg = theme == PrefsManager.THEME_LIGHT
                 ? Color.parseColor("#F8FAFC")
                 : (theme == PrefsManager.THEME_NEON ? Color.parseColor("#071029") : Color.parseColor("#0F172A"));
         shape.setColor(innerBg);
-        shape.setStroke(3, Color.argb(115, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor)));
+        shape.setStroke(Math.max(2, dp(activity, 1.3f)),
+                Color.argb(115, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor)));
         card.setBackground(shape);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = 22;
+        lp.bottomMargin = dp(activity, 10);
         card.setLayoutParams(lp);
 
         LinearLayout headerRow = new LinearLayout(activity);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        headerRow.setPadding(0, 0, 0, 16);
+        headerRow.setPadding(0, 0, 0, dp(activity, 8));
 
         ImageView iv = new ImageView(activity);
         iv.setImageResource(iconRes);
-        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(64, 64);
-        ivLp.setMarginEnd(16);
+        int iconPx = dp(activity, 28);
+        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(iconPx, iconPx);
+        ivLp.setMarginEnd(dp(activity, 8));
         headerRow.addView(iv, ivLp);
 
         LinearLayout titleCol = new LinearLayout(activity);
@@ -251,7 +272,7 @@ public class ChangelogDialogHelper {
 
         TextView tvVer = new TextView(activity);
         tvVer.setText(versionTag);
-        tvVer.setTextSize(16.5f);
+        tvVer.setTextSize(15.5f);
         tvVer.setTypeface(Typeface.DEFAULT_BOLD);
         tvVer.setTextColor(accentColor);
         titleCol.addView(tvVer);
@@ -268,8 +289,8 @@ public class ChangelogDialogHelper {
 
         TextView tvBody = new TextView(activity);
         tvBody.setText(richContent);
-        tvBody.setTextSize(13.2f);
-        tvBody.setLineSpacing(6f, 1.18f);
+        tvBody.setTextSize(13f);
+        tvBody.setLineSpacing(4f, 1.16f);
         card.addView(tvBody);
 
         parent.addView(card);

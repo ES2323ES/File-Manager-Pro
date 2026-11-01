@@ -316,6 +316,20 @@ public class MainActivity extends AppCompatActivity {
         subtitleViewsById.clear();
         LayoutInflater inflater = LayoutInflater.from(this);
 
+        // סעיף ז: התאמת אריחי המסך הראשי לכל גודלי המסכים (מסכים קטנים, רגילים, רחבים וטאבלטים)
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        float d = dm.density;
+        float widthDp = dm.widthPixels / d;
+        float heightDp = dm.heightPixels / d;
+        boolean compact = widthDp < 330f || heightDp < 560f;
+        boolean tablet = Math.min(widthDp, heightDp) >= 600f;
+
+        int tileHeightPx = Math.round((compact ? 88f : (tablet ? 124f : 104f)) * d);
+        int iconSizePx = Math.round((compact ? 26f : (tablet ? 38f : 32f)) * d);
+        float titleSp = compact ? 11.5f : (tablet ? 14.5f : 13f);
+        float subSp = compact ? 10f : (tablet ? 12f : 11f);
+        int tileMarginPx = Math.round((compact ? 3.5f : 5f) * d);
+
         for (HomeCategory[] rowItems : HOME_ROWS_LTR) {
             LinearLayout rowLayout = new LinearLayout(this);
             rowLayout.setOrientation(LinearLayout.HORIZONTAL);
@@ -326,23 +340,35 @@ public class MainActivity extends AppCompatActivity {
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
             );
-            rowLp.bottomMargin = 4;
+            rowLp.bottomMargin = Math.round(2f * d);
             rowLayout.setLayoutParams(rowLp);
 
             for (HomeCategory item : rowItems) {
                 CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, rowLayout, false);
                 tile.setCardBackgroundColor(cardBg);
+                LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(0, tileHeightPx, 1f);
+                tileLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
+                tile.setLayoutParams(tileLp);
 
                 ImageView iv = tile.findViewById(R.id.ivTileIcon);
                 TextView tvTitle = tile.findViewById(R.id.tvTileTitle);
                 TextView tvSub = tile.findViewById(R.id.tvTileSubtitle);
 
+                android.view.ViewGroup.LayoutParams ivLp = iv.getLayoutParams();
+                if (ivLp != null) {
+                    ivLp.width = iconSizePx;
+                    ivLp.height = iconSizePx;
+                    iv.setLayoutParams(ivLp);
+                }
+
                 iv.setImageResource(item.iconRes);
                 tvTitle.setText(item.titleHe);
+                tvTitle.setTextSize(titleSp);
                 tvTitle.setTextColor(textPrimary);
 
                 String sub = getCategorySubtitle(item.id);
                 tvSub.setText(sub);
+                tvSub.setTextSize(subSp);
                 tvSub.setTextColor(textSecondary);
                 tvSub.setTextDirection(View.TEXT_DIRECTION_LTR);
                 tvSub.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);

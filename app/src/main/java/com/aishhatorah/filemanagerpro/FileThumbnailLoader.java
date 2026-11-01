@@ -100,9 +100,9 @@ public class FileThumbnailLoader {
 
         final Context appCtx = context.getApplicationContext();
         THUMB_EXECUTOR.execute(() -> {
-            Bitmap extracted = extractRealFileBitmap(appCtx, file, nameLower, 144);
+            Bitmap extracted = extractRealFileBitmap(appCtx, file, nameLower, 256);
             if (extracted != null) {
-                Bitmap rounded = createRoundedSquareBitmap(extracted, 144, 24f);
+                Bitmap rounded = createRoundedSquareBitmap(extracted, 256, 34f);
                 BITMAP_CACHE.put(cacheKey, rounded);
                 MAIN_HANDLER.post(() -> {
                     if (cacheKey.equals(targetView.getTag())) {
@@ -158,6 +158,7 @@ public class FileThumbnailLoader {
                     }
                     BitmapFactory.Options opts = new BitmapFactory.Options();
                     opts.inSampleSize = sample;
+                    opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
                     Bitmap decoded = BitmapFactory.decodeFile(path, opts);
                     if (decoded != null) return decoded;
                 }
@@ -196,11 +197,9 @@ public class FileThumbnailLoader {
                 return ThumbnailUtils.createVideoThumbnail(path, MediaStore.Images.Thumbnails.MINI_KIND);
             }
 
-            if (lower.endsWith(".apk")) {
-                return extractApkArchiveIcon(context, path, sizePx);
-            }
-
-            if (MediaFormatHelper.isSplitAppBundle(lower)) {
+            if (MediaFormatHelper.isInstallableAppPackage(lower)) {
+                Bitmap directApkIcon = extractApkArchiveIcon(context, path, sizePx);
+                if (directApkIcon != null) return directApkIcon;
                 return extractBundleIcon(context, file, sizePx);
             }
         } catch (Exception ignored) {
@@ -279,7 +278,7 @@ public class FileThumbnailLoader {
         if (scaled == null) return src;
         Bitmap output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(output);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         paint.setShader(new BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
         RectF rect = new RectF(0f, 0f, sizePx, sizePx);
         canvas.drawRoundRect(rect, radiusPx, radiusPx, paint);
