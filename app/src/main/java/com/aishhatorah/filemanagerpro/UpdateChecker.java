@@ -563,15 +563,12 @@ public class UpdateChecker {
                     flags |= PendingIntent.FLAG_MUTABLE;
                 }
 
-                PendingIntent pendingIntent;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    Bundle opts = ActivityOptions.makeBasic()
-                            .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
-                            .toBundle();
-                    pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags, opts);
-                } else {
-                    pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags);
-                }
+                PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                        activity,
+                        sessionId,
+                        callbackIntent,
+                        flags
+                );
                 session.commit(pendingIntent.getIntentSender());
                 return;
             }
