@@ -81,7 +81,7 @@ public final class MediaFormatHelper {
         return endsWithAny(fileName, DOCUMENT_EXTS);
     }
 
-    private static boolean endsWithAny(String fileName, String[] exts) {
+    private static boolean endsWithAny(String fileName, String... exts) {
         if (fileName == null) return false;
         String lower = fileName.toLowerCase(Locale.ROOT);
         for (String ext : exts) {
