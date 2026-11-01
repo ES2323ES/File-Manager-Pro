@@ -40,8 +40,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -71,11 +74,15 @@ public class FileBrowserActivity extends AppCompatActivity {
     private final List<File> displayedFiles = new ArrayList<>();
 
     private String currentMode = MODE_INTERNAL;
+    private String baseCategoryTitle = "סייר קבצים";
     private File currentDir = null;
     private File rootBoundary = null;
+    private File selectedCategoryFolder = null;
+    private final Map<String, Integer> categoryFolderCounts = new ConcurrentHashMap<>();
 
     private TextView tvHeaderTitle;
     private TextView tvPathBreadcrumb;
+    private Button btnToggleViewMode = null;
     private EditText etSearch;
     private LinearLayout clipboardBar;
     private TextView tvClipboardStatus;
@@ -93,6 +100,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (currentMode == null) currentMode = MODE_INTERNAL;
         String title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "סייר קבצים";
+        baseCategoryTitle = title;
 
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
@@ -151,6 +159,30 @@ public class FileBrowserActivity extends AppCompatActivity {
             Button btnEmptyBin = ThemedDialogHelper.createThemedButton(this, "רוקן סל", theme, true, true);
             btnEmptyBin.setOnClickListener(v -> confirmEmptyRecycleBinTwoStep());
             topBar.addView(btnEmptyBin);
+        } else if (isGroupedMediaCategoryMode()) {
+            // סעיף ג: בקטגוריות תמונות וסרטונים תצוגת ברירת מחדל רשת + אופציה למעבר לתצוגת רשימה
+            btnToggleViewMode = new Button(this);
+            btnToggleViewMode.setAllCaps(false);
+            btnToggleViewMode.setTextSize(12f);
+            btnToggleViewMode.setTypeface(Typeface.DEFAULT_BOLD);
+            btnToggleViewMode.setTextColor(accent);
+            GradientDrawable vmShape = new GradientDrawable();
+            vmShape.setCornerRadius(20f);
+            vmShape.setColor(Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)));
+            vmShape.setStroke(2, accent);
+            btnToggleViewMode.setBackground(vmShape);
+            btnToggleViewMode.setPadding(22, 10, 22, 10);
+            updateToggleViewButtonLabel();
+            btnToggleViewMode.setOnClickListener(v -> {
+                boolean nextGrid = !PrefsManager.isGridLayoutForMode(this, currentMode);
+                PrefsManager.setGridLayoutForMode(this, currentMode, nextGrid);
+                updateToggleViewButtonLabel();
+                applyFolderLayoutMode();
+                if (adapter != null) {
+                    adapter.notifyDataSetChanged();
+                }
+            });
+            topBar.addView(btnToggleViewMode);
         }
 
         root.addView(topBar);
@@ -266,8 +298,16 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (newMode != null) {
                 currentMode = newMode;
             }
+            String newTitle = intent.getStringExtra(EXTRA_TITLE);
+            if (newTitle != null) {
+                baseCategoryTitle = newTitle;
+                tvHeaderTitle.setText(newTitle);
+            }
+            selectedCategoryFolder = null;
             initInitialDirectory();
             updateClipboardBar();
+            updateToggleViewButtonLabel();
+            applyFolderLayoutMode();
             loadFilesForCurrentMode(false);
         }
     }
@@ -278,14 +318,25 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (miniAudioListener != null) {
             miniAudioListener.onPlaybackStateChanged();
         }
+        updateToggleViewButtonLabel();
         if (recyclerView != null) {
             applyFolderLayoutMode();
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
             loadFilesForCurrentMode(false);
         }
     }
 
+    private void updateToggleViewButtonLabel() {
+        if (btnToggleViewMode != null) {
+            boolean isGrid = PrefsManager.isGridLayoutForMode(this, currentMode);
+            btnToggleViewMode.setText(isGrid ? "תצוגת רשימה" : "תצוגת רשת");
+        }
+    }
+
     private void applyFolderLayoutMode() {
-        if (PrefsManager.isGridLayout(this)) {
+        if (PrefsManager.isGridLayoutForMode(this, currentMode)) {
             recyclerView.setLayoutManager(new GridLayoutManager(this, 2));
         } else {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));
@@ -296,6 +347,10 @@ public class FileBrowserActivity extends AppCompatActivity {
         return MODE_INTERNAL.equals(currentMode)
                 || MODE_SD_CARD.equals(currentMode)
                 || MODE_DOWNLOADS.equals(currentMode);
+    }
+
+    private boolean isGroupedMediaCategoryMode() {
+        return MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode);
     }
 
     private void initInitialDirectory() {
@@ -352,6 +407,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private void loadFilesForCurrentMode(final boolean fromUserPullToRefresh) {
         if (MODE_SD_CARD.equals(currentMode) && currentDir == null) {
+            tvPathBreadcrumb.setVisibility(View.VISIBLE);
             tvPathBreadcrumb.setText("כרטיס SD חיצוני אינו מחובר למכשיר");
             allLoadedFiles.clear();
             filterFiles(etSearch.getText().toString());
@@ -362,13 +418,20 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
 
-        if (currentDir != null) {
+        // סעיף א: הסרת המילים "קטגוריה: שמע" וכדומה בכניסה לקטגוריות
+        if (isDirectoryMode() && currentDir != null) {
+            tvPathBreadcrumb.setVisibility(View.VISIBLE);
             tvPathBreadcrumb.setText(currentDir.getAbsolutePath());
+        } else if (isGroupedMediaCategoryMode() && selectedCategoryFolder != null) {
+            tvPathBreadcrumb.setVisibility(View.VISIBLE);
+            tvPathBreadcrumb.setText(selectedCategoryFolder.getAbsolutePath());
         } else {
-            tvPathBreadcrumb.setText("קטגוריה: " + tvHeaderTitle.getText());
+            tvPathBreadcrumb.setText("");
+            tvPathBreadcrumb.setVisibility(View.GONE);
         }
 
         final boolean showHidden = PrefsManager.isShowHidden(this);
+        final File activeMediaFolder = selectedCategoryFolder;
 
         executor.execute(() -> {
             List<File> result = new ArrayList<>();
@@ -386,6 +449,46 @@ public class FileBrowserActivity extends AppCompatActivity {
                             result.add(f);
                         }
                     }
+                }
+            } else if (isGroupedMediaCategoryMode()) {
+                // סעיף ג: בקטגוריות תמונות וסרטונים — הצגת הקבצים מקובצים לפי התיקיות שלהם, ובלחיצה על תיקייה הצגת קובצי אותה תיקייה
+                if (activeMediaFolder != null && activeMediaFolder.exists() && activeMediaFolder.isDirectory()) {
+                    File[] children = activeMediaFolder.listFiles();
+                    if (children != null) {
+                        for (File f : children) {
+                            if (f.isDirectory()) continue;
+                            if (!showHidden && f.getName().startsWith(".")) continue;
+                            String lower = f.getName().toLowerCase(Locale.ROOT);
+                            if (MODE_IMAGES.equals(currentMode) && MediaFormatHelper.isImageFile(lower)) {
+                                result.add(f);
+                            } else if (MODE_VIDEOS.equals(currentMode) && MediaFormatHelper.isVideoFile(lower)) {
+                                result.add(f);
+                            }
+                        }
+                    }
+                } else {
+                    List<File> allMediaFiles = new ArrayList<>();
+                    File root = Environment.getExternalStorageDirectory();
+                    collectMatchingCategoryFiles(root, allMediaFiles, showHidden, 0);
+                    StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
+                    if (sd.available && sd.root != null) {
+                        collectMatchingCategoryFiles(sd.root, allMediaFiles, showHidden, 0);
+                    }
+                    Map<String, File> foldersByPath = new LinkedHashMap<>();
+                    Map<String, Integer> countsByPath = new LinkedHashMap<>();
+                    for (File mf : allMediaFiles) {
+                        File parent = mf.getParentFile();
+                        if (parent == null) continue;
+                        String key = parent.getAbsolutePath();
+                        if (!foldersByPath.containsKey(key)) {
+                            foldersByPath.put(key, parent);
+                        }
+                        Integer prev = countsByPath.get(key);
+                        countsByPath.put(key, (prev == null ? 0 : prev) + 1);
+                    }
+                    categoryFolderCounts.clear();
+                    categoryFolderCounts.putAll(countsByPath);
+                    result.addAll(foldersByPath.values());
                 }
             } else {
                 File root = Environment.getExternalStorageDirectory();
@@ -412,7 +515,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void collectMatchingCategoryFiles(File dir, List<File> out, boolean showHidden, int depth) {
-        if (dir == null || !dir.exists() || depth > 7 || out.size() > 800) return;
+        if (dir == null || !dir.exists() || depth > 7 || out.size() > 5000) return;
         if (dir.getName().equals(".FileManagerPro_Trash") || dir.getName().equals("Android")) return;
         if (!showHidden && dir.getName().startsWith(".")) return;
 
@@ -653,7 +756,17 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
         if (file.isDirectory()) {
+            if (isGroupedMediaCategoryMode()) {
+                selectedCategoryFolder = file;
+                tvHeaderTitle.setText(file.getName());
+                if (etSearch != null && etSearch.getText().length() > 0) {
+                    etSearch.setText("");
+                }
+                loadFilesForCurrentMode(false);
+                return;
+            }
             currentDir = file;
+            tvHeaderTitle.setText(file.getName());
             loadFilesForCurrentMode();
             return;
         }
@@ -933,6 +1046,15 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void navigateUpOrFinish() {
+        if (isGroupedMediaCategoryMode() && selectedCategoryFolder != null) {
+            selectedCategoryFolder = null;
+            tvHeaderTitle.setText(baseCategoryTitle);
+            if (etSearch != null && etSearch.getText().length() > 0) {
+                etSearch.setText("");
+            }
+            loadFilesForCurrentMode(false);
+            return;
+        }
         if (isDirectoryMode() && currentDir != null && rootBoundary != null
                 && !currentDir.getAbsolutePath().equals(rootBoundary.getAbsolutePath())
                 && currentDir.getParentFile() != null) {
@@ -970,7 +1092,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         @Override
         public int getItemViewType(int position) {
-            return PrefsManager.isGridLayout(FileBrowserActivity.this) ? 1 : 0;
+            return PrefsManager.isGridLayoutForMode(FileBrowserActivity.this, currentMode) ? 1 : 0;
         }
 
         @NonNull
@@ -993,9 +1115,16 @@ public class FileBrowserActivity extends AppCompatActivity {
             FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
 
             if (f.isDirectory()) {
-                File[] sub = f.listFiles();
-                int count = sub != null ? sub.length : 0;
-                h.tvMeta.setText(count + " פריטים • " + df.format(new Date(f.lastModified())));
+                if (isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
+                    Integer matched = categoryFolderCounts.get(f.getAbsolutePath());
+                    int count = matched != null ? matched : 0;
+                    String unit = MODE_IMAGES.equals(currentMode) ? "תמונות" : "סירטונים";
+                    h.tvMeta.setText(count + " " + unit + " • " + df.format(new Date(f.lastModified())));
+                } else {
+                    File[] sub = f.listFiles();
+                    int count = sub != null ? sub.length : 0;
+                    h.tvMeta.setText(count + " פריטים • " + df.format(new Date(f.lastModified())));
+                }
             } else {
                 h.tvMeta.setText(StorageUtils.formatSize(f.length()) + " • " + df.format(new Date(f.lastModified())));
             }

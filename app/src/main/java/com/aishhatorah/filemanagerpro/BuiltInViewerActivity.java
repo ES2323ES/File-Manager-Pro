@@ -1,5 +1,6 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
@@ -21,7 +22,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.text.Editable;
+import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.view.GestureDetector;
@@ -32,9 +36,11 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
@@ -57,6 +63,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -110,6 +117,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private ParcelFileDescriptor pdfDescriptor;
     private PdfRenderer pdfRenderer;
     private int currentPdfPage = 0;
+
+    // סעיף ב: עריכת קובץ טקסט ישירות בנגיעה באותיות
+    private EditText activeTextEditor = null;
+    private String loadedOriginalText = "";
+    private boolean textEditorDirty = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -178,6 +190,31 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     // סעיף יח: אם נכנסו דרך ההתראה בבר ההתראות, לחיצה על חזור או סגור מעבירה לתיקייה שממנה השיר מתנגן!
     private void handleViewerCloseOrBack() {
+        if (activeTextEditor != null && textEditorDirty) {
+            ThemedDialogHelper.showCustomDialog(
+                    this,
+                    "שמירת שינויים בקובץ",
+                    "בוצעו שינויים בטקסט של \"" + (targetFile != null ? targetFile.getName() : "") + "\". האם לשמור אותם לפני הסגירה?",
+                    null,
+                    "שמור וסגור",
+                    () -> {
+                        saveEditedTextFileNow(false);
+                        textEditorDirty = false;
+                        proceedCloseOrNavigateBack();
+                    },
+                    "צא ללא שמירה",
+                    () -> {
+                        textEditorDirty = false;
+                        proceedCloseOrNavigateBack();
+                    },
+                    false
+            );
+            return;
+        }
+        proceedCloseOrNavigateBack();
+    }
+
+    private void proceedCloseOrNavigateBack() {
         if (openedFromNotification && targetFile != null && targetFile.getParentFile() != null) {
             openedFromNotification = false;
             File songFolder = targetFile.getParentFile();
@@ -196,6 +233,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void buildViewerUiForCurrentFile() {
+        activeTextEditor = null;
+        textEditorDirty = false;
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
         int bgColor = ThemeHelper.getBgColor(theme);
@@ -331,7 +370,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         } else if (endsWithAny(lower, ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp")) {
             renderOfficeDocumentViewer(contentArea, cardColor, textPrimary, textSecondary);
         } else {
-            renderTextDocumentViewer(contentArea, cardColor, textPrimary, textSecondary);
+            renderTextDocumentViewer(contentArea, cardColor, textPrimary, textSecondary, theme);
         }
     }
 
@@ -1546,46 +1585,141 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         });
     }
 
-    private void renderTextDocumentViewer(LinearLayout host, int cardColor, int textPrimary, int textSecondary) {
+    // סעיף ב: בכניסה לקובץ טקסט, נגיעה באותיות פותחת את המקלדת ומאפשרת למחוק או להוסיף מילים ולשמור בקובץ
+    private void renderTextDocumentViewer(LinearLayout host, int cardColor, int textPrimary, int textSecondary, int theme) {
         LinearLayout card = createSurfaceCard(cardColor);
 
-        TextView tvSub = new TextView(this);
-        tvSub.setText("מציג מסמכים וטקסט מובנה • " + StorageUtils.formatSize(targetFile.length()));
+        final TextView tvSub = new TextView(this);
+        tvSub.setText("עורך טקסט מובנה • גע באותיות לעריכה • " + StorageUtils.formatSize(targetFile.length()));
         tvSub.setTextColor(textSecondary);
         tvSub.setTextSize(12f);
         tvSub.setPadding(0, 0, 0, dp(10));
         card.addView(tvSub);
 
         ScrollView scroll = new ScrollView(this);
-        TextView tvDoc = new TextView(this);
-        tvDoc.setTextColor(textPrimary);
-        tvDoc.setTextSize(13.5f);
-        tvDoc.setTextIsSelectable(true);
-        tvDoc.setLineSpacing(5f, 1.2f);
-        scroll.addView(tvDoc);
+        scroll.setFillViewport(true);
+
+        final EditText etDoc = new EditText(this);
+        activeTextEditor = etDoc;
+        etDoc.setBackground(null);
+        etDoc.setTextColor(textPrimary);
+        etDoc.setHintTextColor(textSecondary);
+        etDoc.setHint("הקובץ ריק — גע כאן כדי להוסיף מילים...");
+        etDoc.setTextSize(14f);
+        etDoc.setLineSpacing(5f, 1.2f);
+        etDoc.setGravity(Gravity.TOP | Gravity.START);
+        etDoc.setTextDirection(View.TEXT_DIRECTION_ANY_RTL);
+        etDoc.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        etDoc.setFocusable(true);
+        etDoc.setFocusableInTouchMode(true);
+        etDoc.setClickable(true);
+        etDoc.setLongClickable(true);
+        etDoc.setPadding(dp(4), dp(4), dp(4), dp(18));
+
+        etDoc.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                etDoc.post(() -> {
+                    InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (imm != null) {
+                        imm.showSoftInput(etDoc, InputMethodManager.SHOW_IMPLICIT);
+                    }
+                });
+            }
+        });
+
+        etDoc.setOnClickListener(v -> {
+            etDoc.requestFocus();
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(etDoc, InputMethodManager.SHOW_IMPLICIT);
+            }
+        });
+
+        scroll.addView(etDoc, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         card.addView(scroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        Button btnSaveText = ThemedDialogHelper.createThemedButton(this, "שמור שינויים בקובץ", theme, true, false);
+        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        saveLp.topMargin = dp(10);
+        btnSaveText.setLayoutParams(saveLp);
+        btnSaveText.setOnClickListener(v -> {
+            if (saveEditedTextFileNow(true)) {
+                tvSub.setText("עורך טקסט מובנה • נשמר בהצלחה • " + StorageUtils.formatSize(targetFile.length()));
+                InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.hideSoftInputFromWindow(etDoc.getWindowToken(), 0);
+                }
+            }
+        });
+        card.addView(btnSaveText);
 
         host.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         executor.execute(() -> {
             StringBuilder sb = new StringBuilder();
+            boolean readFailed = false;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(new FileInputStream(targetFile), StandardCharsets.UTF_8))) {
                 char[] buf = new char[4096];
                 int read;
                 int totalChars = 0;
-                while ((read = reader.read(buf)) != -1 && totalChars < 120_000) {
+                while ((read = reader.read(buf)) != -1 && totalChars < 200_000) {
                     sb.append(buf, 0, read);
                     totalChars += read;
                 }
             } catch (Exception e) {
+                readFailed = true;
                 sb.append("לא ניתן להציג קובץ זה כטקסט: ").append(e.getMessage());
             }
             final String text = sb.toString();
-            uiHandler.post(() -> tvDoc.setText(text.isEmpty() ? "(קובץ ריק)" : text));
+            final boolean isError = readFailed;
+            uiHandler.post(() -> {
+                loadedOriginalText = text;
+                textEditorDirty = false;
+                etDoc.setText(text);
+                if (!isError) {
+                    etDoc.addTextChangedListener(new TextWatcher() {
+                        @Override
+                        public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                        }
+
+                        @Override
+                        public void onTextChanged(CharSequence s, int start, int before, int count) {
+                        }
+
+                        @Override
+                        public void afterTextChanged(Editable s) {
+                            String current = s != null ? s.toString() : "";
+                            textEditorDirty = !current.equals(loadedOriginalText);
+                        }
+                    });
+                }
+            });
         });
+    }
+
+    private boolean saveEditedTextFileNow(boolean showSuccessToast) {
+        if (activeTextEditor == null || targetFile == null) return false;
+        String updatedContent = activeTextEditor.getText() != null ? activeTextEditor.getText().toString() : "";
+        try (FileOutputStream fos = new FileOutputStream(targetFile, false)) {
+            fos.write(updatedContent.getBytes(StandardCharsets.UTF_8));
+            fos.flush();
+            loadedOriginalText = updatedContent;
+            textEditorDirty = false;
+            if (showSuccessToast) {
+                Toast.makeText(this, "השינויים בקובץ הטקסט נשמרו בהצלחה", Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        } catch (Exception e) {
+            Toast.makeText(this, "שגיאה בשמירת הקובץ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            return false;
+        }
     }
 
     private LinearLayout createSurfaceCard(int cardColor) {

@@ -73,7 +73,8 @@
         <activity
             android:name=".BuiltInViewerActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
-            android:exported="false" />
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".ProImageEditorActivity"

@@ -21,7 +21,9 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 public class SettingsActivity extends AppCompatActivity {
 
@@ -135,16 +137,16 @@ public class SettingsActivity extends AppCompatActivity {
 
         body.addView(analyzerCard);
 
-        // 3. סעיף יד: בחירת התצוגה בתוך תוכן התיקיות (תצוגת רשימה / תצוגת רשת) + מיון
-        addSectionTitle(body, "תצוגת התוכן בתיקיות ומיון", accent);
+        // 3. סעיף ג: בחירת תצוגת רשת או תצוגת רשימה בכל הקטגוריות (כולל תמונות וסרטונים שברירת המחדל שלהן רשת) + מיון
+        addSectionTitle(body, "תצוגת התוכן בתיקיות, בקטגוריות ומיון", accent);
         LinearLayout displayCard = createSectionCard(cardColor);
 
         TextView tvLayoutLabel = new TextView(this);
-        tvLayoutLabel.setText("בחירת אופן התצוגה בתוך התיקיות:");
+        tvLayoutLabel.setText("תצוגה בתיקיות ובשאר הקטגוריות:");
         tvLayoutLabel.setTextColor(textPrimary);
         tvLayoutLabel.setTextSize(14f);
         tvLayoutLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        tvLayoutLabel.setPadding(0, 0, 0, 14);
+        tvLayoutLabel.setPadding(0, 0, 0, 12);
         displayCard.addView(tvLayoutLabel);
 
         boolean isGrid = PrefsManager.isGridLayout(this);
@@ -153,18 +155,83 @@ public class SettingsActivity extends AppCompatActivity {
         viewModeRow.setWeightSum(2f);
 
         viewModeRow.addView(createOptionButton("תצוגת רשימה", !isGrid, accent, () -> {
-            PrefsManager.setGridLayout(this, false);
+            PrefsManager.setGeneralGridLayoutAndSyncNonMedia(this, false);
             renderSettingsUi();
         }));
         viewModeRow.addView(createOptionButton("תצוגת רשת", isGrid, accent, () -> {
-            PrefsManager.setGridLayout(this, true);
+            PrefsManager.setGeneralGridLayoutAndSyncNonMedia(this, true);
             renderSettingsUi();
         }));
         LinearLayout.LayoutParams vmLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        vmLp.bottomMargin = 14;
+        vmLp.bottomMargin = 18;
         viewModeRow.setLayoutParams(vmLp);
         displayCard.addView(viewModeRow);
+
+        TextView tvImagesLayoutLabel = new TextView(this);
+        tvImagesLayoutLabel.setText("תצוגה בקטגוריית תמונות (תיקיות ותוכן התיקיות):");
+        tvImagesLayoutLabel.setTextColor(textPrimary);
+        tvImagesLayoutLabel.setTextSize(14f);
+        tvImagesLayoutLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvImagesLayoutLabel.setPadding(0, 4, 0, 12);
+        displayCard.addView(tvImagesLayoutLabel);
+
+        boolean isImagesGrid = PrefsManager.isGridLayoutForMode(this, FileBrowserActivity.MODE_IMAGES);
+        LinearLayout imagesModeRow = new LinearLayout(this);
+        imagesModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        imagesModeRow.setWeightSum(2f);
+        imagesModeRow.addView(createOptionButton("תצוגת רשימה", !isImagesGrid, accent, () -> {
+            PrefsManager.setGridLayoutForMode(this, FileBrowserActivity.MODE_IMAGES, false);
+            renderSettingsUi();
+        }));
+        imagesModeRow.addView(createOptionButton("תצוגת רשת", isImagesGrid, accent, () -> {
+            PrefsManager.setGridLayoutForMode(this, FileBrowserActivity.MODE_IMAGES, true);
+            renderSettingsUi();
+        }));
+        LinearLayout.LayoutParams imLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        imLp.bottomMargin = 18;
+        imagesModeRow.setLayoutParams(imLp);
+        displayCard.addView(imagesModeRow);
+
+        TextView tvVideosLayoutLabel = new TextView(this);
+        tvVideosLayoutLabel.setText("תצוגה בקטגוריית סירטונים (תיקיות ותוכן התיקיות):");
+        tvVideosLayoutLabel.setTextColor(textPrimary);
+        tvVideosLayoutLabel.setTextSize(14f);
+        tvVideosLayoutLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvVideosLayoutLabel.setPadding(0, 4, 0, 12);
+        displayCard.addView(tvVideosLayoutLabel);
+
+        boolean isVideosGrid = PrefsManager.isGridLayoutForMode(this, FileBrowserActivity.MODE_VIDEOS);
+        LinearLayout videosModeRow = new LinearLayout(this);
+        videosModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        videosModeRow.setWeightSum(2f);
+        videosModeRow.addView(createOptionButton("תצוגת רשימה", !isVideosGrid, accent, () -> {
+            PrefsManager.setGridLayoutForMode(this, FileBrowserActivity.MODE_VIDEOS, false);
+            renderSettingsUi();
+        }));
+        videosModeRow.addView(createOptionButton("תצוגת רשת", isVideosGrid, accent, () -> {
+            PrefsManager.setGridLayoutForMode(this, FileBrowserActivity.MODE_VIDEOS, true);
+            renderSettingsUi();
+        }));
+        LinearLayout.LayoutParams vdLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        vdLp.bottomMargin = 10;
+        videosModeRow.setLayoutParams(vdLp);
+        displayCard.addView(videosModeRow);
+
+        Button btnPerCategoryLayout = createSubtleButton(
+                "בחירת תצוגת רשת / רשימה לכל הקטגוריות בנפרד",
+                cardColor,
+                accent,
+                v -> showPerCategoryLayoutDialog()
+        );
+        LinearLayout.LayoutParams pclLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pclLp.topMargin = 10;
+        pclLp.bottomMargin = 12;
+        btnPerCategoryLayout.setLayoutParams(pclLp);
+        displayCard.addView(btnPerCategoryLayout);
 
         addSwitchRow(displayCard,
                 "הצגת קבצים מוסתרים",
@@ -461,6 +528,52 @@ public class SettingsActivity extends AppCompatActivity {
         b.setLayoutParams(lp);
         b.setOnClickListener(listener);
         return b;
+    }
+
+    private void showPerCategoryLayoutDialog() {
+        final String[][] categories = new String[][]{
+                {FileBrowserActivity.MODE_INTERNAL, "אחסון ראשי"},
+                {FileBrowserActivity.MODE_SD_CARD, "כרטיס SD"},
+                {FileBrowserActivity.MODE_DOWNLOADS, "הורדות"},
+                {FileBrowserActivity.MODE_IMAGES, "תמונות"},
+                {FileBrowserActivity.MODE_AUDIO, "שמע"},
+                {FileBrowserActivity.MODE_VIDEOS, "סירטונים"},
+                {FileBrowserActivity.MODE_DOCUMENTS, "מסמכים"},
+                {FileBrowserActivity.MODE_APPS, "אפליקציות"},
+                {FileBrowserActivity.MODE_RECENT, "קבצים חדשים"},
+                {FileBrowserActivity.MODE_RECYCLE_BIN, "סל מיחזור"}
+        };
+
+        List<String> labels = new ArrayList<>();
+        for (String[] cat : categories) {
+            boolean grid = PrefsManager.isGridLayoutForMode(this, cat[0]);
+            labels.add(cat[1] + "  •  " + (grid ? "תצוגת רשת" : "תצוגת רשימה"));
+        }
+
+        ThemedDialogHelper.showThemedMenu(
+                this,
+                "תצוגת רשת / רשימה לפי קטגוריה",
+                "בחר קטגוריה כדי לשנות בין תצוגת רשת לתצוגת רשימה:",
+                labels,
+                which -> {
+                    final String modeKey = categories[which][0];
+                    final String modeName = categories[which][1];
+                    ThemedDialogHelper.showThemedMenu(
+                            this,
+                            "אופן תצוגה: " + modeName,
+                            "בחר את התצוגה הרצויה עבור קטגוריית " + modeName + ":",
+                            Arrays.asList("תצוגת רשת", "תצוגת רשימה"),
+                            choice -> {
+                                boolean chooseGrid = (choice == 0);
+                                PrefsManager.setGridLayoutForMode(this, modeKey, chooseGrid);
+                                renderSettingsUi();
+                                Toast.makeText(this,
+                                        modeName + ": עודכן ל" + (chooseGrid ? "תצוגת רשת" : "תצוגת רשימה"),
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                    );
+                }
+        );
     }
 
     private void showSortModeDialog() {

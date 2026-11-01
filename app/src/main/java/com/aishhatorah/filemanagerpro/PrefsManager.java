@@ -44,6 +44,46 @@ public class PrefsManager {
         prefs(context).edit().putBoolean("grid_layout", grid).apply();
     }
 
+    private static String gridKeyForMode(String mode) {
+        return "grid_layout_mode_" + (mode == null ? FileBrowserActivity.MODE_INTERNAL : mode);
+    }
+
+    public static boolean isGridLayoutForMode(Context context, String mode) {
+        SharedPreferences sp = prefs(context);
+        String key = gridKeyForMode(mode);
+        if (sp.contains(key)) {
+            return sp.getBoolean(key, false);
+        }
+        // סעיף ג: בקטגוריות תמונות וסרטונים ברירת המחדל היא תצוגת רשת (הן בתיקיות והן בתוך התיקיות)
+        if (FileBrowserActivity.MODE_IMAGES.equals(mode) || FileBrowserActivity.MODE_VIDEOS.equals(mode)) {
+            return true;
+        }
+        return isGridLayout(context);
+    }
+
+    public static void setGridLayoutForMode(Context context, String mode, boolean grid) {
+        prefs(context).edit().putBoolean(gridKeyForMode(mode), grid).apply();
+    }
+
+    public static void setGeneralGridLayoutAndSyncNonMedia(Context context, boolean grid) {
+        SharedPreferences.Editor ed = prefs(context).edit();
+        ed.putBoolean("grid_layout", grid);
+        String[] generalModes = {
+                FileBrowserActivity.MODE_INTERNAL,
+                FileBrowserActivity.MODE_SD_CARD,
+                FileBrowserActivity.MODE_DOWNLOADS,
+                FileBrowserActivity.MODE_AUDIO,
+                FileBrowserActivity.MODE_DOCUMENTS,
+                FileBrowserActivity.MODE_APPS,
+                FileBrowserActivity.MODE_RECENT,
+                FileBrowserActivity.MODE_RECYCLE_BIN
+        };
+        for (String m : generalModes) {
+            ed.putBoolean(gridKeyForMode(m), grid);
+        }
+        ed.apply();
+    }
+
     public static int getSortMode(Context context) {
         return prefs(context).getInt("sort_mode", SORT_NAME);
     }

@@ -50,10 +50,10 @@ jobs:
           mkdir -p dist-artifacts
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           cp "$APK_PATH" dist-artifacts/File-Manager-Pro.apk
-          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.2.5.apk
-          zip -r dist-artifacts/File-Manager-Pro-v0.2.5-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
+          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.2.6.apk
+          zip -r dist-artifacts/File-Manager-Pro-v0.2.6-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
 
-      - name: Determine Release Tag (V1, V2, V3, V4, V5...)
+      - name: Determine Release Tag (V1, V2, V3, V4, V5, V6...)
         id: calc_tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,7 +64,7 @@ jobs:
           else
             LATEST_TITLE=$(gh release list --limit 1 --json name --jq '.[0].name' 2>/dev/null || true)
             LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.2.5"; then
+            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.2.6"; then
               NEXT_TAG="$LATEST_TAG"
             else
               HIGHEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^V[0-9]+$' | sed 's/V//' | sort -nr | head -n 1 || true)
@@ -84,16 +84,15 @@ jobs:
           TAG: ${{ steps.calc_tag.outputs.tag }}
         run: |
           cat <<EOF > release-notes.md
-          • נגן אודיו משודרג ומותאם לסיבוב מסך: פס התקדמות משמאל לימין, החלפת מצב חזרה בלחיצה ישירה, אייקונים מותאמים לגודל וסיבוב המסך, עטיפת שיר מלאה ומונה קבצים בתיקייה (כגון 1/20)
-          • התראת מדיה חכמה ושורה תחתונה עם פס התקדמות: סמלי מדיה בבר ההתראות עם פס התקדמות משמאל לימין וחזרה לתיקיית השיר המתנגן, ופס התקדמות בשורה החכמה למטה
-          • תמיכה בכל סוגי המדיה והאפליקציות: פתיחה מובנית של כל פורמטי האודיו, הוידאו והתמונות, התקנת כל סוגי האפליקציות (APK / APKS / APKM / XAPK), ואייקונים מותאמים לקובצי ZIP וטקסט
-          • תצוגת תיקיות, מסך ראשי ואייקון Pro: הצגת שמות קבצים ארוכים במלואם, פתיחת אפשרויות עריכה בלחיצה על האייקון משמאל, שורת כותרת ומוני קבצים נעים במסך הראשי, וכיתוב Pro בתיקייה הלבנה של האייקון
-          • עדכון ישיר ועצמאי בתוך האפליקציה: חלון עדכון חדש המעוצב בסגנון יומן השינויים עם הורדה והתקנה ישירה וקישורים למתמחים טופ ולעוגן פליי באודות
+          • תצוגת תיקיות ברשת לתמונות וסרטונים: בכניסה לקטגוריות תמונות או סרטונים הקבצים מופיעים בתיקיות שלהם בתצוגת רשת, ובתוך התיקיות התצוגה היא תצוגת רשת עם אופציה לתצוגת רשימה
+          • שליטה בתצוגת רשת / רשימה לכל הקטגוריות בהגדרות: אפשרות לשנות בין תצוגת רשת לתצוגת רשימה בכל הקטגוריות של האפליקציה (כולל תמונות וסרטונים)
+          • עריכת קובצי טקסט ישירה בנגיעה באותיות: נגיעה באותיות בקובץ טקסט פותחת את המקלדת למחיקה או הוספת מילים ושמירה ישירה בקובץ
+          • עיצוב נקי בקטגוריות: הסרת הכיתוב "קטגוריה: שמע" וכדומה בכניסה לקטגוריות השונות
 
           ### הורדה ישירה
           - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
-          - **קובץ התקנה מתויג גירסה 0.2.5 רשמית:** \`File-Manager-Pro-v0.2.5.apk\`
-          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.2.5-Source.zip\`
+          - **קובץ התקנה מתויג גירסה 0.2.6 רשמית:** \`File-Manager-Pro-v0.2.6.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.2.6-Source.zip\`
 
           ### פיתוח והנדסה
           - **פיתוח והנדסה:** @ אש התורה — [במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [בעוגן פליי](https://ogenplay.com/users/724ec656-a4a7-4d31-8ece-fa9938851704)
@@ -102,21 +101,21 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
             gh release edit "$TAG" \
-              --title "${TAG} — File Manager Pro v0.2.5 רשמית" \
+              --title "${TAG} — File Manager Pro v0.2.6 רשמית" \
               --notes-file release-notes.md \
               --draft=false \
               --prerelease=false
             gh release upload "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.5.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.5-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.2.6.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.6-Source.zip \
               --clobber
           else
             gh release create "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.5.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.5-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.2.6.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.6-Source.zip \
               --target "$GITHUB_SHA" \
-              --title "${TAG} — File Manager Pro v0.2.5 רשמית" \
+              --title "${TAG} — File Manager Pro v0.2.6 רשמית" \
               --notes-file release-notes.md
           fi

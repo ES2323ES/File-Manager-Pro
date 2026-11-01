@@ -90,6 +90,21 @@ public class ChangelogDialogHelper {
         heroLp.bottomMargin = 24;
         outer.addView(heroBanner, heroLp);
 
+        // ===================== גירסה 0.2.6 רשמית =====================
+        SpannableStringBuilder v26 = new SpannableStringBuilder();
+        appendRichBullet(v26, "תצוגת תיקיות ברשת לתמונות וסרטונים: ", cBlue,
+                "בכניסה לקטגוריות תמונות או סרטונים הקבצים מוצגים בתיקיות שלהם בתצוגת רשת, ובתוך התיקיות התצוגה היא תצוגת רשת עם אפשרות למעבר לתצוגת רשימה.", textPrimary);
+        appendRichBullet(v26, "\n\nשליטה בתצוגת רשת / רשימה לכל הקטגוריות בהגדרות: ", cEmerald,
+                "אפשרות לבחור בין תצוגת רשת לתצוגת רשימה עבור כל הקטגוריות באפליקציה, כולל תמונות וסרטונים.", textPrimary);
+        appendRichBullet(v26, "\n\nעריכת קובצי טקסט בנגיעה באותיות: ", cViolet,
+                "בכניסה לקובץ טקסט, נגיעה באותיות פותחת מיד את המקלדת למחיקה או הוספת מילים ושמירה ישירה בקובץ.", textPrimary);
+        appendRichBullet(v26, "\n\nניקיון כותרות בקטגוריות: ", cAmber,
+                "הוסר הכיתוב המיותר 'קטגוריה: שמע' וכדומה בכניסה לקטגוריות השונות.", textPrimary);
+
+        addLuxuriousVersionCard(outer, activity, theme,
+                "גירסה 0.2.6 רשמית", "הגירסה הנוכחית והחדשה ביותר",
+                Color.parseColor("#1D4ED8"), R.drawable.ic_app_logo, v26);
+
         // ===================== גירסה 0.2.5 רשמית =====================
         SpannableStringBuilder v25 = new SpannableStringBuilder();
         appendRichBullet(v25, "נגן אודיו משודרג ומותאם לסיבוב מסך: ", cBlue,
@@ -104,8 +119,8 @@ public class ChangelogDialogHelper {
                 "חלון עדכון חדש המעוצב בסגנון יומן השינויים עם הורדה והתקנה ישירה ועצמאית בתוך האפליקציה, וקישורים למתמחים טופ ולעוגן פליי באודות.", textPrimary);
 
         addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.5 רשמית", "הגירסה הנוכחית והחדשה ביותר",
-                Color.parseColor("#1D4ED8"), R.drawable.ic_app_logo, v25);
+                "גירסה 0.2.5 רשמית", "נגן מדיה מותאם, התראות חכמות והתקנה אוניברסלית",
+                Color.parseColor("#2563EB"), R.drawable.ic_app_logo, v25);
 
         // ===================== גירסה 0.2.4 =====================
         SpannableStringBuilder v24 = new SpannableStringBuilder();
