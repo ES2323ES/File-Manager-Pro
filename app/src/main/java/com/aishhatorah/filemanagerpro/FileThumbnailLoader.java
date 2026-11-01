@@ -8,6 +8,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.ImageDecoder;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -15,25 +16,32 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.media.MediaMetadataRetriever;
 import android.media.ThumbnailUtils;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.LruCache;
 import android.widget.ImageView;
 
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
- * סעיף ד: טוען אסינכרוני מהיר עם זיכרון מטמון המציג לכל קובץ את האייקון האמיתי שלו:
- * - שירים ואודיו: עטיפת האלבום/האייקון המוטמע בתוך קובץ השמע (MediaMetadataRetriever)
- * - תמונות: תמונה ממוזערת אמיתית של התמונה עצמה
- * - סירטונים: פריים תצוגה מקדימה אמיתי מתוך הסרטון
- * - אפליקציות (APK): האייקון הרשמי של אותה אפליקציה מתוך PackageManager
+ * סעיפים ד, ט, יא, יב: טוען אייקונים ותמונות ממוזערות עבור כל סוגי הקבצים:
+ * - תמונות מכל הפורמטים (כולל HEIC / HEIF / AVIF / WEBP דרך ImageDecoder)
+ * - עטיפת אלבום מוטמעת לכל פורמטי השמע
+ * - פריים מקדים לכל פורמטי הוידאו
+ * - אייקון אפליקציה מקורי עבור APK וכן לחבילות APKS / APKM / XAPK
+ * - אייקונים מותאמים ייחודיים לקובצי ZIP ולקובצי טקסט (סעיף יא)
  */
 public class FileThumbnailLoader {
 
@@ -48,7 +56,6 @@ public class FileThumbnailLoader {
         }
     };
 
-    // מונע סריקה חוזרת לקבצים שאין בהם עטיפה פנימית (למשל שיר ללא תמונה מוטמעת)
     private static final Set<String> NO_EMBEDDED_ICON_KEYS = ConcurrentHashMap.newKeySet();
 
     public static void bindFileIcon(Context context, File file, ImageView targetView) {
@@ -140,25 +147,35 @@ public class FileThumbnailLoader {
     private static Bitmap extractRealFileBitmap(Context context, File file, String lower, int sizePx) {
         String path = file.getAbsolutePath();
         try {
-            if (endsWithAny(lower, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic")) {
+            if (MediaFormatHelper.isImageFile(lower)) {
                 BitmapFactory.Options bounds = new BitmapFactory.Options();
                 bounds.inJustDecodeBounds = true;
                 BitmapFactory.decodeFile(path, bounds);
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
-                int sample = 1;
-                while (bounds.outWidth / sample > sizePx * 2 || bounds.outHeight / sample > sizePx * 2) {
-                    sample *= 2;
+                if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                    int sample = 1;
+                    while (bounds.outWidth / sample > sizePx * 2 || bounds.outHeight / sample > sizePx * 2) {
+                        sample *= 2;
+                    }
+                    BitmapFactory.Options opts = new BitmapFactory.Options();
+                    opts.inSampleSize = sample;
+                    Bitmap decoded = BitmapFactory.decodeFile(path, opts);
+                    if (decoded != null) return decoded;
                 }
-                BitmapFactory.Options opts = new BitmapFactory.Options();
-                opts.inSampleSize = sample;
-                return BitmapFactory.decodeFile(path, opts);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    ImageDecoder.Source src = ImageDecoder.createSource(file);
+                    return ImageDecoder.decodeBitmap(src, (decoder, info, s) -> {
+                        decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                        decoder.setTargetSize(sizePx, sizePx);
+                    });
+                }
+                return null;
             }
 
-            if (endsWithAny(lower, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) {
+            if (MediaFormatHelper.isAudioFile(lower)) {
                 return extractAudioEmbeddedArt(file, sizePx);
             }
 
-            if (endsWithAny(lower, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) {
+            if (MediaFormatHelper.isVideoFile(lower)) {
                 MediaMetadataRetriever retriever = new MediaMetadataRetriever();
                 try {
                     retriever.setDataSource(path);
@@ -180,19 +197,63 @@ public class FileThumbnailLoader {
             }
 
             if (lower.endsWith(".apk")) {
-                PackageManager pm = context.getPackageManager();
-                PackageInfo pkgInfo = pm.getPackageArchiveInfo(path, 0);
-                if (pkgInfo != null && pkgInfo.applicationInfo != null) {
-                    ApplicationInfo appInfo = pkgInfo.applicationInfo;
-                    appInfo.sourceDir = path;
-                    appInfo.publicSourceDir = path;
-                    Drawable iconDrawable = appInfo.loadIcon(pm);
-                    if (iconDrawable != null) {
-                        return drawableToBitmap(iconDrawable, sizePx);
-                    }
+                return extractApkArchiveIcon(context, path, sizePx);
+            }
+
+            if (MediaFormatHelper.isSplitAppBundle(lower)) {
+                return extractBundleIcon(context, file, sizePx);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static Bitmap extractApkArchiveIcon(Context context, String apkPath, int sizePx) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            PackageInfo pkgInfo = pm.getPackageArchiveInfo(apkPath, 0);
+            if (pkgInfo != null && pkgInfo.applicationInfo != null) {
+                ApplicationInfo appInfo = pkgInfo.applicationInfo;
+                appInfo.sourceDir = apkPath;
+                appInfo.publicSourceDir = apkPath;
+                Drawable iconDrawable = appInfo.loadIcon(pm);
+                if (iconDrawable != null) {
+                    return drawableToBitmap(iconDrawable, sizePx);
                 }
             }
         } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static Bitmap extractBundleIcon(Context context, File bundleFile, int sizePx) {
+        File tempBaseApk = null;
+        try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(new FileInputStream(bundleFile)))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) continue;
+                String name = entry.getName().toLowerCase(Locale.ROOT);
+                if (name.equals("icon.png") || name.endsWith("/icon.png")) {
+                    Bitmap b = BitmapFactory.decodeStream(zis);
+                    if (b != null) return b;
+                } else if (tempBaseApk == null && (name.equals("base.apk") || name.endsWith("/base.apk") || name.endsWith(".apk"))) {
+                    tempBaseApk = File.createTempFile("bundle_icon_", ".apk", context.getCacheDir());
+                    try (FileOutputStream fos = new FileOutputStream(tempBaseApk)) {
+                        byte[] buf = new byte[8192];
+                        int r;
+                        while ((r = zis.read(buf)) != -1) fos.write(buf, 0, r);
+                    }
+                }
+            }
+            if (tempBaseApk != null) {
+                return extractApkArchiveIcon(context, tempBaseApk.getAbsolutePath(), sizePx);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (tempBaseApk != null) {
+                //noinspection ResultOfMethodCallIgnored
+                tempBaseApk.delete();
+            }
         }
         return null;
     }
@@ -225,23 +286,30 @@ public class FileThumbnailLoader {
         return output;
     }
 
+    // סעיף יא: אייקונים ייחודיים מותאמים לקובצי ZIP ולקובצי טקסט!
     public static int resolveFallbackDrawable(String lower) {
-        if (endsWithAny(lower, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic")) return R.drawable.ic_images;
-        if (endsWithAny(lower, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) return R.drawable.ic_audio;
-        if (endsWithAny(lower, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) return R.drawable.ic_video;
-        if (endsWithAny(lower, ".apk", ".xapk", ".apks")) return R.drawable.ic_apps;
-        if (endsWithAny(lower, ".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".rtf", ".md")) {
+        if (MediaFormatHelper.isImageFile(lower)) return R.drawable.ic_images;
+        if (MediaFormatHelper.isAudioFile(lower)) return R.drawable.ic_audio;
+        if (MediaFormatHelper.isVideoFile(lower)) return R.drawable.ic_video;
+        if (MediaFormatHelper.isInstallableAppPackage(lower)) return R.drawable.ic_apps;
+        if (MediaFormatHelper.isZipOrArchiveFile(lower)
+                || endsWithAny(lower, ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz")) {
+            return R.drawable.ic_zip_archive;
+        }
+        if (MediaFormatHelper.isTextFile(lower)) {
+            return R.drawable.ic_text_file;
+        }
+        if (MediaFormatHelper.isDocumentFile(lower)) {
             return R.drawable.ic_documents;
         }
         return R.drawable.ic_file_generic;
     }
 
     private static boolean supportsRealIconExtraction(String lower) {
-        return endsWithAny(lower,
-                ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic",
-                ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg",
-                ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp",
-                ".apk");
+        return MediaFormatHelper.isImageFile(lower)
+                || MediaFormatHelper.isAudioFile(lower)
+                || MediaFormatHelper.isVideoFile(lower)
+                || MediaFormatHelper.isInstallableAppPackage(lower);
     }
 
     private static boolean endsWithAny(String name, String... exts) {

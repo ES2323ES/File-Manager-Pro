@@ -3,9 +3,11 @@ package com.aishhatorah.filemanagerpro;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.ImageDecoder;
 import android.graphics.PointF;
 import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
@@ -20,6 +22,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
+import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -28,6 +32,8 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
@@ -38,16 +44,20 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.AppCompatTextView;
+import androidx.cardview.widget.CardView;
 import androidx.core.content.FileProvider;
 
 import com.google.android.material.button.MaterialButton;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -57,16 +67,21 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.GZIPInputStream;
 
 public class BuiltInViewerActivity extends AppCompatActivity {
 
     public static final String EXTRA_FILE_PATH = "extra_file_path";
+    public static final String EXTRA_FROM_NOTIFICATION = "extra_from_notification";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     private File targetFile;
+    private boolean openedFromNotification = false;
+
     private TextView tvMarqueeTitle;
+    private TextView tvFolderTrackCounter;
     private MaterialButton btnTopRightVideoSettings;
 
     // מצב אודיו (מנוהל ע"י AudioPlayerManager כדי להמשיך ברקע ביציאה מהשיר)
@@ -75,6 +90,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private AudioPlayerManager.PlaybackListener audioListener;
 
     // מצב וידאו מובנה מתקדם
+    private boolean isVideoMode = false;
     private final List<File> videoPlaylist = new ArrayList<>();
     private int currentVideoIdx = 0;
     private MediaPlayer videoPlayer;
@@ -99,6 +115,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        openedFromNotification = getIntent().getBooleanExtra(EXTRA_FROM_NOTIFICATION, false);
         String path = getIntent().getStringExtra(EXTRA_FILE_PATH);
         if (path == null) {
             finish();
@@ -111,6 +128,74 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             return;
         }
 
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                handleViewerCloseOrBack();
+            }
+        });
+
+        buildViewerUiForCurrentFile();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null) {
+            if (intent.getBooleanExtra(EXTRA_FROM_NOTIFICATION, false)) {
+                openedFromNotification = true;
+            }
+            String newPath = intent.getStringExtra(EXTRA_FILE_PATH);
+            if (newPath != null) {
+                File f = new File(newPath);
+                if (f.exists() && (targetFile == null || !f.getAbsolutePath().equals(targetFile.getAbsolutePath()))) {
+                    targetFile = f;
+                    detachAudioCallbacksOnly();
+                    buildViewerUiForCurrentFile();
+                }
+            }
+        }
+    }
+
+    // סעיף ד: בסיבוב המסך האפליקציה מתאימה את עצמה לצורת וגודל המסך בצורה חלקה!
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (isAudioMode) {
+            detachAudioCallbacksOnly();
+            buildViewerUiForCurrentFile();
+        }
+    }
+
+    private void detachAudioCallbacksOnly() {
+        audioTickerActive = false;
+        if (audioListener != null) {
+            AudioPlayerManager.getInstance().removeListener(audioListener);
+            audioListener = null;
+        }
+    }
+
+    // סעיף יח: אם נכנסו דרך ההתראה בבר ההתראות, לחיצה על חזור או סגור מעבירה לתיקייה שממנה השיר מתנגן!
+    private void handleViewerCloseOrBack() {
+        if (openedFromNotification && targetFile != null && targetFile.getParentFile() != null) {
+            openedFromNotification = false;
+            File songFolder = targetFile.getParentFile();
+            Intent browser = new Intent(this, FileBrowserActivity.class);
+            StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
+            boolean onSd = sd.available && sd.root != null
+                    && songFolder.getAbsolutePath().startsWith(sd.root.getAbsolutePath());
+            browser.putExtra(FileBrowserActivity.EXTRA_MODE,
+                    onSd ? FileBrowserActivity.MODE_SD_CARD : FileBrowserActivity.MODE_INTERNAL);
+            browser.putExtra(FileBrowserActivity.EXTRA_INITIAL_DIR, songFolder.getAbsolutePath());
+            browser.putExtra(FileBrowserActivity.EXTRA_TITLE, songFolder.getName());
+            browser.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(browser);
+        }
+        finish();
+    }
+
+    private void buildViewerUiForCurrentFile() {
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
         int bgColor = ThemeHelper.getBgColor(theme);
@@ -120,28 +205,31 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         int accent = ThemeHelper.getAccentColor(theme);
 
         String lower = targetFile.getName().toLowerCase(Locale.ROOT);
-        boolean isVideoFile = endsWithAny(lower, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp");
+        isAudioMode = MediaFormatHelper.isAudioFile(lower);
+        isVideoMode = MediaFormatHelper.isVideoFile(lower);
+
+        boolean isLandscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(bgColor);
 
-        // סרגל עליון (RTL: צד ימין = סגור + מתחתיו הגדרות הוידאו בסרטון, מרכז = כותרת נעה תדיר, צד שמאל = שיתוף)
+        // סרגל עליון
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
-        topBar.setPadding(22, 16, 22, 16);
+        int vPad = isLandscape ? dp(6) : dp(10);
+        topBar.setPadding(dp(12), vPad, dp(12), vPad);
 
-        // עמודה ימנית עליונה: לחצן סגור, ומתחתיו (בוידאו - סעיף יז) הגדרות הוידאו עם סמל גלגל שיניים
         LinearLayout rightActionsCol = new LinearLayout(this);
         rightActionsCol.setOrientation(LinearLayout.VERTICAL);
         rightActionsCol.setGravity(Gravity.CENTER_HORIZONTAL);
 
         Button btnClose = ThemedDialogHelper.createThemedButton(this, "סגור", theme, false, false);
-        btnClose.setPadding(26, 14, 26, 14);
-        btnClose.setOnClickListener(v -> finish());
+        btnClose.setPadding(dp(14), dp(6), dp(14), dp(6));
+        btnClose.setOnClickListener(v -> handleViewerCloseOrBack());
         rightActionsCol.addView(btnClose);
 
         btnTopRightVideoSettings = new MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
@@ -153,25 +241,29 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         btnTopRightVideoSettings.setStrokeColor(ColorStateList.valueOf(accent));
         btnTopRightVideoSettings.setIconResource(R.drawable.ic_settings);
         btnTopRightVideoSettings.setIconTint(ColorStateList.valueOf(accent));
-        btnTopRightVideoSettings.setIconSize(36);
-        btnTopRightVideoSettings.setIconPadding(10);
-        btnTopRightVideoSettings.setCornerRadius(20);
+        btnTopRightVideoSettings.setIconSize(dp(16));
+        btnTopRightVideoSettings.setIconPadding(dp(4));
+        btnTopRightVideoSettings.setCornerRadius(dp(10));
         btnTopRightVideoSettings.setInsetTop(0);
         btnTopRightVideoSettings.setInsetBottom(0);
         btnTopRightVideoSettings.setMinHeight(0);
         btnTopRightVideoSettings.setMinimumHeight(0);
-        btnTopRightVideoSettings.setPadding(18, 10, 18, 10);
+        btnTopRightVideoSettings.setPadding(dp(10), dp(4), dp(10), dp(4));
         LinearLayout.LayoutParams vsLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        vsLp.topMargin = 10;
+        vsLp.topMargin = dp(5);
         btnTopRightVideoSettings.setLayoutParams(vsLp);
-        btnTopRightVideoSettings.setVisibility(isVideoFile ? View.VISIBLE : View.GONE);
+        btnTopRightVideoSettings.setVisibility(isVideoMode ? View.VISIBLE : View.GONE);
         btnTopRightVideoSettings.setOnClickListener(v -> showVideoSettingsDialog(theme));
         rightActionsCol.addView(btnTopRightVideoSettings);
 
         topBar.addView(rightActionsCol);
 
-        // סעיף יא: למעלה באמצע שם השיר / התמונה / הוידאו נע תדיר ללא הפסקה
+        // מרכז הסרגל העליון: שם הקובץ הנע תדיר + מתחתיו באודיו מונה הקבצים בתיקייה (סעיף ה: כגון 1/20)
+        LinearLayout centerTitleCol = new LinearLayout(this);
+        centerTitleCol.setOrientation(LinearLayout.VERTICAL);
+        centerTitleCol.setGravity(Gravity.CENTER);
+
         tvMarqueeTitle = new AppCompatTextView(this) {
             @Override
             public boolean isFocused() {
@@ -179,7 +271,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
         };
         tvMarqueeTitle.setText("   " + targetFile.getName() + "   •   " + targetFile.getName() + "   ");
-        tvMarqueeTitle.setTextSize(15.5f);
+        tvMarqueeTitle.setTextSize(isLandscape ? 14.5f : 15.5f);
         tvMarqueeTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvMarqueeTitle.setTextColor(textPrimary);
         tvMarqueeTitle.setSingleLine(true);
@@ -188,14 +280,28 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         tvMarqueeTitle.setHorizontallyScrolling(true);
         tvMarqueeTitle.setSelected(true);
         tvMarqueeTitle.setGravity(Gravity.CENTER_VERTICAL);
+        centerTitleCol.addView(tvMarqueeTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        titleLp.setMarginStart(18);
-        titleLp.setMarginEnd(18);
-        topBar.addView(tvMarqueeTitle, titleLp);
+        tvFolderTrackCounter = new TextView(this);
+        tvFolderTrackCounter.setTextSize(12f);
+        tvFolderTrackCounter.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tvFolderTrackCounter.setTextColor(textSecondary);
+        tvFolderTrackCounter.setTextDirection(View.TEXT_DIRECTION_LTR);
+        tvFolderTrackCounter.setGravity(Gravity.CENTER);
+        tvFolderTrackCounter.setVisibility(isAudioMode ? View.VISIBLE : View.GONE);
+        LinearLayout.LayoutParams cntLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cntLp.topMargin = dp(2);
+        centerTitleCol.addView(tvFolderTrackCounter, cntLp);
+
+        LinearLayout.LayoutParams titleColLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        titleColLp.setMarginStart(dp(10));
+        titleColLp.setMarginEnd(dp(10));
+        topBar.addView(centerTitleCol, titleColLp);
 
         Button btnShare = ThemedDialogHelper.createThemedButton(this, "שיתוף", theme, true, false);
-        btnShare.setPadding(26, 14, 26, 14);
+        btnShare.setPadding(dp(14), dp(6), dp(14), dp(6));
         btnShare.setOnClickListener(v -> shareCurrentFile());
         topBar.addView(btnShare);
 
@@ -204,24 +310,25 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         LinearLayout contentArea = new LinearLayout(this);
         contentArea.setOrientation(LinearLayout.VERTICAL);
         contentArea.setGravity(Gravity.CENTER);
-        contentArea.setPadding(22, 18, 22, 22);
+        int areaPad = isLandscape ? dp(8) : dp(12);
+        contentArea.setPadding(areaPad, areaPad, areaPad, areaPad);
         root.addView(contentArea, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
 
-        if (endsWithAny(lower, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic")) {
+        // סעיף ט: תמיכה מלאה בכל סוגי האודיו, הוידאו והתמונות בתוך האפליקציה עצמה!
+        if (MediaFormatHelper.isImageFile(lower)) {
             renderImageViewer(contentArea, cardColor, textSecondary, accent, theme);
-        } else if (endsWithAny(lower, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) {
-            isAudioMode = true;
-            renderAudioPlayer(contentArea, cardColor, textPrimary, textSecondary, accent, theme);
-        } else if (isVideoFile) {
+        } else if (isAudioMode) {
+            renderAudioPlayer(contentArea, cardColor, textPrimary, textSecondary, accent, theme, isLandscape);
+        } else if (isVideoMode) {
             renderVideoPlayer(contentArea, cardColor, textPrimary, textSecondary, accent, theme);
         } else if (lower.endsWith(".pdf")) {
             renderPdfViewer(contentArea, cardColor, textSecondary, theme);
-        } else if (endsWithAny(lower, ".zip", ".jar")) {
+        } else if (MediaFormatHelper.isZipOrArchiveFile(lower) || MediaFormatHelper.isInstallableAppPackage(lower)) {
             renderArchiveExtractor(contentArea, cardColor, textPrimary, textSecondary, theme);
-        } else if (endsWithAny(lower, ".docx", ".xlsx", ".pptx")) {
+        } else if (endsWithAny(lower, ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp")) {
             renderOfficeDocumentViewer(contentArea, cardColor, textPrimary, textSecondary);
         } else {
             renderTextDocumentViewer(contentArea, cardColor, textPrimary, textSecondary);
@@ -236,165 +343,281 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     /**
-     * סעיפים יד + טו: מציג תמונות עם הגדלה ביד (ללא כפתור הגדלה/התאמה למסך)
-     * ולמטה לחצן "עורך תמונות מקצועי" עם סמל עיפרון.
+     * סעיף ט: פתיחת כלל פורמטי התמונות בתוך האפליקציה עצמה (כולל JPG, PNG, WEBP, GIF, BMP, HEIC, HEIF, AVIF, SVG, TIFF, ICO, RAW)
+     * עם הגדלה ביד ולחצן עורך תמונות מקצועי.
      */
     private void renderImageViewer(LinearLayout host, int cardColor, int textSecondary, int accent, int theme) {
         LinearLayout card = createSurfaceCard(cardColor);
         card.setGravity(Gravity.CENTER);
 
-        ZoomableImageView zoomImageView = new ZoomableImageView(this);
+        String lower = targetFile.getName().toLowerCase(Locale.ROOT);
+        boolean isSvg = lower.endsWith(".svg") || lower.endsWith(".svgz");
 
-        BitmapFactory.Options opts = new BitmapFactory.Options();
-        opts.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(targetFile.getAbsolutePath(), opts);
-        int sample = 1;
-        while (opts.outWidth / sample > 2048 || opts.outHeight / sample > 2048) {
-            sample *= 2;
+        Bitmap bmp = null;
+        int imgW = 0;
+        int imgH = 0;
+
+        if (!isSvg) {
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(targetFile.getAbsolutePath(), opts);
+            imgW = Math.max(0, opts.outWidth);
+            imgH = Math.max(0, opts.outHeight);
+
+            if (imgW > 0 && imgH > 0) {
+                int sample = 1;
+                while (imgW / sample > 2048 || imgH / sample > 2048) {
+                    sample *= 2;
+                }
+                BitmapFactory.Options loadOpts = new BitmapFactory.Options();
+                loadOpts.inSampleSize = sample;
+                bmp = BitmapFactory.decodeFile(targetFile.getAbsolutePath(), loadOpts);
+            }
+
+            if (bmp == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try {
+                    ImageDecoder.Source src = ImageDecoder.createSource(targetFile);
+                    bmp = ImageDecoder.decodeBitmap(src, (decoder, info, s) -> {
+                        decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                        int w = info.getSize().getWidth();
+                        int h = info.getSize().getHeight();
+                        if (w > 2048 || h > 2048) {
+                            float ratio = Math.min(2048f / w, 2048f / h);
+                            decoder.setTargetSize(Math.max(1, Math.round(w * ratio)), Math.max(1, Math.round(h * ratio)));
+                        }
+                    });
+                    if (bmp != null) {
+                        imgW = bmp.getWidth();
+                        imgH = bmp.getHeight();
+                    }
+                } catch (Exception ignored) {
+                }
+            }
         }
-        BitmapFactory.Options loadOpts = new BitmapFactory.Options();
-        loadOpts.inSampleSize = sample;
-        Bitmap bmp = BitmapFactory.decodeFile(targetFile.getAbsolutePath(), loadOpts);
+
         if (bmp != null) {
+            ZoomableImageView zoomImageView = new ZoomableImageView(this);
             zoomImageView.setImageBitmap(bmp);
-        }
+            card.addView(zoomImageView, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        } else {
+            // גיבוי פנימי מובנה לתמונות וקטוריות (SVG/SVGZ) או פורמטי תמונה מיוחדים — ללא יציאה לאפליקציה חיצונית!
+            WebView imageWebView = new WebView(this);
+            imageWebView.setBackgroundColor(Color.TRANSPARENT);
+            WebSettings ws = imageWebView.getSettings();
+            ws.setSupportZoom(true);
+            ws.setBuiltInZoomControls(true);
+            ws.setDisplayZoomControls(false);
+            ws.setUseWideViewPort(true);
+            ws.setLoadWithOverviewMode(true);
+            ws.setAllowFileAccess(true);
 
-        LinearLayout.LayoutParams imgLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        card.addView(zoomImageView, imgLp);
+            try {
+                byte[] rawBytes = readFileBytesForViewer(targetFile, lower.endsWith(".svgz"));
+                String mime = isSvg ? "image/svg+xml" : "image/*";
+                String b64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP);
+                String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=5'/>"
+                        + "<style>html,body{margin:0;padding:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:transparent;}"
+                        + "img{max-width:98%;max-height:98%;object-fit:contain;}</style></head>"
+                        + "<body><img src='data:" + mime + ";base64," + b64 + "'/></body></html>";
+                imageWebView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+            } catch (Exception ignored) {
+            }
+
+            card.addView(imageWebView, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        }
 
         TextView tvMeta = new TextView(this);
-        tvMeta.setText(String.format(Locale.US, "הגדלה והזזה ביד בשתי אצבעות  •  %dx%d  •  %s",
-                Math.max(0, opts.outWidth), Math.max(0, opts.outHeight), StorageUtils.formatSize(targetFile.length())));
+        String dimPart = (imgW > 0 && imgH > 0) ? (imgW + "x" + imgH + "  •  ") : "";
+        tvMeta.setText("הגדלה והזזה ביד בשתי אצבעות  •  " + dimPart + StorageUtils.formatSize(targetFile.length()));
         tvMeta.setTextColor(textSecondary);
         tvMeta.setTextSize(12f);
         tvMeta.setGravity(Gravity.CENTER);
-        tvMeta.setPadding(0, 14, 0, 14);
+        tvMeta.setPadding(0, dp(8), 0, dp(8));
         card.addView(tvMeta);
 
-        MaterialButton btnProImageEditor = createPencilEditorButton("עורך תמונות מקצועי", accent, theme, v -> {
-            Intent i = new Intent(this, ProImageEditorActivity.class);
-            i.putExtra(ProImageEditorActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
-            startActivity(i);
-        });
-        card.addView(btnProImageEditor, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (bmp != null) {
+            MaterialButton btnProImageEditor = createPencilEditorButton("עורך תמונות מקצועי", accent, theme, v -> {
+                Intent i = new Intent(this, ProImageEditorActivity.class);
+                i.putExtra(ProImageEditorActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
+                startActivity(i);
+            });
+            card.addView(btnProImageEditor, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
 
         host.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    private byte[] readFileBytesForViewer(File file, boolean gunzip) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (InputStream raw = new FileInputStream(file);
+             InputStream in = gunzip ? new GZIPInputStream(raw) : raw) {
+            byte[] buf = new byte[8192];
+            int r;
+            while ((r = in.read(buf)) != -1 && bos.size() < 8 * 1024 * 1024) {
+                bos.write(buf, 0, r);
+            }
+        }
+        return bos.toByteArray();
+    }
+
     /**
-     * סעיפים ח, ט, י, יב, יג, יט, כ, כא: נגן אודיו מתקדם עם:
-     * - אייקון מוטמע של השיר במידה וקיים (ללא הפניה לחותך האודיו)
-     * - לחיצה כפולה בימין (+10) ובשמאל (-10) עם חיווי מסודר
-     * - תצוגת זמן בצד שמאל: הכי שמאלי הזמן שעבר ולידו הזמן הכולל של השיר
-     * - סמלי ניגון למטה: השהה/נגן במרכז, ימינה ממנו שיר הבא, שמאלה ממנו שיר קודם, ו-10 שניות קדימה/אחורה
-     * - באמצע למטה: בחירת מהירות השיר + סמל מצב חזרה (ללא / שיר נוכחי / כל התיקייה)
+     * סעיפים א, ב, ג, ד, ה, יט:
+     * - א: פס ההתקדמות משמאל לימין (LAYOUT_DIRECTION_LTR)
+     * - ב: לחצן החזרה השמאלי למטה מחליף מצב חזרה בלחיצה ישירה על הלחצן עצמו ללא פתיחת תפריט
+     * - ג: בלחצן המהירות הרצויה של השיר באמצע למטה לא שונה דבר!
+     * - ד: אייקונים מוקטנים ומתאימים לגודל המסך + התאמה מלאה בסיבוב המסך (אופקי/אנכי)
+     * - ה: מונה קבצים בתיקייה למעלה באמצע מתחת לשם השיר (1/20 וכו')
+     * - יט: תמונת/אייקון השיר ממלאת את כל השטח של מסגרת העטיפה
      */
-    private void renderAudioPlayer(LinearLayout host, int cardColor, int textPrimary, int textSecondary, int accent, int theme) {
+    private void renderAudioPlayer(
+            LinearLayout host,
+            int cardColor,
+            int textPrimary,
+            int textSecondary,
+            int accent,
+            int theme,
+            boolean isLandscape
+    ) {
         AudioPlayerManager mgr = AudioPlayerManager.getInstance();
         mgr.playOrAttachFile(this, targetFile);
 
-        LinearLayout card = createSurfaceCard(cardColor);
-        card.setOrientation(LinearLayout.VERTICAL);
+        // סעיף ד: חישוב גדלי אייקונים מוקטנים ומידתיים בהתאם לגודל המסך
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float smallestDp = Math.min(dm.widthPixels, dm.heightPixels) / dm.density;
+        float scale = Math.max(0.84f, Math.min(1.06f, smallestDp / 380f));
 
-        // אזור מרכזי עליון ללחיצה כפולה (+10 בימין / -10 בשמאל) + עטיפת השיר
+        int primaryBtnPx = dp(Math.round(52 * scale));
+        int skipBtnPx = dp(Math.round(42 * scale));
+        int seek10BtnPx = dp(Math.round(40 * scale));
+        int repeatBtnPx = dp(Math.round(38 * scale));
+        int btnMarginPx = dp(Math.round(6 * scale));
+
+        LinearLayout card = createSurfaceCard(cardColor);
+        if (isLandscape) {
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+            card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        } else {
+            card.setOrientation(LinearLayout.VERTICAL);
+        }
+
+        // סעיף יט: אזור עטיפת השיר על כל השטח של מסגרת התצוגה + לחיצה כפולה (+10 / -10)
         FrameLayout stageFrame = new FrameLayout(this);
 
-        LinearLayout artCenter = new LinearLayout(this);
-        artCenter.setOrientation(LinearLayout.VERTICAL);
-        artCenter.setGravity(Gravity.CENTER);
+        CardView artCard = new CardView(this);
+        artCard.setRadius(dp(20));
+        artCard.setCardElevation(0f);
+        int stageBg = theme == PrefsManager.THEME_LIGHT
+                ? Color.parseColor("#EFF6FF")
+                : (theme == PrefsManager.THEME_NEON ? Color.parseColor("#061024") : Color.parseColor("#0B1325"));
+        artCard.setCardBackgroundColor(stageBg);
 
         final ImageView ivArt = new ImageView(this);
-        ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        LinearLayout.LayoutParams artLp = new LinearLayout.LayoutParams(340, 340);
-        artLp.bottomMargin = 24;
-        artCenter.addView(ivArt, artLp);
+        ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        artCard.addView(ivArt, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        final TextView tvTrackSubtitle = new TextView(this);
-        tvTrackSubtitle.setTextColor(textSecondary);
-        tvTrackSubtitle.setTextSize(12.5f);
-        tvTrackSubtitle.setGravity(Gravity.CENTER);
-        tvTrackSubtitle.setText("לחיצה כפולה בימין +10 ש׳ • בשמאל -10 ש׳");
-        artCenter.addView(tvTrackSubtitle);
-
-        stageFrame.addView(artCenter, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+        stageFrame.addView(artCard, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         final TextView tvDoubleTapBadge = createSeekOverlayBadge();
         stageFrame.addView(tvDoubleTapBadge);
 
-        attachDoubleTapSeekGesture(stageFrame, tvDoubleTapBadge, deltaSec -> mgr.seekBy(deltaSec * 1000));
+        attachDoubleTapSeekGesture(artCard, tvDoubleTapBadge, deltaSec -> mgr.seekBy(deltaSec * 1000));
 
-        card.addView(stageFrame, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        // עמודת הבקרים (במצב אנכי מתחת לעטיפה, במצב אופקי לצד העטיפה להתאמה מושלמת בסיבוב מסך)
+        LinearLayout controlsColumn = new LinearLayout(this);
+        controlsColumn.setOrientation(LinearLayout.VERTICAL);
+        controlsColumn.setGravity(Gravity.CENTER_VERTICAL);
 
-        // סעיף כ: הזמן של השיר בצד שמאל — בצד הכי שמאלי מופיע כמה עבר מהשיר ולידו מופיע הזמן הכולל של השיר
+        if (isLandscape) {
+            LinearLayout.LayoutParams stageLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.44f);
+            stageLp.rightMargin = dp(14);
+            card.addView(stageFrame, stageLp);
+
+            LinearLayout.LayoutParams ctrlLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.56f);
+            card.addView(controlsColumn, ctrlLp);
+        } else {
+            LinearLayout.LayoutParams stageLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+            stageLp.bottomMargin = dp(8);
+            card.addView(stageFrame, stageLp);
+
+            card.addView(controlsColumn, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+
+        // תצוגת הזמן משמאל
         LinearLayout timeRowLtr = new LinearLayout(this);
         timeRowLtr.setOrientation(LinearLayout.HORIZONTAL);
         timeRowLtr.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         timeRowLtr.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        timeRowLtr.setPadding(6, 12, 6, 8);
+        timeRowLtr.setPadding(dp(4), dp(4), dp(4), dp(2));
 
         final TextView tvElapsedLeftmost = new TextView(this);
         tvElapsedLeftmost.setText("00:00");
         tvElapsedLeftmost.setTextColor(accent);
-        tvElapsedLeftmost.setTextSize(14.5f);
+        tvElapsedLeftmost.setTextSize(14f);
         tvElapsedLeftmost.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         timeRowLtr.addView(tvElapsedLeftmost);
 
         final TextView tvTotalNextToIt = new TextView(this);
         tvTotalNextToIt.setText("  /  00:00");
         tvTotalNextToIt.setTextColor(textSecondary);
-        tvTotalNextToIt.setTextSize(14f);
+        tvTotalNextToIt.setTextSize(13.5f);
         tvTotalNextToIt.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         timeRowLtr.addView(tvTotalNextToIt);
 
-        card.addView(timeRowLtr, new LinearLayout.LayoutParams(
+        controlsColumn.addView(timeRowLtr, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // סעיף א: פס ההתקדמות במסך האודיו משמאל לימין!
         final SeekBar seekBar = new SeekBar(this);
-        card.addView(seekBar, new LinearLayout.LayoutParams(
+        seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        controlsColumn.addView(seekBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // סעיפים ט + יט: סמלי ניגון למטה ב-LTR מפורש:
-        // משמאל לימין: [10- אחורה] [שיר קודם (משמאל להשהה)] [השהה/נגן] [שיר הבא (מימין להשהה)] [+10 קדימה]
+        // סעיף ד: סמלי ניגון מוקטנים ומתאימים לגודל המסך
         LinearLayout transportRow = new LinearLayout(this);
         transportRow.setOrientation(LinearLayout.HORIZONTAL);
         transportRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         transportRow.setGravity(Gravity.CENTER);
-        transportRow.setPadding(0, 22, 0, 14);
+        transportRow.setPadding(0, dp(isLandscape ? 6 : 12), 0, dp(isLandscape ? 6 : 10));
 
-        ImageButton btnBack10 = createRoundIconButton(R.drawable.ic_replay_10, 112, false, accent, theme);
-        ImageButton btnPrevSong = createRoundIconButton(R.drawable.ic_skip_prev, 116, false, accent, theme);
-        final ImageButton btnPlayPause = createRoundIconButton(R.drawable.ic_pause, 142, true, accent, theme);
-        ImageButton btnNextSong = createRoundIconButton(R.drawable.ic_skip_next, 116, false, accent, theme);
-        ImageButton btnFwd10 = createRoundIconButton(R.drawable.ic_forward_10, 112, false, accent, theme);
+        ImageButton btnBack10 = createResponsiveRoundIconButton(R.drawable.ic_replay_10, seek10BtnPx, btnMarginPx, false, accent, theme);
+        ImageButton btnPrevSong = createResponsiveRoundIconButton(R.drawable.ic_skip_prev, skipBtnPx, btnMarginPx, false, accent, theme);
+        final ImageButton btnPlayPause = createResponsiveRoundIconButton(R.drawable.ic_pause, primaryBtnPx, btnMarginPx, true, accent, theme);
+        ImageButton btnNextSong = createResponsiveRoundIconButton(R.drawable.ic_skip_next, skipBtnPx, btnMarginPx, false, accent, theme);
+        ImageButton btnFwd10 = createResponsiveRoundIconButton(R.drawable.ic_forward_10, seek10BtnPx, btnMarginPx, false, accent, theme);
 
         transportRow.addView(btnBack10);
         transportRow.addView(btnPrevSong);
         transportRow.addView(btnPlayPause);
         transportRow.addView(btnNextSong);
         transportRow.addView(btnFwd10);
-        card.addView(transportRow, new LinearLayout.LayoutParams(
+        controlsColumn.addView(transportRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // סעיפים ט + י: שורה תחתונה שבה באמצע למטה בדיוק אופציית בחירת מהירות השיר, ובצד סמל מצב החזרה
+        // שורה תחתונה: משמאל לחצן החזרה (לחיצה ישירה - סעיף ב), באמצע לחצן המהירות ללא שום שינוי (סעיף ג)!
         FrameLayout bottomCenterBar = new FrameLayout(this);
         bottomCenterBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        bottomCenterBar.setPadding(4, 8, 4, 4);
+        bottomCenterBar.setPadding(dp(2), dp(2), dp(2), dp(2));
 
-        final ImageButton btnRepeatMode = createRoundIconButton(R.drawable.ic_repeat_off, 104, false, accent, theme);
-        FrameLayout.LayoutParams repLp = new FrameLayout.LayoutParams(104, 104, Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        final ImageButton btnRepeatMode = createResponsiveRoundIconButton(R.drawable.ic_repeat_off, repeatBtnPx, 0, false, accent, theme);
+        FrameLayout.LayoutParams repLp = new FrameLayout.LayoutParams(repeatBtnPx, repeatBtnPx, Gravity.LEFT | Gravity.CENTER_VERTICAL);
         bottomCenterBar.addView(btnRepeatMode, repLp);
 
+        // סעיף ג: בלחצן המהירות הרצויה של השיר לא משנים כלום!
         final MaterialButton btnSpeedCenter = createSpeedPillButton(mgr.getPlaybackSpeed(), accent, theme);
         FrameLayout.LayoutParams spdLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         bottomCenterBar.addView(btnSpeedCenter, spdLp);
 
-        card.addView(bottomCenterBar, new LinearLayout.LayoutParams(
+        controlsColumn.addView(bottomCenterBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         host.addView(card, new LinearLayout.LayoutParams(
@@ -412,12 +635,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             btnSpeedCenter.setText(String.format(Locale.US, "מהירות %.2gx", chosen).replace(".00", ".0"));
         }));
 
-        btnRepeatMode.setOnClickListener(v -> showRepeatPickerDialog(
-                "מצב חזרה באודיו",
-                mgr.getRepeatMode(),
-                true,
-                chosenMode -> mgr.setRepeatMode(chosenMode)
-        ));
+        // סעיף ב: הקשה ישירה על הלחצן השמאלי למטה מחליפה בין מצבי החזרה ללא פתיחת תפריט!
+        btnRepeatMode.setOnClickListener(v -> {
+            int nextMode = mgr.cycleRepeatMode();
+            btnRepeatMode.setImageResource(resolveRepeatIcon(nextMode));
+            String toastText = nextMode == AudioPlayerManager.REPEAT_ONE
+                    ? "חזרה על השיר עצמו"
+                    : (nextMode == AudioPlayerManager.REPEAT_FOLDER ? "חזרה על כל התיקייה" : "ללא חזרה");
+            Toast.makeText(this, toastText, Toast.LENGTH_SHORT).show();
+        });
 
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -434,12 +660,25 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 targetFile = active;
                 updateMarqueeHeaderName(active.getName());
             }
+            // סעיף ה: הצגת מונה הקבצים בתיקייה מתחת לשם הקובץ למעלה באמצע (למשל 1/20)
+            if (tvFolderTrackCounter != null) {
+                tvFolderTrackCounter.setVisibility(View.VISIBLE);
+                tvFolderTrackCounter.setText(mgr.getCurrentTrackNumber() + "/" + mgr.getFolderTrackCount());
+            }
+
+            // סעיף יט: עטיפת השיר על כל השטח של המסגרת במידה וקיימת
             Bitmap art = mgr.getCurrentArtwork();
             if (art != null && !art.isRecycled()) {
+                ivArt.setPadding(0, 0, 0, 0);
+                ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 ivArt.setImageBitmap(art);
             } else {
+                int fallbackPad = dp(isLandscape ? 28 : 44);
+                ivArt.setPadding(fallbackPad, fallbackPad, fallbackPad, fallbackPad);
+                ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 ivArt.setImageResource(R.drawable.ic_audio);
             }
+
             btnPlayPause.setImageResource(mgr.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
             btnSpeedCenter.setText(formatSpeedLabel(mgr.getPlaybackSpeed()));
             btnRepeatMode.setImageResource(resolveRepeatIcon(mgr.getRepeatMode()));
@@ -465,15 +704,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         });
     }
 
-    /**
-     * סעיפים טו, טז, יז, יח, כא: נגן וידאו מתקדם עם:
-     * - הגדלה והקטנה ביד (Pinch-to-Zoom) + הזזה ביד
-     * - סיבוב מסך אופקי/אנכי
-     * - לחיצה כפולה בימין (+10) ובשמאל (-10) עם חיווי מסודר
-     * - הגדרות הוידאו למעלה מימין מתחת ל"סגור"
-     * - סמלי 10 שניות קדימה ואחורה למטה ביחד עם מהירות הסרטון, מצב חזרה והעברה לסרטון הבא/הקודם בתיקייה
-     * - למטה לחצן "עורך וידאו מקצועי" עם סמל עיפרון (ללא הפניה לחותך הוידאו וללא "נגן / השהה" הישן)
-     */
     private void renderVideoPlayer(LinearLayout host, int cardColor, int textPrimary, int textSecondary, int accent, int theme) {
         buildVideoFolderPlaylist(targetFile);
 
@@ -496,12 +726,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         card.addView(videoViewport, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // שורת זמן + פס התקדמות
         LinearLayout timeBar = new LinearLayout(this);
         timeBar.setOrientation(LinearLayout.HORIZONTAL);
         timeBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         timeBar.setGravity(Gravity.CENTER_VERTICAL);
-        timeBar.setPadding(4, 12, 4, 4);
+        timeBar.setPadding(dp(2), dp(6), dp(2), dp(2));
 
         final TextView tvVidPos = new TextView(this);
         tvVidPos.setText("00:00");
@@ -511,6 +740,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         timeBar.addView(tvVidPos);
 
         final SeekBar videoSeek = new SeekBar(this);
+        videoSeek.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         timeBar.addView(videoSeek, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         final TextView tvVidDur = new TextView(this);
@@ -523,20 +753,24 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         card.addView(timeBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // סעיפים טו, טז, יח: סמלי ניגון, 10 שניות קדימה/אחורה, העברה לסרטון הבא/קודם, חזרה בצד, מהירות הסרטון וסיבוב מסך
         LinearLayout controlsRow = new LinearLayout(this);
         controlsRow.setOrientation(LinearLayout.HORIZONTAL);
         controlsRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         controlsRow.setGravity(Gravity.CENTER);
-        controlsRow.setPadding(0, 10, 0, 10);
+        controlsRow.setPadding(0, dp(6), 0, dp(6));
 
-        final ImageButton btnVidRepeat = createRoundIconButton(R.drawable.ic_repeat_off, 96, false, accent, theme);
-        ImageButton btnVidPrev = createRoundIconButton(R.drawable.ic_skip_prev, 98, false, accent, theme);
-        ImageButton btnVidBack10 = createRoundIconButton(R.drawable.ic_replay_10, 104, false, accent, theme);
-        final ImageButton btnVidPlayPause = createRoundIconButton(R.drawable.ic_pause, 124, true, accent, theme);
-        ImageButton btnVidFwd10 = createRoundIconButton(R.drawable.ic_forward_10, 104, false, accent, theme);
-        ImageButton btnVidNext = createRoundIconButton(R.drawable.ic_skip_next, 98, false, accent, theme);
-        ImageButton btnVidRotate = createRoundIconButton(R.drawable.ic_screen_rotate, 96, false, accent, theme);
+        int vSmall = dp(36);
+        int vMed = dp(38);
+        int vBig = dp(46);
+        int vGap = dp(4);
+
+        final ImageButton btnVidRepeat = createResponsiveRoundIconButton(R.drawable.ic_repeat_off, vSmall, vGap, false, accent, theme);
+        ImageButton btnVidPrev = createResponsiveRoundIconButton(R.drawable.ic_skip_prev, vMed, vGap, false, accent, theme);
+        ImageButton btnVidBack10 = createResponsiveRoundIconButton(R.drawable.ic_replay_10, vMed, vGap, false, accent, theme);
+        final ImageButton btnVidPlayPause = createResponsiveRoundIconButton(R.drawable.ic_pause, vBig, vGap, true, accent, theme);
+        ImageButton btnVidFwd10 = createResponsiveRoundIconButton(R.drawable.ic_forward_10, vMed, vGap, false, accent, theme);
+        ImageButton btnVidNext = createResponsiveRoundIconButton(R.drawable.ic_skip_next, vMed, vGap, false, accent, theme);
+        ImageButton btnVidRotate = createResponsiveRoundIconButton(R.drawable.ic_screen_rotate, vSmall, vGap, false, accent, theme);
 
         controlsRow.addView(btnVidRepeat);
         controlsRow.addView(btnVidPrev);
@@ -548,12 +782,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         card.addView(controlsRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // שורת מהירות הסרטון + עורך וידאו מקצועי עם סמל עיפרון למטה
         LinearLayout bottomRow = new LinearLayout(this);
         bottomRow.setOrientation(LinearLayout.HORIZONTAL);
         bottomRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bottomRow.setGravity(Gravity.CENTER_VERTICAL);
-        bottomRow.setPadding(0, 6, 0, 0);
+        bottomRow.setPadding(0, dp(4), 0, 0);
 
         MaterialButton btnProVideoEditor = createPencilEditorButton("עורך וידאו מקצועי", accent, theme, v -> {
             pauseVideoSafely();
@@ -562,7 +795,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             startActivity(i);
         });
         LinearLayout.LayoutParams edLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        edLp.setMarginEnd(12);
+        edLp.setMarginEnd(dp(8));
         btnProVideoEditor.setLayoutParams(edLp);
         bottomRow.addView(btnProVideoEditor);
 
@@ -575,7 +808,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         host.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // לוגיקת נגן הוידאו
         final Runnable syncVidButtons = () -> {
             boolean playing = isVideoPlayingSafely();
             btnVidPlayPause.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
@@ -682,8 +914,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             File[] siblings = parent.listFiles();
             if (siblings != null) {
                 for (File f : siblings) {
-                    if (f.isFile() && endsWithAny(f.getName().toLowerCase(Locale.ROOT),
-                            ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) {
+                    if (f.isFile() && MediaFormatHelper.isVideoFile(f.getName())) {
                         videoPlaylist.add(f);
                     }
                 }
@@ -826,10 +1057,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         isLandscapeLocked = !isLandscapeLocked;
         setRequestedOrientation(isLandscapeLocked
                 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
     }
 
-    // סעיף יז: תפריט הגדרות הוידאו הנפתח מהכפתור העליון מימין מתחת לסגור
     private void showVideoSettingsDialog(int theme) {
         String muteStatus = videoMuted ? "מושתק (לחץ להפעלת קול)" : "פעיל (לחץ להשתקה)";
         String autoNextStatus = videoAutoNext ? "פעיל" : "כבוי";
@@ -952,19 +1182,18 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         target.setOnTouchListener((v, ev) -> detector.onTouchEvent(ev));
     }
 
-    // סעיף כא: חיווי מסודר של +10 בימין או -10 בשמאל בלחיצה כפולה
     private TextView createSeekOverlayBadge() {
         TextView badge = new TextView(this);
         badge.setTextColor(Color.WHITE);
-        badge.setTextSize(18f);
+        badge.setTextSize(17f);
         badge.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         badge.setTextDirection(View.TEXT_DIRECTION_LTR);
         badge.setGravity(Gravity.CENTER);
-        badge.setPadding(38, 22, 38, 22);
+        badge.setPadding(dp(18), dp(10), dp(18), dp(10));
         GradientDrawable pill = new GradientDrawable();
         pill.setCornerRadius(999f);
         pill.setColor(Color.argb(215, 29, 78, 216));
-        pill.setStroke(3, Color.WHITE);
+        pill.setStroke(dp(1.5f), Color.WHITE);
         badge.setBackground(pill);
         badge.setVisibility(View.GONE);
         return badge;
@@ -976,8 +1205,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 (forwardRight ? Gravity.RIGHT : Gravity.LEFT) | Gravity.CENTER_VERTICAL
         );
-        lp.leftMargin = 44;
-        lp.rightMargin = 44;
+        lp.leftMargin = dp(20);
+        lp.rightMargin = dp(20);
         badge.setLayoutParams(lp);
         badge.setText(forwardRight ? "\u200E+10" : "\u200E-10");
         badge.animate().cancel();
@@ -998,11 +1227,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 .start();
     }
 
-    private ImageButton createRoundIconButton(int drawableRes, int sizePx, boolean primaryFilled, int accent, int theme) {
+    private ImageButton createResponsiveRoundIconButton(int drawableRes, int sizePx, int marginPx, boolean primaryFilled, int accent, int theme) {
         ImageButton btn = new ImageButton(this);
         btn.setImageResource(drawableRes);
         btn.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        int pad = primaryFilled ? 30 : 24;
+        int pad = Math.max(dp(7), Math.round(sizePx * (primaryFilled ? 0.24f : 0.23f)));
         btn.setPadding(pad, pad, pad, pad);
 
         GradientDrawable circle = new GradientDrawable();
@@ -1014,17 +1243,18 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         } else {
             circle.setColor(Color.argb(theme == PrefsManager.THEME_LIGHT ? 26 : 44,
                     Color.red(accent), Color.green(accent), Color.blue(accent)));
-            circle.setStroke(2, accent);
+            circle.setStroke(Math.max(2, dp(1.2f)), accent);
             btn.setColorFilter(accent);
         }
         btn.setBackground(circle);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sizePx, sizePx);
-        lp.setMargins(10, 0, 10, 0);
+        lp.setMargins(marginPx, 0, marginPx, 0);
         btn.setLayoutParams(lp);
         return btn;
     }
 
+    // סעיף ג: בלחצן המהירות הרצויה של השיר לא משנים כלום!
     private MaterialButton createSpeedPillButton(float speed, int accent, int theme) {
         MaterialButton btn = new MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
         btn.setText(formatSpeedLabel(speed));
@@ -1057,7 +1287,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         btn.setIconGravity(MaterialButton.ICON_GRAVITY_TEXT_START);
         btn.setIconPadding(16);
         btn.setCornerRadius(24);
-        btn.setPadding(28, 22, 28, 22);
+        btn.setPadding(28, 20, 28, 20);
         btn.setOnClickListener(onClick);
         return btn;
     }
@@ -1145,7 +1375,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         TextView tvPageIndicator = new TextView(this);
         tvPageIndicator.setTextColor(textSecondary);
         tvPageIndicator.setGravity(Gravity.CENTER);
-        tvPageIndicator.setPadding(0, 14, 0, 14);
+        tvPageIndicator.setPadding(0, dp(8), 0, dp(8));
         card.addView(tvPageIndicator);
 
         LinearLayout nav = new LinearLayout(this);
@@ -1154,7 +1384,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         Button btnPrev = ThemedDialogHelper.createThemedButton(this, "עמוד קודם", theme, false, false);
         Button btnNext = ThemedDialogHelper.createThemedButton(this, "עמוד הבא", theme, true, false);
         LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lp1.setMarginEnd(12);
+        lp1.setMarginEnd(dp(8));
         btnPrev.setLayoutParams(lp1);
         btnNext.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         nav.addView(btnPrev);
@@ -1207,7 +1437,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         LinearLayout card = createSurfaceCard(cardColor);
 
         TextView tvHeader = new TextView(this);
-        tvHeader.setText("תוכן ארכיון ZIP וחילוץ מובנה");
+        tvHeader.setText("תוכן ארכיון וחילוץ מובנה");
         tvHeader.setTextColor(textPrimary);
         tvHeader.setTextSize(16f);
         tvHeader.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1217,7 +1447,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         tvSub.setText("סורק רשימת קבצים בתוך הארכיון...");
         tvSub.setTextColor(textSecondary);
         tvSub.setTextSize(12.5f);
-        tvSub.setPadding(0, 6, 0, 16);
+        tvSub.setPadding(0, dp(4), 0, dp(10));
         card.addView(tvSub);
 
         ScrollView scroll = new ScrollView(this);
@@ -1232,13 +1462,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         Button btnExtract = ThemedDialogHelper.createThemedButton(this, "חלץ את כל הקבצים לתיקייה כאן", theme, true, false);
         LinearLayout.LayoutParams exLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        exLp.topMargin = 18;
+        exLp.topMargin = dp(12);
         btnExtract.setLayoutParams(exLp);
         btnExtract.setOnClickListener(v -> {
             btnExtract.setEnabled(false);
             executor.execute(() -> {
                 try {
-                    String baseName = targetFile.getName().replaceAll("(?i)\\.(zip|jar)$", "");
+                    String baseName = targetFile.getName().replaceAll("(?i)\\.(zip|jar|cbz|apk|apks|apkm|xapk)$", "");
                     File outDir = StorageUtils.uniqueDestinationFile(
                             targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir(),
                             baseName + "_מחולץ"
@@ -1293,7 +1523,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         tvSub.setText("קורא מסמכים מובנה • " + StorageUtils.formatSize(targetFile.length()));
         tvSub.setTextColor(textSecondary);
         tvSub.setTextSize(12f);
-        tvSub.setPadding(0, 0, 0, 14);
+        tvSub.setPadding(0, 0, 0, dp(10));
         card.addView(tvSub);
 
         ScrollView scroll = new ScrollView(this);
@@ -1320,10 +1550,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         LinearLayout card = createSurfaceCard(cardColor);
 
         TextView tvSub = new TextView(this);
-        tvSub.setText("מציג מסמכים מובנה • " + StorageUtils.formatSize(targetFile.length()));
+        tvSub.setText("מציג מסמכים וטקסט מובנה • " + StorageUtils.formatSize(targetFile.length()));
         tvSub.setTextColor(textSecondary);
         tvSub.setTextSize(12f);
-        tvSub.setPadding(0, 0, 0, 14);
+        tvSub.setPadding(0, 0, 0, dp(10));
         card.addView(tvSub);
 
         ScrollView scroll = new ScrollView(this);
@@ -1361,9 +1591,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private LinearLayout createSurfaceCard(int cardColor) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(26, 24, 26, 24);
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(28f);
+        shape.setCornerRadius(dp(18));
         shape.setColor(cardColor);
         card.setBackground(shape);
         return card;
@@ -1394,15 +1624,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         return false;
     }
 
+    private int dp(float dpVal) {
+        return Math.round(dpVal * getResources().getDisplayMetrics().density);
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // סעיף יב: ביציאה מהאודיו איננו עוצרים את AudioPlayerManager — השיר ממשיך לנגן ברקע עם השורה התחתונה!
-        audioTickerActive = false;
-        if (audioListener != null) {
-            AudioPlayerManager.getInstance().removeListener(audioListener);
-            audioListener = null;
-        }
+        detachAudioCallbacksOnly();
         videoTickerActive = false;
         releaseVideoPlayer();
 

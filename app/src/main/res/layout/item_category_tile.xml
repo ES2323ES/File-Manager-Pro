@@ -38,12 +38,14 @@
 
         <TextView
             android:id="@+id/tvTileSubtitle"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:ellipsize="end"
+            android:ellipsize="marquee"
             android:gravity="center"
-            android:maxLines="1"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true"
+            android:singleLine="true"
             android:textSize="11sp" />
     </LinearLayout>
 </androidx.cardview.widget.CardView>

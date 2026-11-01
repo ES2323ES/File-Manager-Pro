@@ -102,6 +102,15 @@ public class AudioPlayerManager {
         return repeatMode;
     }
 
+    public int getCurrentTrackNumber() {
+        if (playlist.isEmpty() || currentIndex < 0) return 1;
+        return Math.min(playlist.size(), currentIndex + 1);
+    }
+
+    public int getFolderTrackCount() {
+        return Math.max(1, playlist.size());
+    }
+
     public int getDurationMs() {
         try {
             return (mediaPlayer != null && prepared) ? Math.max(1, mediaPlayer.getDuration()) : 0;
@@ -170,8 +179,7 @@ public class AudioPlayerManager {
     private void loadAndStartTrack(Context appCtx, File file) {
         releaseMediaPlayerOnly();
         currentFile = file;
-        Bitmap rawArt = FileThumbnailLoader.extractAudioEmbeddedArt(file, 320);
-        currentArtwork = rawArt != null ? FileThumbnailLoader.createRoundedSquareBitmap(rawArt, 320, 42f) : null;
+        currentArtwork = FileThumbnailLoader.extractAudioEmbeddedArt(file, 720);
 
         try {
             mediaPlayer = new MediaPlayer();
@@ -361,12 +369,6 @@ public class AudioPlayerManager {
     }
 
     public static boolean isAudioFileName(String name) {
-        String lower = name.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".mp3")
-                || lower.endsWith(".m4a")
-                || lower.endsWith(".wav")
-                || lower.endsWith(".aac")
-                || lower.endsWith(".flac")
-                || lower.endsWith(".ogg");
+        return MediaFormatHelper.isAudioFile(name);
     }
 }

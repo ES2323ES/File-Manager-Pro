@@ -13,11 +13,19 @@ import androidx.core.app.NotificationCompat;
 
 public class UpdateInstallReceiver extends BroadcastReceiver {
 
+    public static final String ACTION_SELF_UPDATE_COMMIT = "com.aishhatorah.filemanagerpro.ACTION_SELF_UPDATE_COMMIT";
+    public static final String ACTION_EXTERNAL_APP_INSTALL = "com.aishhatorah.filemanagerpro.ACTION_EXTERNAL_APP_INSTALL";
+    public static final String EXTRA_APP_LABEL = "extra_app_label";
+
     private static final String UPDATE_CHANNEL_ID = "fmp_update_completed_channel";
 
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
+        String action = intent.getAction();
+        boolean isExternalApp = ACTION_EXTERNAL_APP_INSTALL.equals(action);
+        String appLabel = intent.getStringExtra(EXTRA_APP_LABEL);
+
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
 
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
@@ -27,12 +35,18 @@ public class UpdateInstallReceiver extends BroadcastReceiver {
                 context.startActivity(confirmIntent);
             }
         } else if (status == PackageInstaller.STATUS_SUCCESS) {
-            PrefsManager.setPendingUpdateSuccessBanner(context, true);
-            postSuccessNotification(context);
-            Toast.makeText(context, "File Manager Pro עודכן בהצלחה!", Toast.LENGTH_LONG).show();
+            if (isExternalApp) {
+                String labelMsg = (appLabel != null && !appLabel.isEmpty()) ? (" (" + appLabel + ")") : "";
+                Toast.makeText(context, "האפליקציה הותקנה בהצלחה" + labelMsg, Toast.LENGTH_LONG).show();
+            } else {
+                PrefsManager.setPendingUpdateSuccessBanner(context, true);
+                postSuccessNotification(context);
+                Toast.makeText(context, "File Manager Pro עודכן בהצלחה!", Toast.LENGTH_LONG).show();
+            }
         } else {
             String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-            Toast.makeText(context, "התקנת העדכון נכשלה" + (msg != null ? ": " + msg : ""), Toast.LENGTH_LONG).show();
+            String prefix = isExternalApp ? "התקנת האפליקציה נכשלה" : "התקנת העדכון נכשלה";
+            Toast.makeText(context, prefix + (msg != null ? ": " + msg : ""), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -57,9 +71,11 @@ public class UpdateInstallReceiver extends BroadcastReceiver {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
             );
 
-            String text = "העדכון לגירסה " + BuildConfig.VERSION_NAME + " הושלם בהצלחה. כל ההגדרות והקבצים נשמרו במלואם.";
+            String verDisplay = BuildConfig.VERSION_NAME
+                    + (UpdateChecker.compareSemver(BuildConfig.VERSION_NAME, "0.2.5") >= 0 ? " רשמית" : "");
+            String text = "העדכון לגירסה " + verDisplay + " הושלם בהצלחה. כל ההגדרות והקבצים נשמרו במלואם.";
             NotificationCompat.Builder builder = new NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_info)
+                    .setSmallIcon(R.drawable.ic_app_logo)
                     .setContentTitle("File Manager Pro עודכן בהצלחה")
                     .setContentText(text)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(text))

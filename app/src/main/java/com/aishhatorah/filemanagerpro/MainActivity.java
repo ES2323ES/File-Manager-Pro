@@ -148,7 +148,7 @@ public class MainActivity extends AppCompatActivity {
             ThemedDialogHelper.showCustomDialog(
                     this,
                     "File Manager Pro עודכן בהצלחה",
-                    "האפליקציה שודרגה בהצלחה לגירסה " + BuildConfig.VERSION_NAME + ".\n\n"
+                    "האפליקציה שודרגה בהצלחה לגירסה " + UpdateChecker.formatOfficialVer(BuildConfig.VERSION_NAME) + ".\n\n"
                             + "כלל הקבצים, ההרשאות וההגדרות האישיות שלך נשמרו במלואם וכעת כל היכולות החדשות זמינות לשימושך.",
                     null,
                     "הבנתי",
@@ -190,6 +190,10 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnOpenAnalyzerFromAlert = findViewById(R.id.btnOpenAnalyzerFromAlert);
 
+        // סעיף יג: שם האפליקציה למעלה בשורה שזזה תדיר כמו באודיו ובוידאו
+        tvAppTitle.setText("   File Manager Pro   •   File Manager Pro   ");
+        tvAppTitle.setSelected(true);
+
         // למעלה משמאל: אודות
         btnAbout.setOnClickListener(v -> AboutDialogHelper.show(this));
 
@@ -222,6 +226,7 @@ public class MainActivity extends AppCompatActivity {
         rootContainer.setBackgroundColor(bg);
         topBar.setBackgroundColor(topBg);
         tvAppTitle.setTextColor(textPrimary);
+        tvAppTitle.setSelected(true);
         tvPullHint.setTextColor(textSecondary);
 
         ColorStateList accentState = ColorStateList.valueOf(accent);
@@ -254,10 +259,14 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 cachedSizes = fresh;
                 for (Map.Entry<String, TextView> entry : subtitleViewsById.entrySet()) {
-                    String sub = getCategorySubtitle(entry.getKey());
+                    String catId = entry.getKey();
+                    String sub = getCategorySubtitle(catId);
                     TextView tv = entry.getValue();
                     tv.setText(sub);
                     tv.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+                    if (!isCutterTile(catId) && !sub.isEmpty()) {
+                        tv.setSelected(true);
+                    }
                 }
                 if (notifyWhenScanFinished) {
                     swipeRefreshHome.setRefreshing(false);
@@ -337,6 +346,9 @@ public class MainActivity extends AppCompatActivity {
                 tvSub.setTextColor(textSecondary);
                 tvSub.setTextDirection(View.TEXT_DIRECTION_LTR);
                 tvSub.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+                if (!isCutterTile(item.id) && !sub.isEmpty()) {
+                    tvSub.setSelected(true);
+                }
                 subtitleViewsById.put(item.id, tvSub);
 
                 tile.setOnClickListener(v -> onCategoryClicked(item));
@@ -385,8 +397,17 @@ public class MainActivity extends AppCompatActivity {
         return "";
     }
 
+    private boolean isCutterTile(String id) {
+        return "TOOL_AUDIO_CUTTER".equals(id) || "TOOL_VIDEO_CUTTER".equals(id);
+    }
+
+    // סעיף יד: כאשר מספר הקבצים רב והטקסט מתארך, השורה תזוז תדיר כדי שניתן יהיה לראות כמה קבצים יש
     private String formatWeightWithCount(long bytes, int count) {
-        return StorageUtils.formatSize(bytes) + " (" + count + ")";
+        String base = StorageUtils.formatSize(bytes) + " (" + count + ")";
+        if (count >= 100 || base.length() >= 13) {
+            return "   " + base + "   •   " + base + "   ";
+        }
+        return base;
     }
 
     private void onCategoryClicked(HomeCategory item) {

@@ -19,10 +19,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * סעיפים א, ב, ג:
- * - הוסר לחלוטין "פרופיל המפתח בגייטהאב"
- * - נוספה שורה ממורכזת ומסודרת: "פיתוח והנדסה: @ אש התורה" שבה רק "@ אש התורה" בכחול ומעביר לפרופיל
- * - תוקן הבאג שבו המילים קפצו לצד שמאל — כל הרכיבים והכפתורים ממורכזים לחלוטין באמצע!
+ * סעיפים י, כ:
+ * - למעלה מופיעה הגירסה עם הציון "רשמית" החל מגירסה 0.2.5 ("File Manager Pro  •  גירסה 0.2.5 רשמית")
+ * - משבצת "פיתוח והנדסה" מתוחה מעט כלפי מטה בשתי שורות ממורכזות:
+ *   שורה 1: "פיתוח והנדסה: @ אש התורה" (בצבע טקסט רגיל)
+ *   שורה 2: "במתמחים טופ   בעוגן פליי" (בצבע כחול ולחיצים לקישורים המתאימים)
  */
 public class AboutDialogHelper {
 
@@ -41,9 +42,9 @@ public class AboutDialogHelper {
         root.setPadding(50, 48, 50, 38);
         root.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
-        // גירסת האפליקציה למעלה — ממורכזת תמיד
+        // סעיף כ: גירסת האפליקציה למעלה + "רשמית" החל מגירסה 0.2.5
         TextView tvVersionBadge = new TextView(activity);
-        tvVersionBadge.setText("File Manager Pro  •  גירסה " + BuildConfig.VERSION_NAME);
+        tvVersionBadge.setText("File Manager Pro  •  גירסה " + UpdateChecker.formatOfficialVer(BuildConfig.VERSION_NAME));
         tvVersionBadge.setTextColor(accent);
         tvVersionBadge.setTextSize(15f);
         tvVersionBadge.setTypeface(Typeface.DEFAULT_BOLD);
@@ -71,12 +72,12 @@ public class AboutDialogHelper {
         root.addView(tvTitle, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // סעיף ב: בצד ימין "פיתוח והנדסה:" בטקסט רגיל ומסודר, ורק "@ אש התורה" בכחול ולחיץ לפרופיל במתמחים טופ
+        // סעיף י: משבצת פיתוח והנדסה מתוחה מעט כלפי מטה עם קישורים כחולים ל"במתמחים טופ" ו-"בעוגן פליי"
         LinearLayout creditCard = new LinearLayout(activity);
-        creditCard.setOrientation(LinearLayout.HORIZONTAL);
+        creditCard.setOrientation(LinearLayout.VERTICAL);
         creditCard.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         creditCard.setGravity(Gravity.CENTER);
-        creditCard.setPadding(28, 22, 28, 22);
+        creditCard.setPadding(32, 32, 32, 32);
 
         GradientDrawable creditBg = new GradientDrawable();
         creditBg.setCornerRadius(24f);
@@ -87,29 +88,63 @@ public class AboutDialogHelper {
         creditBg.setStroke(2, Color.argb(65, Color.red(accent), Color.green(accent), Color.blue(accent)));
         creditCard.setBackground(creditBg);
 
-        TextView tvDevLabel = new TextView(activity);
-        tvDevLabel.setText("פיתוח והנדסה: ");
-        tvDevLabel.setTextColor(textPrimary);
-        tvDevLabel.setTextSize(15f);
-        tvDevLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        creditCard.addView(tvDevLabel);
+        TextView tvDevLine = new TextView(activity);
+        tvDevLine.setText("פיתוח והנדסה:@ אש התורה");
+        tvDevLine.setTextColor(textPrimary);
+        tvDevLine.setTextSize(15.5f);
+        tvDevLine.setTypeface(Typeface.DEFAULT_BOLD);
+        tvDevLine.setGravity(Gravity.CENTER);
+        tvDevLine.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        creditCard.addView(tvDevLine, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout linksRow = new LinearLayout(activity);
+        linksRow.setOrientation(LinearLayout.HORIZONTAL);
+        linksRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        linksRow.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams linksLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        linksLp.topMargin = 16;
+        linksRow.setLayoutParams(linksLp);
 
         int linkBlue = theme == PrefsManager.THEME_LIGHT
                 ? Color.parseColor("#1D4ED8")
                 : Color.parseColor("#3B82F6");
 
-        TextView tvDevLink = new TextView(activity);
-        tvDevLink.setText("@ אש התורה");
-        tvDevLink.setTextColor(linkBlue);
-        tvDevLink.setTextSize(15.5f);
-        tvDevLink.setTypeface(Typeface.DEFAULT_BOLD);
-        tvDevLink.setClickable(true);
-        tvDevLink.setFocusable(true);
-        tvDevLink.setOnClickListener(v -> activity.startActivity(new Intent(
+        TextView tvMitmachimLink = new TextView(activity);
+        tvMitmachimLink.setText("במתמחים טופ");
+        tvMitmachimLink.setTextColor(linkBlue);
+        tvMitmachimLink.setTextSize(15f);
+        tvMitmachimLink.setTypeface(Typeface.DEFAULT_BOLD);
+        tvMitmachimLink.setClickable(true);
+        tvMitmachimLink.setFocusable(true);
+        tvMitmachimLink.setPadding(8, 4, 8, 4);
+        tvMitmachimLink.setOnClickListener(v -> activity.startActivity(new Intent(
                 Intent.ACTION_VIEW,
                 Uri.parse(activity.getString(R.string.mitmachim_url))
         )));
-        creditCard.addView(tvDevLink);
+        linksRow.addView(tvMitmachimLink);
+
+        TextView tvSpacer = new TextView(activity);
+        tvSpacer.setText("   ");
+        tvSpacer.setTextSize(15f);
+        linksRow.addView(tvSpacer);
+
+        TextView tvOgenPlayLink = new TextView(activity);
+        tvOgenPlayLink.setText("בעוגן פליי");
+        tvOgenPlayLink.setTextColor(linkBlue);
+        tvOgenPlayLink.setTextSize(15f);
+        tvOgenPlayLink.setTypeface(Typeface.DEFAULT_BOLD);
+        tvOgenPlayLink.setClickable(true);
+        tvOgenPlayLink.setFocusable(true);
+        tvOgenPlayLink.setPadding(8, 4, 8, 4);
+        tvOgenPlayLink.setOnClickListener(v -> activity.startActivity(new Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(activity.getString(R.string.ogenplay_url))
+        )));
+        linksRow.addView(tvOgenPlayLink);
+
+        creditCard.addView(linksRow);
 
         LinearLayout.LayoutParams creditLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -125,7 +160,7 @@ public class AboutDialogHelper {
                 v -> UpdateChecker.checkForUpdates(activity, true)
         ));
 
-        // יומן שינויים מפואר
+        // יומן שינויים
         root.addView(buildCenteredActionButton(
                 activity,
                 "יומן שינויים",

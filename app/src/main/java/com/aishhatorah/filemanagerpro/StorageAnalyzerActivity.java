@@ -230,15 +230,16 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
             h.tvName.setTextColor(textPrimary);
             h.tvMeta.setText(StorageUtils.formatSize(f.length()) + "  •  " + f.getParent());
             h.tvMeta.setTextColor(textSecondary);
-            h.tvHint.setText("⋮");
-            h.tvHint.setTextColor(accent);
-
-            // סעיף ד: האייקון האמיתי של כל קובץ (שיר, תמונה, סרטון, אפליקציה או מסמך)
+            // סעיף ד + סעיף ח: האייקון האמיתי משמאל פותח בלחיצה את אפשרויות העריכה
             FileThumbnailLoader.bindFileIcon(StorageAnalyzerActivity.this, f, h.ivIcon);
 
             View.OnClickListener openMenu = v -> showHeavyFileActions(f);
+            h.ivIcon.setOnClickListener(openMenu);
             h.rowCard.setOnClickListener(openMenu);
-            h.tvHint.setOnClickListener(openMenu);
+            h.rowCard.setOnLongClickListener(v -> {
+                showHeavyFileActions(f);
+                return true;
+            });
         }
 
         @Override

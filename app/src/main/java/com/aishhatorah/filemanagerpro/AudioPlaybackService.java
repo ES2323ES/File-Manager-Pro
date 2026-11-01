@@ -10,16 +10,23 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.widget.RemoteViews;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
 import java.io.File;
+import java.util.Locale;
 
 /**
- * סעיף יג: שירות ניגון שמע ברקע המציג בבר ההתראות העליון את סמל האפליקציה
- * ואת בקרי השיר הפעיל כל עוד השיר מנוגן.
+ * סעיף יח: שירות התראת מדיה מתקדם בבר ההתראות העליון בזמן ניגון אודיו:
+ * - ללא מילים ("הקודם", "השהה", "הבא"), אלא סמלי מדיה מותאמים:
+ *   בצד שמאל = שיר קודם, באמצע = השהה/נגן, בצד ימין = שיר הבא!
+ * - כולל פס התקדמות של השיר משמאל לימין המתעדכן בזמן אמת!
+ * - לחיצה על ההתראה פותחת את הנגן עם דגל ניווט חכם המחזיר בלחיצה על "חזור" אל התיקייה שממנה השיר מתנגן.
  */
 public class AudioPlaybackService extends Service {
 
@@ -31,6 +38,28 @@ public class AudioPlaybackService extends Service {
     public static final String ACTION_NEXT = "com.aishhatorah.filemanagerpro.AUDIO_NEXT";
     public static final String ACTION_PREV = "com.aishhatorah.filemanagerpro.AUDIO_PREV";
     public static final String ACTION_STOP_SERVICE = "com.aishhatorah.filemanagerpro.AUDIO_STOP";
+
+    private final Handler tickerHandler = new Handler(Looper.getMainLooper());
+    private final Runnable progressTicker = new Runnable() {
+        @Override
+        public void run() {
+            AudioPlayerManager mgr = AudioPlayerManager.getInstance();
+            if (!mgr.hasActiveSession() || mgr.getCurrentFile() == null) {
+                tickerHandler.removeCallbacks(this);
+                return;
+            }
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                try {
+                    nm.notify(NOTIF_ID, buildNotification(mgr));
+                } catch (Exception ignored) {
+                }
+            }
+            if (mgr.isPlaying()) {
+                tickerHandler.postDelayed(this, 1000L);
+            }
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -44,6 +73,7 @@ public class AudioPlaybackService extends Service {
         AudioPlayerManager mgr = AudioPlayerManager.getInstance();
 
         if (ACTION_STOP_SERVICE.equals(action)) {
+            tickerHandler.removeCallbacks(progressTicker);
             mgr.stopAndDismiss(this);
             stopForeground(true);
             stopSelf();
@@ -59,6 +89,7 @@ public class AudioPlaybackService extends Service {
         }
 
         if (!mgr.hasActiveSession() || mgr.getCurrentFile() == null) {
+            tickerHandler.removeCallbacks(progressTicker);
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
@@ -81,7 +112,10 @@ public class AudioPlaybackService extends Service {
             }
         }
 
-        if (!mgr.isPlaying()) {
+        tickerHandler.removeCallbacks(progressTicker);
+        if (mgr.isPlaying()) {
+            tickerHandler.postDelayed(progressTicker, 1000L);
+        } else {
             stopForeground(false);
         }
 
@@ -94,11 +128,16 @@ public class AudioPlaybackService extends Service {
         boolean playing = mgr.isPlaying();
         Bitmap artwork = mgr.getCurrentArtwork();
 
+        int dur = mgr.getDurationMs();
+        int pos = mgr.getCurrentPositionMs();
+        int permille = dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0;
+
         Intent openViewer = new Intent(this, BuiltInViewerActivity.class);
         if (song != null) {
             openViewer.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, song.getAbsolutePath());
         }
-        openViewer.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        openViewer.putExtra(BuiltInViewerActivity.EXTRA_FROM_NOTIFICATION, true);
+        openViewer.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent contentPi = PendingIntent.getActivity(
                 this,
                 401,
@@ -111,27 +150,54 @@ public class AudioPlaybackService extends Service {
         PendingIntent nextPi = serviceActionPi(ACTION_NEXT, 404);
         PendingIntent stopPi = serviceActionPi(ACTION_STOP_SERVICE, 405);
 
+        RemoteViews collapsed = new RemoteViews(getPackageName(), R.layout.notif_audio_collapsed);
+        collapsed.setTextViewText(R.id.tvNotifTitle, songTitle);
+        collapsed.setProgressBar(R.id.pbNotifProgress, 1000, permille, false);
+        collapsed.setImageViewResource(R.id.btnNotifPlayPause, playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        collapsed.setOnClickPendingIntent(R.id.btnNotifPrev, prevPi);
+        collapsed.setOnClickPendingIntent(R.id.btnNotifPlayPause, togglePi);
+        collapsed.setOnClickPendingIntent(R.id.btnNotifNext, nextPi);
+
+        RemoteViews expanded = new RemoteViews(getPackageName(), R.layout.notif_audio_expanded);
+        expanded.setTextViewText(R.id.tvNotifTitle, songTitle);
+        expanded.setTextViewText(R.id.tvNotifSub, "File Manager Pro  •  " + mgr.getCurrentTrackNumber() + "/" + mgr.getFolderTrackCount());
+        expanded.setTextViewText(R.id.tvNotifPos, formatClock(pos));
+        expanded.setTextViewText(R.id.tvNotifDur, formatClock(dur));
+        expanded.setProgressBar(R.id.pbNotifProgress, 1000, permille, false);
+        expanded.setImageViewResource(R.id.btnNotifPlayPause, playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        expanded.setOnClickPendingIntent(R.id.btnNotifPrev, prevPi);
+        expanded.setOnClickPendingIntent(R.id.btnNotifPlayPause, togglePi);
+        expanded.setOnClickPendingIntent(R.id.btnNotifNext, nextPi);
+        expanded.setOnClickPendingIntent(R.id.btnNotifClose, stopPi);
+
+        if (artwork != null && !artwork.isRecycled()) {
+            Bitmap notifThumb = FileThumbnailLoader.createRoundedSquareBitmap(artwork, 160, 24f);
+            collapsed.setImageViewBitmap(R.id.ivNotifArt, notifThumb);
+            expanded.setImageViewBitmap(R.id.ivNotifArt, notifThumb);
+        } else {
+            collapsed.setImageViewResource(R.id.ivNotifArt, R.drawable.ic_app_logo);
+            expanded.setImageViewResource(R.id.ivNotifArt, R.drawable.ic_app_logo);
+        }
+
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_app_logo)
                 .setContentTitle(songTitle)
-                .setContentText(playing ? "File Manager Pro • מנגן כעת" : "File Manager Pro • מושהה")
-                .setSubText("File Manager Pro")
+                .setContentText(formatClock(pos) + " / " + formatClock(dur))
+                .setCustomContentView(collapsed)
+                .setCustomBigContentView(expanded)
                 .setContentIntent(contentPi)
                 .setDeleteIntent(stopPi)
                 .setOngoing(playing)
                 .setOnlyAlertOnce(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(R.drawable.ic_skip_prev, "הקודם", prevPi)
-                .addAction(playing ? R.drawable.ic_pause : R.drawable.ic_play, playing ? "השהה" : "נגן", togglePi)
-                .addAction(R.drawable.ic_skip_next, "הבא", nextPi)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "עצור", stopPi);
-
-        if (artwork != null && !artwork.isRecycled()) {
-            builder.setLargeIcon(artwork);
-        }
+                .setPriority(NotificationCompat.PRIORITY_LOW);
 
         return builder.build();
+    }
+
+    private String formatClock(int ms) {
+        int sec = Math.max(0, ms / 1000);
+        return String.format(Locale.US, "%02d:%02d", sec / 60, sec % 60);
     }
 
     private PendingIntent serviceActionPi(String action, int reqCode) {
@@ -153,9 +219,15 @@ public class AudioPlaybackService extends Service {
                 "נגן שמע ברקע — File Manager Pro",
                 NotificationManager.IMPORTANCE_LOW
         );
-        ch.setDescription("מציג את סמל File Manager Pro ובקרי השיר בבר ההתראות העליון בזמן ניגון");
+        ch.setDescription("מציג את סמלי המדיה ופס ההתקדמות של השיר בבר ההתראות בזמן ניגון");
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        tickerHandler.removeCallbacks(progressTicker);
     }
 
     @Nullable

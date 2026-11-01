@@ -128,19 +128,19 @@ public class StorageUtils {
             } else {
                 long len = f.length();
                 String lower = f.getName().toLowerCase(Locale.ROOT);
-                if (endsWithAny(lower, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".bmp")) {
+                if (MediaFormatHelper.isImageFile(lower)) {
                     out.imagesBytes += len;
                     out.imagesCount++;
-                } else if (endsWithAny(lower, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) {
+                } else if (MediaFormatHelper.isAudioFile(lower)) {
                     out.audioBytes += len;
                     out.audioCount++;
-                } else if (endsWithAny(lower, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) {
+                } else if (MediaFormatHelper.isVideoFile(lower)) {
                     out.videosBytes += len;
                     out.videosCount++;
-                } else if (endsWithAny(lower, ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".csv", ".md")) {
+                } else if (MediaFormatHelper.isDocumentFile(lower)) {
                     out.documentsBytes += len;
                     out.documentsCount++;
-                } else if (endsWithAny(lower, ".apk", ".xapk", ".apks")) {
+                } else if (MediaFormatHelper.isInstallableAppPackage(lower)) {
                     out.appsBytes += len;
                     out.appsCount++;
                 }
@@ -150,13 +150,6 @@ public class StorageUtils {
                 }
             }
         }
-    }
-
-    private static boolean endsWithAny(String name, String... exts) {
-        for (String e : exts) {
-            if (name.endsWith(e)) return true;
-        }
-        return false;
     }
 
     // השוואת שמות כך שתיקיות ושמות בעברית יופיעו תמיד לפני שמות באנגלית (סעיף כא)

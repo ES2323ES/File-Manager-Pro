@@ -21,15 +21,16 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * סעיף כב: יומן שינויים מפואר, עשיר, מעוצב עם תגיות צבעוניות ומילים מודגשות וצבעוניות!
+ * סעיפים טו, טז, כ: יומן שינויים מעוצב:
+ * - כותרת נקייה: "יומן שינויים" ומתחתיה "File Manager Pro" (ללא "מפואר" וללא שורת המשנה הישנה)
+ * - גירסה 0.2.5 מסומנת כ-"גירסה 0.2.5 רשמית" (ללא "רשמית" בגרסאות 0.2.2–0.2.4)
+ * - בגירסה 0.2.2: "השקת האפליקציה" והסרת המילים "השקת ליבת Java נייטיב מלאה:"
  */
 public class ChangelogDialogHelper {
 
     public static void show(Activity activity) {
         int theme = PrefsManager.getThemeMode(activity);
         int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
         boolean isLight = theme == PrefsManager.THEME_LIGHT;
 
         int cBlue = isLight ? Color.parseColor("#1D4ED8") : Color.parseColor("#60A5FA");
@@ -46,7 +47,7 @@ public class ChangelogDialogHelper {
         outer.setPadding(44, 44, 44, 36);
         outer.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
-        // כותרת מלכותית ומפוארת ליומן השינויים
+        // סעיף טו: כותרת יומן השינויים — "יומן שינויים" ומתחתיו "File Manager Pro"
         LinearLayout heroBanner = new LinearLayout(activity);
         heroBanner.setOrientation(LinearLayout.VERTICAL);
         heroBanner.setGravity(Gravity.CENTER);
@@ -66,8 +67,8 @@ public class ChangelogDialogHelper {
         heroBanner.addView(heroIcon, hIcLp);
 
         TextView tvHeader = new TextView(activity);
-        tvHeader.setText("יומן שינויים מפואר — File Manager Pro");
-        tvHeader.setTextSize(17.5f);
+        tvHeader.setText("יומן שינויים");
+        tvHeader.setTextSize(18.5f);
         tvHeader.setTypeface(Typeface.DEFAULT_BOLD);
         tvHeader.setTextColor(Color.WHITE);
         tvHeader.setGravity(Gravity.CENTER);
@@ -75,18 +76,36 @@ public class ChangelogDialogHelper {
         heroBanner.addView(tvHeader);
 
         TextView tvSub = new TextView(activity);
-        tvSub.setText("תיעוד הנדסי מלא של כל השדרוגים, כלי המדיה והיכולות החדשות");
-        tvSub.setTextSize(12.5f);
+        tvSub.setText("File Manager Pro");
+        tvSub.setTextSize(14.5f);
+        tvSub.setTypeface(Typeface.DEFAULT_BOLD);
         tvSub.setTextColor(Color.parseColor("#E0E7FF"));
         tvSub.setGravity(Gravity.CENTER);
         tvSub.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        tvSub.setPadding(0, 8, 0, 0);
+        tvSub.setPadding(0, 6, 0, 0);
         heroBanner.addView(tvSub);
 
         LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         heroLp.bottomMargin = 24;
         outer.addView(heroBanner, heroLp);
+
+        // ===================== גירסה 0.2.5 רשמית =====================
+        SpannableStringBuilder v25 = new SpannableStringBuilder();
+        appendRichBullet(v25, "נגן אודיו משודרג ומותאם לסיבוב מסך: ", cBlue,
+                "פס התקדמות משמאל לימין, החלפת מצב חזרה בלחיצה ישירה, אייקונים מותאמים לגודל וסיבוב המסך, עטיפת שיר על כל השטח ומונה קבצים בתיקייה (כגון 1/20).", textPrimary);
+        appendRichBullet(v25, "\n\nהתראת מדיה חכמה ושורה תחתונה עם פס התקדמות: ", cViolet,
+                "סמלי מדיה בבר ההתראות עם פס התקדמות משמאל לימין וחזרה חכמה לתיקיית השיר המתנגן, ופס התקדמות בשורה החכמה התחתונה ביציאה מהשיר.", textPrimary);
+        appendRichBullet(v25, "\n\nתמיכה בכל סוגי המדיה והאפליקציות: ", cEmerald,
+                "פתיחה מובנית של כלל פורמטי האודיו, הוידאו והתמונות, התקנת כל סוגי האפליקציות (APK / APKS / APKM / XAPK), ואייקונים ייחודיים לקובצי ZIP וטקסט.", textPrimary);
+        appendRichBullet(v25, "\n\nתצוגת תיקיות, מסך ראשי ואייקון Pro חדש: ", cAmber,
+                "הצגת שמות קבצים ותיקיות ארוכים במלואם, פתיחת אפשרויות עריכה בלחיצה על האייקון משמאל, שורת שם אפליקציה ומוני קבצים נעים במסך הראשי, וכיתוב Pro בתיקייה הלבנה של האייקון.", textPrimary);
+        appendRichBullet(v25, "\n\nהתקנת עדכונים עצמאית ומסך עדכון מעוצב: ", cCyan,
+                "חלון עדכון חדש המעוצב בסגנון יומן השינויים עם הורדה והתקנה ישירה ועצמאית בתוך האפליקציה, וקישורים למתמחים טופ ולעוגן פליי באודות.", textPrimary);
+
+        addLuxuriousVersionCard(outer, activity, theme,
+                "גירסה 0.2.5 רשמית", "הגירסה הנוכחית והחדשה ביותר",
+                Color.parseColor("#1D4ED8"), R.drawable.ic_app_logo, v25);
 
         // ===================== גירסה 0.2.4 =====================
         SpannableStringBuilder v24 = new SpannableStringBuilder();
@@ -104,7 +123,7 @@ public class ChangelogDialogHelper {
                 "לחיצה כפולה בצד ימין (+10) או בצד שמאל (-10) באודיו ובוידאו, ושורת שם קובץ הנעה תדיר למעלה באמצע.", textPrimary);
 
         addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.4", "הגירסה הנוכחית והחדשה ביותר",
+                "גירסה 0.2.4", "נגן שמע ברקע ועורכי מדיה מקצועיים",
                 Color.parseColor("#2563EB"), R.drawable.ic_audio, v24);
 
         // ===================== גירסה 0.2.3 =====================
@@ -120,13 +139,13 @@ public class ChangelogDialogHelper {
                 "גירסה 0.2.3", "מנוע מדיה וארכיונים מובנה",
                 Color.parseColor("#7C3AED"), R.drawable.ic_folder, v23);
 
-        // ===================== גירסה 0.2.2 =====================
+        // ===================== גירסה 0.2.2 (סעיף טז) =====================
         SpannableStringBuilder v22 = new SpannableStringBuilder();
-        appendRichBullet(v22, "השקת ליבת Java נייטיב מלאה: ", cAmber,
+        appendRichBullet(v22, "", cAmber,
                 "מסך בית 4×3 בעברית מלאה, ערכות נושא בהיר / כהה / ניאון, כלי ניתוח הקבצים הכבדים ביותר, התרעת 96% תפוסה וסל מיחזור חכם.", textPrimary);
 
         addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.2", "השקת התשתית הראשונית",
+                "גירסה 0.2.2", "השקת האפליקציה",
                 Color.parseColor("#0D9488"), R.drawable.ic_storage_internal, v22);
 
         AlertDialog dialog = new AlertDialog.Builder(activity)

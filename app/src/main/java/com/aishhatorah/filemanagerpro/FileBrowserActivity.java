@@ -49,6 +49,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     public static final String EXTRA_MODE = "extra_mode";
     public static final String EXTRA_TITLE = "extra_title";
+    public static final String EXTRA_INITIAL_DIR = "extra_initial_dir";
 
     public static final String MODE_INTERNAL = "INTERNAL";
     public static final String MODE_SD_CARD = "SD_CARD";
@@ -283,6 +284,27 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void initInitialDirectory() {
+        String initialDirExtra = getIntent().getStringExtra(EXTRA_INITIAL_DIR);
+        if (initialDirExtra != null && !initialDirExtra.isEmpty()) {
+            File target = new File(initialDirExtra);
+            if (target.exists() && target.isDirectory()) {
+                StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
+                if (sd.available && sd.root != null
+                        && target.getAbsolutePath().startsWith(sd.root.getAbsolutePath())) {
+                    currentMode = MODE_SD_CARD;
+                    rootBoundary = sd.root;
+                } else {
+                    currentMode = MODE_INTERNAL;
+                    rootBoundary = Environment.getExternalStorageDirectory();
+                }
+                currentDir = target;
+                tvHeaderTitle.setText(target.equals(rootBoundary)
+                        ? (MODE_SD_CARD.equals(currentMode) ? "כרטיס SD" : "אחסון ראשי")
+                        : target.getName());
+                return;
+            }
+        }
+
         if (MODE_INTERNAL.equals(currentMode)) {
             rootBoundary = Environment.getExternalStorageDirectory();
             currentDir = rootBoundary;
@@ -389,28 +411,21 @@ public class FileBrowserActivity extends AppCompatActivity {
                 collectMatchingCategoryFiles(f, out, showHidden, depth + 1);
             } else {
                 String name = f.getName().toLowerCase(Locale.ROOT);
-                if (MODE_IMAGES.equals(currentMode) && matchesExt(name, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".bmp")) {
+                if (MODE_IMAGES.equals(currentMode) && MediaFormatHelper.isImageFile(name)) {
                     out.add(f);
-                } else if (MODE_AUDIO.equals(currentMode) && matchesExt(name, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) {
+                } else if (MODE_AUDIO.equals(currentMode) && MediaFormatHelper.isAudioFile(name)) {
                     out.add(f);
-                } else if (MODE_VIDEOS.equals(currentMode) && matchesExt(name, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) {
+                } else if (MODE_VIDEOS.equals(currentMode) && MediaFormatHelper.isVideoFile(name)) {
                     out.add(f);
-                } else if (MODE_DOCUMENTS.equals(currentMode) && matchesExt(name, ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".csv", ".md")) {
+                } else if (MODE_DOCUMENTS.equals(currentMode) && MediaFormatHelper.isDocumentFile(name)) {
                     out.add(f);
-                } else if (MODE_APPS.equals(currentMode) && matchesExt(name, ".apk", ".xapk", ".apks")) {
+                } else if (MODE_APPS.equals(currentMode) && MediaFormatHelper.isInstallableAppPackage(name)) {
                     out.add(f);
                 } else if (MODE_RECENT.equals(currentMode) && f.lastModified() >= recentCutoff) {
                     out.add(f);
                 }
             }
         }
-    }
-
-    private boolean matchesExt(String name, String... exts) {
-        for (String e : exts) {
-            if (name.endsWith(e)) return true;
-        }
-        return false;
     }
 
     // סעיף כא: תיקיות בעברית תמיד מופיעות לפני תיקיות באנגלית!
@@ -629,7 +644,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
 
         String lower = file.getName().toLowerCase(Locale.ROOT);
-        if (lower.endsWith(".apk")) {
+        if (MediaFormatHelper.isInstallableAppPackage(lower)) {
             promptDirectApkInstallOrInspect(file);
             return;
         }
@@ -639,24 +654,16 @@ public class FileBrowserActivity extends AppCompatActivity {
         startActivity(viewer);
     }
 
+    // סעיף יב: תמיכה בהתקנת כל סוגי האפליקציות (.apk, .apks, .apkm, .xapk)
     private void promptDirectApkInstallOrInspect(File apkFile) {
         ThemedDialogHelper.showThemedMenu(
                 this,
                 apkFile.getName(),
-                "קובץ התקנה לאנדרואיד • " + StorageUtils.formatSize(apkFile.length()),
+                "חבילת התקנה לאנדרואיד • " + StorageUtils.formatSize(apkFile.length()),
                 Arrays.asList("התקנת האפליקציה במכשיר", "צפייה בתוכן החבילה וחילוץ פנימי"),
                 which -> {
                     if (which == 0) {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
-                            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                    Uri.parse("package:" + getPackageName())));
-                            return;
-                        }
-                        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", apkFile);
-                        Intent install = new Intent(Intent.ACTION_VIEW);
-                        install.setDataAndType(uri, "application/vnd.android.package-archive");
-                        install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(install);
+                        AppPackageInstaller.installAnyPackage(this, apkFile);
                     } else {
                         Intent viewer = new Intent(this, BuiltInViewerActivity.class);
                         viewer.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, apkFile.getAbsolutePath());
@@ -696,9 +703,13 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
 
-        final boolean isZip = file.getName().toLowerCase(Locale.ROOT).endsWith(".zip");
+        final String lowerName = file.getName().toLowerCase(Locale.ROOT);
+        final boolean isZip = MediaFormatHelper.isZipOrArchiveFile(lowerName);
+        final boolean isAppPkg = !file.isDirectory() && MediaFormatHelper.isInstallableAppPackage(lowerName);
         List<String> actions = new ArrayList<>();
-        if (!file.isDirectory()) {
+        if (isAppPkg) {
+            actions.add("התקנת האפליקציה במכשיר");
+        } else if (!file.isDirectory()) {
             actions.add(isZip ? "פתיחה וחילוץ קובץ ZIP" : "פתיחה בתוך האפליקציה");
         }
         actions.add("דחיסה לקובץ ZIP");
@@ -719,6 +730,9 @@ public class FileBrowserActivity extends AppCompatActivity {
                 which -> {
                     String chosen = actions.get(which);
                     switch (chosen) {
+                        case "התקנת האפליקציה במכשיר":
+                            AppPackageInstaller.installAnyPackage(this, file);
+                            break;
                         case "פתיחה וחילוץ קובץ ZIP":
                         case "פתיחה בתוך האפליקציה":
                             onFileClicked(file);
@@ -908,6 +922,17 @@ public class FileBrowserActivity extends AppCompatActivity {
                 && !currentDir.getAbsolutePath().equals(rootBoundary.getAbsolutePath())
                 && currentDir.getParentFile() != null) {
             currentDir = currentDir.getParentFile();
+            if (currentDir.getAbsolutePath().equals(rootBoundary.getAbsolutePath())) {
+                if (MODE_SD_CARD.equals(currentMode)) {
+                    tvHeaderTitle.setText("כרטיס SD");
+                } else if (MODE_DOWNLOADS.equals(currentMode)) {
+                    tvHeaderTitle.setText("הורדות");
+                } else {
+                    tvHeaderTitle.setText("אחסון ראשי");
+                }
+            } else {
+                tvHeaderTitle.setText(currentDir.getName());
+            }
             loadFilesForCurrentMode();
             return;
         }
@@ -961,12 +986,13 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
             h.tvMeta.setTextColor(textSecondary);
 
+            // סעיף ח: לחיצה על האייקון בצד שמאל של קובץ או תיקייה פותחת את אפשרויות העריכה (במקום שלוש הנקודות מימין)
+            h.ivIcon.setOnClickListener(v -> showFileOperationsMenu(f));
             h.rowCard.setOnClickListener(v -> onFileClicked(f));
             h.rowCard.setOnLongClickListener(v -> {
                 showFileOperationsMenu(f);
                 return true;
             });
-            h.tvHint.setOnClickListener(v -> showFileOperationsMenu(f));
         }
 
         @Override

@@ -2,10 +2,13 @@ package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -15,6 +18,7 @@ import android.view.ViewGroup;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -23,15 +27,16 @@ import androidx.appcompat.widget.AppCompatTextView;
 import java.io.File;
 
 /**
- * סעיף יב: שורת מיני-נגן קבועה בתחתית האפליקציה ביציאה מהשיר:
- * - מציגה את האייקון של השיר (במידה וקיים) ואת שם השיר
- * - מאפשרת השהיה והפעלה ישירות מהשורה
- * - לחיצה על השורה מחזירה לנגן המלא ללא הפסקת השיר
- * - החלקה אופקית על השורה עוצרת ומפסיקה את השיר מיד!
+ * סעיף ז: שורת המיני-נגן החכמה למטה ביציאה מהשיר:
+ * - הוסר הכיתוב "החלק על השורה לעצירת השיר • לחץ לפתיחת הנגן"
+ * - במקומו מוצג פס התקדמות של השיר משמאל לימין המתעדכן בזמן אמת!
+ * - החלקה אופקית לעצירת השיר ולחיצה לפתיחת הנגן נשמרות במלואן.
  */
 public class MiniAudioBarHelper {
 
     public static AudioPlayerManager.PlaybackListener attach(Activity activity, LinearLayout parentContainer) {
+        final Handler progressHandler = new Handler(Looper.getMainLooper());
+
         final LinearLayout barWrapper = new LinearLayout(activity);
         barWrapper.setOrientation(LinearLayout.VERTICAL);
         barWrapper.setPadding(20, 10, 20, 16);
@@ -44,7 +49,7 @@ public class MiniAudioBarHelper {
         bar.setPadding(24, 18, 24, 18);
 
         final ImageView ivArt = new ImageView(activity);
-        ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
         LinearLayout.LayoutParams artLp = new LinearLayout.LayoutParams(96, 96);
         artLp.rightMargin = 20;
         bar.addView(ivArt, artLp);
@@ -65,27 +70,31 @@ public class MiniAudioBarHelper {
         tvTitle.setSelected(true);
         tvTitle.setTextSize(13.5f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        textCol.addView(tvTitle);
+        textCol.addView(tvTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        final TextView tvHint = new TextView(activity);
-        tvHint.setText("החלק על השורה לעצירת השיר • לחץ לפתיחת הנגן");
-        tvHint.setTextSize(10.5f);
-        tvHint.setSingleLine(true);
-        tvHint.setGravity(Gravity.RIGHT);
-        textCol.addView(tvHint);
+        // סעיף ז: פס התקדמות של השיר משמאל לימין במקום כיתוב ההסבר
+        final ProgressBar songProgressBar = new ProgressBar(
+                activity, null, android.R.attr.progressBarStyleHorizontal);
+        songProgressBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        songProgressBar.setMax(1000);
+        songProgressBar.setProgress(0);
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(activity, 6));
+        pbLp.topMargin = dpToPx(activity, 8);
+        textCol.addView(songProgressBar, pbLp);
 
         bar.addView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         final ImageButton btnPlayPause = new ImageButton(activity);
         btnPlayPause.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         btnPlayPause.setPadding(22, 22, 22, 22);
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(104, 104);
+        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(100, 100);
         playLp.leftMargin = 20;
         bar.addView(btnPlayPause, playLp);
 
         btnPlayPause.setOnClickListener(v -> AudioPlayerManager.getInstance().togglePlayPause(activity));
 
-        // טיפול בלחיצה לפתיחת הנגן ובהחלקה אופקית על השורה להפסקת השיר
         final int touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
         bar.setOnTouchListener(new View.OnTouchListener() {
             private float downRawX = 0f;
@@ -159,10 +168,26 @@ public class MiniAudioBarHelper {
         parentContainer.addView(barWrapper, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        final Runnable updateProgressOnly = new Runnable() {
+            @Override
+            public void run() {
+                if (activity.isFinishing() || activity.isDestroyed()) return;
+                AudioPlayerManager mgr = AudioPlayerManager.getInstance();
+                if (barWrapper.getVisibility() == View.VISIBLE && mgr.hasActiveSession()) {
+                    int dur = mgr.getDurationMs();
+                    int pos = mgr.getCurrentPositionMs();
+                    int permille = dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0;
+                    songProgressBar.setProgress(permille);
+                    progressHandler.postDelayed(this, 250);
+                }
+            }
+        };
+
         final Runnable refreshUi = () -> {
             AudioPlayerManager mgr = AudioPlayerManager.getInstance();
             if (!mgr.hasActiveSession() || mgr.getCurrentFile() == null) {
                 barWrapper.setVisibility(View.GONE);
+                progressHandler.removeCallbacks(updateProgressOnly);
                 return;
             }
 
@@ -184,12 +209,21 @@ public class MiniAudioBarHelper {
 
             tvTitle.setText(mgr.getCurrentFile().getName());
             tvTitle.setTextColor(textPrimary);
-            tvHint.setTextColor(textSecondary);
+
+            int trackTint = Color.argb(60, Color.red(textSecondary), Color.green(textSecondary), Color.blue(textSecondary));
+            songProgressBar.setProgressTintList(ColorStateList.valueOf(accent));
+            songProgressBar.setProgressBackgroundTintList(ColorStateList.valueOf(trackTint));
+            int dur = mgr.getDurationMs();
+            int pos = mgr.getCurrentPositionMs();
+            songProgressBar.setProgress(dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0);
 
             Bitmap art = mgr.getCurrentArtwork();
             if (art != null && !art.isRecycled()) {
-                ivArt.setImageBitmap(art);
+                Bitmap miniThumb = FileThumbnailLoader.createRoundedSquareBitmap(art, 128, 22f);
+                ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                ivArt.setImageBitmap(miniThumb);
             } else {
+                ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 ivArt.setImageResource(R.drawable.ic_audio);
             }
 
@@ -201,11 +235,17 @@ public class MiniAudioBarHelper {
             btnPlayPause.setColorFilter(theme == PrefsManager.THEME_NEON ? Color.parseColor("#030712") : Color.WHITE);
 
             barWrapper.setVisibility(View.VISIBLE);
+            progressHandler.removeCallbacks(updateProgressOnly);
+            progressHandler.post(updateProgressOnly);
         };
 
         AudioPlayerManager.PlaybackListener listener = refreshUi::run;
         AudioPlayerManager.getInstance().addListener(listener);
         refreshUi.run();
         return listener;
+    }
+
+    private static int dpToPx(Activity activity, float dp) {
+        return Math.round(dp * activity.getResources().getDisplayMetrics().density);
     }
 }

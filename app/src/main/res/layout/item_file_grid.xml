@@ -28,7 +28,11 @@
                 android:id="@+id/ivFileIcon"
                 android:layout_width="56dp"
                 android:layout_height="56dp"
-                android:importantForAccessibility="no"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:contentDescription="אפשרויות עריכה"
+                android:focusable="true"
+                android:padding="2dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_file_generic" />
 
@@ -41,12 +45,7 @@
                 android:id="@+id/tvFileActionHint"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:gravity="center"
-                android:minWidth="32dp"
-                android:padding="6dp"
-                android:text="⋮"
-                android:textSize="19sp"
-                android:textStyle="bold" />
+                android:visibility="gone" />
         </LinearLayout>
 
         <TextView
@@ -54,9 +53,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:ellipsize="middle"
             android:gravity="right"
-            android:maxLines="1"
+            android:lineSpacingExtra="2dp"
             android:textDirection="anyRtl"
             android:textSize="13.5sp"
             android:textStyle="bold" />
