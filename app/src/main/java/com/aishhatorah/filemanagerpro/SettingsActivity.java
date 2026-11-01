@@ -237,6 +237,17 @@ public class SettingsActivity extends AppCompatActivity {
         tvPermStatus.setPadding(0, 0, 0, 14);
         permsCard.addView(tvPermStatus);
 
+        boolean notifGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+
+        TextView tvNotifStatus = new TextView(this);
+        tvNotifStatus.setText("הרשאת סמל האפליקציה בבר ההתראות (בזמן ניגון שיר): " + (notifGranted ? "מאושרת ופעילה" : "ממתינה לאישור"));
+        tvNotifStatus.setTextColor(notifGranted ? Color.parseColor("#16A34A") : Color.parseColor("#D97706"));
+        tvNotifStatus.setTypeface(Typeface.DEFAULT_BOLD);
+        tvNotifStatus.setPadding(0, 6, 0, 14);
+        permsCard.addView(tvNotifStatus);
+
         permsCard.addView(createSubtleButton("ניהול הרשאת גישה לכל הקבצים והאחסון", cardColor, accent, v -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -246,7 +257,23 @@ public class SettingsActivity extends AppCompatActivity {
             }
         }));
 
-        permsCard.addView(createSubtleButton("פתיחת הרשאות מערכת (אודיו, וידאו, תמונות והתראות)", cardColor, accent,
+        permsCard.addView(createSubtleButton("אישור הרשאת התראות (להצגת סמל האפליקציה בזמן ניגון שיר)", cardColor, accent, v -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notifGranted) {
+                androidx.core.app.ActivityCompat.requestPermissions(
+                        this,
+                        new String[]{android.Manifest.permission.POST_NOTIFICATIONS},
+                        2044
+                );
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent notifIntent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                startActivity(notifIntent);
+            } else {
+                openAppSystemSettings();
+            }
+        }));
+
+        permsCard.addView(createSubtleButton("פתיחת הרשאות מערכת (אודיו, וידאו, תמונות והתקנת עדכונים)", cardColor, accent,
                 v -> openAppSystemSettings()));
         body.addView(permsCard);
 

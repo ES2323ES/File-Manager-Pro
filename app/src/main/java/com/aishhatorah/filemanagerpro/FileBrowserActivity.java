@@ -82,6 +82,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     private RecyclerView recyclerView;
     private TextView tvEmptyState;
     private FileAdapter adapter;
+    private AudioPlayerManager.PlaybackListener miniAudioListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -212,11 +213,8 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         swipeRefresh = new SwipeRefreshLayout(this);
         swipeRefresh.setColorSchemeColors(0xFF1D4ED8, 0xFF0284C7);
-        swipeRefresh.setOnRefreshListener(() -> {
-            loadFilesForCurrentMode();
-            swipeRefresh.setRefreshing(false);
-            Toast.makeText(this, "הרשימה רועננה", Toast.LENGTH_SHORT).show();
-        });
+        // סעיף ז: העיגול מופיע עד לסיום הסריקה האמיתית, וההודעה מופיעה רק בסיום הסריקה עם הטקסט "כל הקבצים רועננו בהצלחה"
+        swipeRefresh.setOnRefreshListener(() -> loadFilesForCurrentMode(true));
 
         LinearLayout contentFrame = new LinearLayout(this);
         contentFrame.setOrientation(LinearLayout.VERTICAL);
@@ -239,7 +237,10 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         swipeRefresh.addView(contentFrame);
         root.addView(swipeRefresh, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // סעיף יב: שורת השיר התחתונה ביציאה מהנגן (עם השהיה והחלקה לעצירת השיר)
+        miniAudioListener = MiniAudioBarHelper.attach(this, root);
 
         setContentView(root);
 
@@ -252,15 +253,18 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         initInitialDirectory();
         updateClipboardBar();
-        loadFilesForCurrentMode();
+        loadFilesForCurrentMode(false);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (miniAudioListener != null) {
+            miniAudioListener.onPlaybackStateChanged();
+        }
         if (recyclerView != null) {
             applyFolderLayoutMode();
-            loadFilesForCurrentMode();
+            loadFilesForCurrentMode(false);
         }
     }
 
@@ -306,10 +310,18 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void loadFilesForCurrentMode() {
+        loadFilesForCurrentMode(false);
+    }
+
+    private void loadFilesForCurrentMode(final boolean fromUserPullToRefresh) {
         if (MODE_SD_CARD.equals(currentMode) && currentDir == null) {
             tvPathBreadcrumb.setText("כרטיס SD חיצוני אינו מחובר למכשיר");
             allLoadedFiles.clear();
             filterFiles(etSearch.getText().toString());
+            if (fromUserPullToRefresh) {
+                swipeRefresh.setRefreshing(false);
+                Toast.makeText(this, "כל הקבצים רועננו בהצלחה", Toast.LENGTH_SHORT).show();
+            }
             return;
         }
 
@@ -354,6 +366,10 @@ public class FileBrowserActivity extends AppCompatActivity {
                 allLoadedFiles.addAll(result);
                 filterFiles(etSearch.getText().toString());
                 updateClipboardBar();
+                if (fromUserPullToRefresh) {
+                    swipeRefresh.setRefreshing(false);
+                    Toast.makeText(this, "כל הקבצים רועננו בהצלחה", Toast.LENGTH_SHORT).show();
+                }
             });
         });
     }
@@ -912,10 +928,16 @@ public class FileBrowserActivity extends AppCompatActivity {
             this.accent = accent;
         }
 
+        @Override
+        public int getItemViewType(int position) {
+            return PrefsManager.isGridLayout(FileBrowserActivity.this) ? 1 : 0;
+        }
+
         @NonNull
         @Override
         public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_file_row, parent, false);
+            int layoutId = viewType == 1 ? R.layout.item_file_grid : R.layout.item_file_row;
+            View v = LayoutInflater.from(parent.getContext()).inflate(layoutId, parent, false);
             return new VH(v);
         }
 
@@ -927,13 +949,14 @@ public class FileBrowserActivity extends AppCompatActivity {
             h.tvName.setTextColor(textPrimary);
             h.tvHint.setTextColor(accent);
 
+            // סעיף ד: הצגת האייקון האמיתי של אותו קובץ (שירים, תמונות, אפליקציות, סירטונים ותיקיות)
+            FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
+
             if (f.isDirectory()) {
-                h.ivIcon.setImageResource(R.drawable.ic_folder);
                 File[] sub = f.listFiles();
                 int count = sub != null ? sub.length : 0;
                 h.tvMeta.setText(count + " פריטים • " + df.format(new Date(f.lastModified())));
             } else {
-                h.ivIcon.setImageResource(resolveFileIcon(f.getName()));
                 h.tvMeta.setText(StorageUtils.formatSize(f.length()) + " • " + df.format(new Date(f.lastModified())));
             }
             h.tvMeta.setTextColor(textSecondary);
@@ -944,16 +967,6 @@ public class FileBrowserActivity extends AppCompatActivity {
                 return true;
             });
             h.tvHint.setOnClickListener(v -> showFileOperationsMenu(f));
-        }
-
-        private int resolveFileIcon(String name) {
-            String lower = name.toLowerCase(Locale.ROOT);
-            if (matchesExt(lower, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")) return R.drawable.ic_images;
-            if (matchesExt(lower, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) return R.drawable.ic_audio;
-            if (matchesExt(lower, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) return R.drawable.ic_video;
-            if (matchesExt(lower, ".apk", ".xapk")) return R.drawable.ic_apps;
-            if (matchesExt(lower, ".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx")) return R.drawable.ic_documents;
-            return R.drawable.ic_file_generic;
         }
 
         @Override
@@ -982,6 +995,9 @@ public class FileBrowserActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (miniAudioListener != null) {
+            AudioPlayerManager.getInstance().removeListener(miniAudioListener);
+        }
         executor.shutdownNow();
     }
 }

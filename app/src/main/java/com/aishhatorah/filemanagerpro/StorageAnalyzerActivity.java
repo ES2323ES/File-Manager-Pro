@@ -39,6 +39,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
     private TextView tvStatusSummary;
     private ProgressBar scanSpinner;
     private HeavyAdapter adapter;
+    private AudioPlayerManager.PlaybackListener miniAudioListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,7 +99,9 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         rv.setAdapter(adapter);
 
         root.addView(rv, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        miniAudioListener = MiniAudioBarHelper.attach(this, root);
 
         setContentView(root);
         runHeavyFilesScan();
@@ -230,6 +233,9 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
             h.tvHint.setText("⋮");
             h.tvHint.setTextColor(accent);
 
+            // סעיף ד: האייקון האמיתי של כל קובץ (שיר, תמונה, סרטון, אפליקציה או מסמך)
+            FileThumbnailLoader.bindFileIcon(StorageAnalyzerActivity.this, f, h.ivIcon);
+
             View.OnClickListener openMenu = v -> showHeavyFileActions(f);
             h.rowCard.setOnClickListener(openMenu);
             h.tvHint.setOnClickListener(openMenu);
@@ -242,6 +248,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
 
         class VH extends RecyclerView.ViewHolder {
             final CardView rowCard;
+            final ImageView ivIcon;
             final TextView tvName;
             final TextView tvMeta;
             final TextView tvHint;
@@ -249,12 +256,20 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
             VH(@NonNull View itemView) {
                 super(itemView);
                 rowCard = itemView.findViewById(R.id.rowCard);
+                ivIcon = itemView.findViewById(R.id.ivFileIcon);
                 tvName = itemView.findViewById(R.id.tvFileName);
                 tvMeta = itemView.findViewById(R.id.tvFileMeta);
                 tvHint = itemView.findViewById(R.id.tvFileActionHint);
-                ImageView iv = itemView.findViewById(R.id.ivFileIcon);
-                iv.setImageResource(R.drawable.ic_documents);
             }
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (miniAudioListener != null) {
+            AudioPlayerManager.getInstance().removeListener(miniAudioListener);
+        }
+        executor.shutdownNow();
     }
 }

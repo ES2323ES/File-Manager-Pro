@@ -43,21 +43,39 @@ public class StorageUtils {
 
     public static class CategoryBytesSummary {
         public long downloadsBytes = 0L;
+        public int downloadsCount = 0;
+
         public long imagesBytes = 0L;
+        public int imagesCount = 0;
+
         public long audioBytes = 0L;
+        public int audioCount = 0;
+
         public long videosBytes = 0L;
+        public int videosCount = 0;
+
         public long documentsBytes = 0L;
+        public int documentsCount = 0;
+
         public long appsBytes = 0L;
+        public int appsCount = 0;
+
         public long recentBytes = 0L;
+        public int recentCount = 0;
+
         public long recycleBinBytes = 0L;
+        public int recycleBinCount = 0;
     }
 
     public static CategoryBytesSummary computeCategorySizes(Context context, boolean includeHidden) {
         CategoryBytesSummary summary = new CategoryBytesSummary();
         summary.recycleBinBytes = RecycleBinManager.getTrashTotalBytes(context);
+        summary.recycleBinCount = RecycleBinManager.getTrashItemCount(context);
 
         File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        summary.downloadsBytes = computeDirectoryBytes(dl, includeHidden, 0);
+        long[] dlStats = computeDirectoryBytesAndCount(dl, includeHidden, 0);
+        summary.downloadsBytes = dlStats[0];
+        summary.downloadsCount = (int) dlStats[1];
 
         long recentCutoff = System.currentTimeMillis() - (7L * 24L * 3600L * 1000L);
         File root = Environment.getExternalStorageDirectory();
@@ -71,20 +89,28 @@ public class StorageUtils {
     }
 
     public static long computeDirectoryBytes(File dir, boolean includeHidden, int depth) {
-        if (dir == null || !dir.exists() || depth > 6) return 0L;
-        if (!dir.isDirectory()) return dir.length();
+        return computeDirectoryBytesAndCount(dir, includeHidden, depth)[0];
+    }
+
+    public static long[] computeDirectoryBytesAndCount(File dir, boolean includeHidden, int depth) {
+        if (dir == null || !dir.exists() || depth > 6) return new long[]{0L, 0L};
+        if (!dir.isDirectory()) return new long[]{dir.length(), 1L};
         File[] children = dir.listFiles();
-        if (children == null) return 0L;
-        long total = 0L;
+        if (children == null) return new long[]{0L, 0L};
+        long totalBytes = 0L;
+        long totalCount = 0L;
         for (File f : children) {
             if (!includeHidden && f.getName().startsWith(".")) continue;
             if (f.isDirectory()) {
-                total += computeDirectoryBytes(f, includeHidden, depth + 1);
+                long[] sub = computeDirectoryBytesAndCount(f, includeHidden, depth + 1);
+                totalBytes += sub[0];
+                totalCount += sub[1];
             } else {
-                total += f.length();
+                totalBytes += f.length();
+                totalCount += 1L;
             }
         }
-        return total;
+        return new long[]{totalBytes, totalCount};
     }
 
     private static void accumulateCategoryBytes(File dir, CategoryBytesSummary out, boolean includeHidden, long recentCutoff, int depth) {
@@ -104,17 +130,23 @@ public class StorageUtils {
                 String lower = f.getName().toLowerCase(Locale.ROOT);
                 if (endsWithAny(lower, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".bmp")) {
                     out.imagesBytes += len;
+                    out.imagesCount++;
                 } else if (endsWithAny(lower, ".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")) {
                     out.audioBytes += len;
+                    out.audioCount++;
                 } else if (endsWithAny(lower, ".mp4", ".mkv", ".mov", ".avi", ".webm", ".3gp")) {
                     out.videosBytes += len;
+                    out.videosCount++;
                 } else if (endsWithAny(lower, ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".csv", ".md")) {
                     out.documentsBytes += len;
+                    out.documentsCount++;
                 } else if (endsWithAny(lower, ".apk", ".xapk", ".apks")) {
                     out.appsBytes += len;
+                    out.appsCount++;
                 }
                 if (f.lastModified() >= recentCutoff) {
                     out.recentBytes += len;
+                    out.recentCount++;
                 }
             }
         }

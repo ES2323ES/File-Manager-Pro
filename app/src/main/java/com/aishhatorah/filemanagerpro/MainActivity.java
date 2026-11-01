@@ -199,15 +199,16 @@ public class MainActivity extends AppCompatActivity {
         btnOpenAnalyzerFromAlert.setOnClickListener(v ->
                 startActivity(new Intent(this, StorageAnalyzerActivity.class)));
 
-        // החלקה מלמעלה למטה לרענון הקבצים
+        // סעיף ז: החלקה מלמעלה למטה — העיגול מסתובב עד לסיום הסריקה האמיתית, ורק בסיומה מופיעה ההודעה "כל הקבצים רועננו בהצלחה"
         swipeRefreshHome.setColorSchemeColors(0xFF1D4ED8, 0xFF0284C7, 0xFF0D9488);
-        swipeRefreshHome.setOnRefreshListener(() -> {
-            applyCurrentThemeAndRefresh(true);
-            swipeRefreshHome.setRefreshing(false);
-        });
+        swipeRefreshHome.setOnRefreshListener(() -> applyCurrentThemeAndRefresh(true));
+
+        miniAudioListener = MiniAudioBarHelper.attach(this, rootContainer);
     }
 
-    private void applyCurrentThemeAndRefresh(boolean showToast) {
+    private AudioPlayerManager.PlaybackListener miniAudioListener;
+
+    private void applyCurrentThemeAndRefresh(boolean fromUserPullToRefresh) {
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
 
@@ -240,21 +241,27 @@ public class MainActivity extends AppCompatActivity {
 
         refreshStorageSummaryAnd96Alert();
         buildHomeGrid(cardBg, textPrimary, textSecondary);
-        refreshCategoryVolumesAsync();
-
-        if (showToast) {
-            Toast.makeText(this, "כל הקבצים והנפחים רועננו בהצלחה", Toast.LENGTH_SHORT).show();
+        if (miniAudioListener != null) {
+            miniAudioListener.onPlaybackStateChanged();
         }
+        refreshCategoryVolumesAsync(fromUserPullToRefresh);
     }
 
-    private void refreshCategoryVolumesAsync() {
+    private void refreshCategoryVolumesAsync(final boolean notifyWhenScanFinished) {
         final boolean showHidden = PrefsManager.isShowHidden(this);
         bgExecutor.execute(() -> {
             StorageUtils.CategoryBytesSummary fresh = StorageUtils.computeCategorySizes(this, showHidden);
             runOnUiThread(() -> {
                 cachedSizes = fresh;
                 for (Map.Entry<String, TextView> entry : subtitleViewsById.entrySet()) {
-                    entry.getValue().setText(getCategorySubtitle(entry.getKey()));
+                    String sub = getCategorySubtitle(entry.getKey());
+                    TextView tv = entry.getValue();
+                    tv.setText(sub);
+                    tv.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+                }
+                if (notifyWhenScanFinished) {
+                    swipeRefreshHome.setRefreshing(false);
+                    Toast.makeText(this, "כל הקבצים רועננו בהצלחה", Toast.LENGTH_SHORT).show();
                 }
             });
         });
@@ -324,8 +331,12 @@ public class MainActivity extends AppCompatActivity {
                 iv.setImageResource(item.iconRes);
                 tvTitle.setText(item.titleHe);
                 tvTitle.setTextColor(textPrimary);
-                tvSub.setText(getCategorySubtitle(item.id));
+
+                String sub = getCategorySubtitle(item.id);
+                tvSub.setText(sub);
                 tvSub.setTextColor(textSecondary);
+                tvSub.setTextDirection(View.TEXT_DIRECTION_LTR);
+                tvSub.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
                 subtitleViewsById.put(item.id, tvSub);
 
                 tile.setOnClickListener(v -> onCategoryClicked(item));
@@ -336,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // סעיפים כב, כג: הצגת הנפח שכל קטגוריה תופסת במקום "פתיחה", ו-"חותך אודיו מקצועי" / "חותך וידאו מקצועי"
+    // סעיפים ה + ו: משקל הקבצים + מספר הקבצים בסוגריים (למעט אחסון ראשי, כרטיס SD, חותך אודיו וחותך וידאו), והסרת המילה "מקצועי" באייקוני החותכים
     private String getCategorySubtitle(String id) {
         if (FileBrowserActivity.MODE_INTERNAL.equals(id)) {
             StorageUtils.StorageStat st = StorageUtils.getInternalStorageStat();
@@ -347,32 +358,35 @@ public class MainActivity extends AppCompatActivity {
             return sd.available ? StorageUtils.formatSize(sd.freeBytes) + " פנוי" : "לא מחובר";
         }
         if (FileBrowserActivity.MODE_DOWNLOADS.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.downloadsBytes);
+            return formatWeightWithCount(cachedSizes.downloadsBytes, cachedSizes.downloadsCount);
         }
         if (FileBrowserActivity.MODE_IMAGES.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.imagesBytes);
+            return formatWeightWithCount(cachedSizes.imagesBytes, cachedSizes.imagesCount);
         }
         if (FileBrowserActivity.MODE_AUDIO.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.audioBytes);
+            return formatWeightWithCount(cachedSizes.audioBytes, cachedSizes.audioCount);
         }
         if (FileBrowserActivity.MODE_VIDEOS.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.videosBytes);
+            return formatWeightWithCount(cachedSizes.videosBytes, cachedSizes.videosCount);
         }
         if (FileBrowserActivity.MODE_DOCUMENTS.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.documentsBytes);
+            return formatWeightWithCount(cachedSizes.documentsBytes, cachedSizes.documentsCount);
         }
         if (FileBrowserActivity.MODE_APPS.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.appsBytes);
+            return formatWeightWithCount(cachedSizes.appsBytes, cachedSizes.appsCount);
         }
         if (FileBrowserActivity.MODE_RECENT.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.recentBytes);
+            return formatWeightWithCount(cachedSizes.recentBytes, cachedSizes.recentCount);
         }
         if (FileBrowserActivity.MODE_RECYCLE_BIN.equals(id)) {
-            return StorageUtils.formatSize(cachedSizes.recycleBinBytes);
+            return formatWeightWithCount(cachedSizes.recycleBinBytes, cachedSizes.recycleBinCount);
         }
-        if ("TOOL_AUDIO_CUTTER".equals(id)) return "חותך אודיו מקצועי";
-        if ("TOOL_VIDEO_CUTTER".equals(id)) return "חותך וידאו מקצועי";
+        // סעיף ו: ללא "חותך אודיו מקצועי" וללא "חותך וידאו מקצועי" — הכותרת בלבד מציגה "חותך אודיו" ו-"חותך וידאו"
         return "";
+    }
+
+    private String formatWeightWithCount(long bytes, int count) {
+        return StorageUtils.formatSize(bytes) + " (" + count + ")";
     }
 
     private void onCategoryClicked(HomeCategory item) {
@@ -451,6 +465,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (miniAudioListener != null) {
+            AudioPlayerManager.getInstance().removeListener(miniAudioListener);
+        }
         bgExecutor.shutdownNow();
     }
 }

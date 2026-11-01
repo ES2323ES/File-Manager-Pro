@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">File Manager Pro</string>
-    <string name="app_version_display">גירסה 0.2.3</string>
+    <string name="app_version_display">גירסה 0.2.4</string>
     <string name="btn_about">אודות</string>
     <string name="btn_settings">הגדרות</string>
 
