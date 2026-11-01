@@ -58,11 +58,12 @@
                 android:textSize="11.5sp" />
         </LinearLayout>
 
-        <ImageButton
+        <ImageView
             android:id="@+id/btnNotifClose"
             android:layout_width="28dp"
             android:layout_height="28dp"
             android:background="@drawable/bg_notif_btn"
+            android:clickable="true"
             android:contentDescription="עצור"
             android:padding="5dp"
             android:scaleType="fitCenter"
@@ -89,7 +90,7 @@
 
         <ProgressBar
             android:id="@+id/pbNotifProgress"
-            style="?android:attr/progressBarStyleHorizontal"
+            style="@android:style/Widget.ProgressBar.Horizontal"
             android:layout_width="0dp"
             android:layout_height="5dp"
             android:layout_marginLeft="8dp"
@@ -119,33 +120,36 @@
         android:layoutDirection="ltr"
         android:orientation="horizontal">
 
-        <ImageButton
+        <ImageView
             android:id="@+id/btnNotifPrev"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:background="@drawable/bg_notif_btn"
+            android:clickable="true"
             android:contentDescription="הקודם"
             android:padding="9dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_skip_prev" />
 
-        <ImageButton
+        <ImageView
             android:id="@+id/btnNotifPlayPause"
             android:layout_width="46dp"
             android:layout_height="46dp"
             android:layout_marginLeft="22dp"
             android:layout_marginRight="22dp"
             android:background="@drawable/bg_notif_btn_primary"
+            android:clickable="true"
             android:contentDescription="השהה"
             android:padding="10dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_pause" />
 
-        <ImageButton
+        <ImageView
             android:id="@+id/btnNotifNext"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:background="@drawable/bg_notif_btn"
+            android:clickable="true"
             android:contentDescription="הבא"
             android:padding="9dp"
             android:scaleType="fitCenter"

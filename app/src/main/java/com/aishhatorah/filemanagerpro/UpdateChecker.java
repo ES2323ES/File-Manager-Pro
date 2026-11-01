@@ -1,6 +1,7 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.Intent;
@@ -11,6 +12,7 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -67,11 +69,7 @@ public class UpdateChecker {
         EXECUTOR.execute(() -> {
             try {
                 String apiUrl = "https://api.github.com/repos/" + repoSlug + "/releases/latest";
-                HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("Accept", "application/vnd.github+json");
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
+                HttpURLConnection conn = openRedirectAwareConnection(apiUrl, "application/vnd.github+json");
 
                 int status = conn.getResponseCode();
                 if (status != 200) {
@@ -107,7 +105,6 @@ public class UpdateChecker {
                 String apkUrl = null;
                 JSONArray assets = release.optJSONArray("assets");
                 if (assets != null) {
-                    // נעדיף את File-Manager-Pro.apk הקבוע במידה וקיים
                     for (int i = 0; i < assets.length(); i++) {
                         JSONObject asset = assets.getJSONObject(i);
                         String assetName = asset.optString("name", "");
@@ -155,11 +152,41 @@ public class UpdateChecker {
             } catch (Exception e) {
                 if (manualTrigger) {
                     MAIN.post(() -> Toast.makeText(activity,
-                            "שגיאה בבדיקת עדכונים: " + e.getMessage(),
+                            "לא ניתן להתחבר לשרת העדכונים כעת, בדוק חיבור אינטרנט",
                             Toast.LENGTH_LONG).show());
                 }
             }
         });
+    }
+
+    private static HttpURLConnection openRedirectAwareConnection(String urlStr, String acceptHeader) throws Exception {
+        String currentUrl = urlStr;
+        for (int hop = 0; hop < 6; hop++) {
+            HttpURLConnection conn = (HttpURLConnection) new URL(currentUrl).openConnection();
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", "FileManagerPro-Android/" + BuildConfig.VERSION_NAME);
+            if (acceptHeader != null) {
+                conn.setRequestProperty("Accept", acceptHeader);
+            }
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_MOVED_PERM
+                    || code == HttpURLConnection.HTTP_MOVED_TEMP
+                    || code == HttpURLConnection.HTTP_SEE_OTHER
+                    || code == 307
+                    || code == 308) {
+                String loc = conn.getHeaderField("Location");
+                conn.disconnect();
+                if (loc != null && !loc.isEmpty()) {
+                    currentUrl = new URL(new URL(currentUrl), loc).toString();
+                    continue;
+                }
+            }
+            return conn;
+        }
+        throw new IllegalStateException("Too many redirects");
     }
 
     public static String formatOfficialVer(String ver) {
@@ -233,7 +260,6 @@ public class UpdateChecker {
     private static void showUpdateAvailableDialog(Activity activity, String remoteVersion, List<String> bulletLines, String apkUrl, String htmlUrl) {
         int theme = PrefsManager.getThemeMode(activity);
         int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
         int accent = ThemeHelper.getAccentColor(theme);
         boolean isLight = theme == PrefsManager.THEME_LIGHT;
 
@@ -253,7 +279,6 @@ public class UpdateChecker {
         outer.setPadding(44, 42, 44, 36);
         outer.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
-        // באנר עליון בסגנון יומן השינויים
         LinearLayout heroBanner = new LinearLayout(activity);
         heroBanner.setOrientation(LinearLayout.VERTICAL);
         heroBanner.setGravity(Gravity.CENTER);
@@ -295,7 +320,6 @@ public class UpdateChecker {
         heroLp.bottomMargin = 20;
         outer.addView(heroBanner, heroLp);
 
-        // כרטיס פירוט השינויים המעוצב בדיוק כמו ביומן השינויים
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(30, 26, 30, 26);
@@ -359,7 +383,6 @@ public class UpdateChecker {
                 .setView(scroll)
                 .create();
 
-        // לחצן הורדה והתקנה ישירה בתוך האפליקציה
         Button btnDirectInstall = ThemedDialogHelper.createThemedButton(activity, "הורדה והתקנה ישירה", theme, true, false);
         btnDirectInstall.setGravity(Gravity.CENTER);
         btnDirectInstall.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
@@ -437,9 +460,11 @@ public class UpdateChecker {
 
         EXECUTOR.execute(() -> {
             try {
-                HttpURLConnection conn = (HttpURLConnection) new URL(apkUrl).openConnection();
-                conn.setInstanceFollowRedirects(true);
-                conn.connect();
+                HttpURLConnection conn = openRedirectAwareConnection(apkUrl, "application/octet-stream");
+                int respCode = conn.getResponseCode();
+                if (respCode != 200) {
+                    throw new IllegalStateException("HTTP " + respCode);
+                }
 
                 int fileLength = conn.getContentLength();
                 File outDir = activity.getExternalCacheDir() != null ? activity.getExternalCacheDir() : activity.getCacheDir();
@@ -464,14 +489,22 @@ public class UpdateChecker {
                     }
                 }
 
+                if (!apkFile.exists() || apkFile.length() < 100_000L) {
+                    throw new IllegalStateException("קובץ העדכון שירד אינו שלם");
+                }
+
                 MAIN.post(() -> {
-                    progressDialog.dismiss();
-                    installApkAutomatically(activity, apkFile);
+                    if (!activity.isFinishing()) {
+                        progressDialog.dismiss();
+                        installApkAutomatically(activity, apkFile);
+                    }
                 });
             } catch (Exception e) {
                 MAIN.post(() -> {
-                    progressDialog.dismiss();
-                    Toast.makeText(activity, "ההורדה נכשלה: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    if (!activity.isFinishing()) {
+                        progressDialog.dismiss();
+                    }
+                    Toast.makeText(activity, "ההורדה נכשלה — בדוק חיבור אינטרנט ונסה שוב", Toast.LENGTH_LONG).show();
                 });
             }
         });
@@ -479,7 +512,7 @@ public class UpdateChecker {
 
     /**
      * סעיף כב: התקנה עצמאית וישירה של העדכון מתוך האפליקציה עצמה באמצעות PackageInstaller.Session,
-     * כולל תמיכה מלאה ב-Android 12..15 (USER_ACTION_NOT_REQUIRED + PendingIntent מפורש עם Action).
+     * עם תמיכה מלאה ב-Android 12..15 (כולל MODE_BACKGROUND_ACTIVITY_START_ALLOWED ב-Android 14+ וגיבוי אוטומטי).
      */
     private static void installApkAutomatically(Activity activity, File apkFile) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -491,8 +524,6 @@ public class UpdateChecker {
                 return;
             }
         }
-
-        PrefsManager.setPendingUpdateSuccessBanner(activity, true);
 
         PackageInstaller packageInstaller = activity.getPackageManager().getPackageInstaller();
         int sessionId = -1;
@@ -525,12 +556,22 @@ public class UpdateChecker {
                 Intent callbackIntent = new Intent(activity, UpdateInstallReceiver.class);
                 callbackIntent.setAction(UpdateInstallReceiver.ACTION_SELF_UPDATE_COMMIT);
                 callbackIntent.setPackage(activity.getPackageName());
+                callbackIntent.putExtra(UpdateInstallReceiver.EXTRA_APK_FILE_PATH, apkFile.getAbsolutePath());
 
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     flags |= PendingIntent.FLAG_MUTABLE;
                 }
-                PendingIntent pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags);
+
+                PendingIntent pendingIntent;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    Bundle opts = ActivityOptions.makeBasic()
+                            .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                            .toBundle();
+                    pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags, opts);
+                } else {
+                    pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags);
+                }
                 session.commit(pendingIntent.getIntentSender());
                 return;
             }

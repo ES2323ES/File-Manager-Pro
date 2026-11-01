@@ -1,6 +1,7 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.Intent;
@@ -10,10 +11,12 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.view.View;
 import android.view.Window;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -65,7 +68,7 @@ public final class AppPackageInstaller {
         int theme = PrefsManager.getThemeMode(activity);
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setLayoutDirection( android.view.View.LAYOUT_DIRECTION_RTL );
+        box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         box.setPadding(52, 46, 52, 40);
         box.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
@@ -109,7 +112,7 @@ public final class AppPackageInstaller {
 
                 sessionId = packageInstaller.createSession(params);
                 try (PackageInstaller.Session session = packageInstaller.openSession(sessionId)) {
-                    int apkSplitsCount = 0;
+                    int apkSplitsCount;
 
                     if (!isBundle) {
                         try (InputStream in = new BufferedInputStream(new FileInputStream(packageFile));
@@ -130,17 +133,24 @@ public final class AppPackageInstaller {
                     callbackIntent.setAction(UpdateInstallReceiver.ACTION_EXTERNAL_APP_INSTALL);
                     callbackIntent.setPackage(activity.getPackageName());
                     callbackIntent.putExtra(UpdateInstallReceiver.EXTRA_APP_LABEL, packageFile.getName());
+                    if (!isBundle) {
+                        callbackIntent.putExtra(UpdateInstallReceiver.EXTRA_APK_FILE_PATH, packageFile.getAbsolutePath());
+                    }
 
                     int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         flags |= PendingIntent.FLAG_MUTABLE;
                     }
-                    PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                            activity,
-                            sessionId,
-                            callbackIntent,
-                            flags
-                    );
+
+                    PendingIntent pendingIntent;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        Bundle opts = ActivityOptions.makeBasic()
+                                .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                                .toBundle();
+                        pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags, opts);
+                    } else {
+                        pendingIntent = PendingIntent.getBroadcast(activity, sessionId, callbackIntent, flags);
+                    }
 
                     MAIN.post(dialog::dismiss);
                     session.commit(pendingIntent.getIntentSender());
@@ -155,7 +165,6 @@ public final class AppPackageInstaller {
                 MAIN.post(() -> {
                     dialog.dismiss();
                     if (!isBundle) {
-                        // גיבוי עבור APK בודד
                         try {
                             Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".fileprovider", packageFile);
                             Intent install = new Intent(Intent.ACTION_VIEW);
@@ -166,7 +175,7 @@ public final class AppPackageInstaller {
                         } catch (Exception ignored) {
                         }
                     }
-                    Toast.makeText(activity, "שגיאה בהתקנת החבילה: " + ex.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(activity, "לא ניתן היה להתקין את החבילה: " + packageFile.getName(), Toast.LENGTH_LONG).show();
                 });
             }
         });
@@ -194,7 +203,6 @@ public final class AppPackageInstaller {
                     }
                     apkCount++;
                 } else if (lower.endsWith(".obb")) {
-                    // תמיכה מלאה בחבילות XAPK הכוללות קובצי OBB נלווים
                     copyObbEntrySafely(entryName, zis);
                 }
                 zis.closeEntry();

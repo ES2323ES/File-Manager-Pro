@@ -258,6 +258,21 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent != null) {
+            setIntent(intent);
+            String newMode = intent.getStringExtra(EXTRA_MODE);
+            if (newMode != null) {
+                currentMode = newMode;
+            }
+            initInitialDirectory();
+            updateClipboardBar();
+            loadFilesForCurrentMode(false);
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         if (miniAudioListener != null) {

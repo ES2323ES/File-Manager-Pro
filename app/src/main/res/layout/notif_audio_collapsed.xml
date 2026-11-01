@@ -48,7 +48,7 @@
             <!-- פס התקדמות של השיר משמאל לימין -->
             <ProgressBar
                 android:id="@+id/pbNotifProgress"
-                style="?android:attr/progressBarStyleHorizontal"
+                style="@android:style/Widget.ProgressBar.Horizontal"
                 android:layout_width="match_parent"
                 android:layout_height="4dp"
                 android:layout_marginTop="5dp"
@@ -67,33 +67,36 @@
             android:layoutDirection="ltr"
             android:orientation="horizontal">
 
-            <ImageButton
+            <ImageView
                 android:id="@+id/btnNotifPrev"
                 android:layout_width="34dp"
                 android:layout_height="34dp"
                 android:background="@drawable/bg_notif_btn"
+                android:clickable="true"
                 android:contentDescription="הקודם"
                 android:padding="7dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_skip_prev" />
 
-            <ImageButton
+            <ImageView
                 android:id="@+id/btnNotifPlayPause"
                 android:layout_width="38dp"
                 android:layout_height="38dp"
                 android:layout_marginLeft="6dp"
                 android:layout_marginRight="6dp"
                 android:background="@drawable/bg_notif_btn_primary"
+                android:clickable="true"
                 android:contentDescription="השהה"
                 android:padding="8dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_pause" />
 
-            <ImageButton
+            <ImageView
                 android:id="@+id/btnNotifNext"
                 android:layout_width="34dp"
                 android:layout_height="34dp"
                 android:background="@drawable/bg_notif_btn"
+                android:clickable="true"
                 android:contentDescription="הבא"
                 android:padding="7dp"
                 android:scaleType="fitCenter"

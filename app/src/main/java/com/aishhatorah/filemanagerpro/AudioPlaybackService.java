@@ -39,6 +39,9 @@ public class AudioPlaybackService extends Service {
     public static final String ACTION_PREV = "com.aishhatorah.filemanagerpro.AUDIO_PREV";
     public static final String ACTION_STOP_SERVICE = "com.aishhatorah.filemanagerpro.AUDIO_STOP";
 
+    private String cachedArtPath = null;
+    private Bitmap cachedNotifThumb = null;
+
     private final Handler tickerHandler = new Handler(Looper.getMainLooper());
     private final Runnable progressTicker = new Runnable() {
         @Override
@@ -74,6 +77,7 @@ public class AudioPlaybackService extends Service {
 
         if (ACTION_STOP_SERVICE.equals(action)) {
             tickerHandler.removeCallbacks(progressTicker);
+            startForegroundSafely(buildNotification(mgr));
             mgr.stopAndDismiss(this);
             stopForeground(true);
             stopSelf();
@@ -88,6 +92,9 @@ public class AudioPlaybackService extends Service {
             mgr.playPrevious(this);
         }
 
+        Notification notification = buildNotification(mgr);
+        startForegroundSafely(notification);
+
         if (!mgr.hasActiveSession() || mgr.getCurrentFile() == null) {
             tickerHandler.removeCallbacks(progressTicker);
             stopForeground(true);
@@ -95,7 +102,17 @@ public class AudioPlaybackService extends Service {
             return START_NOT_STICKY;
         }
 
-        Notification notification = buildNotification(mgr);
+        tickerHandler.removeCallbacks(progressTicker);
+        if (mgr.isPlaying()) {
+            tickerHandler.postDelayed(progressTicker, 1000L);
+        } else {
+            stopForeground(false);
+        }
+
+        return START_NOT_STICKY;
+    }
+
+    private void startForegroundSafely(Notification notification) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
@@ -111,15 +128,6 @@ public class AudioPlaybackService extends Service {
                 }
             }
         }
-
-        tickerHandler.removeCallbacks(progressTicker);
-        if (mgr.isPlaying()) {
-            tickerHandler.postDelayed(progressTicker, 1000L);
-        } else {
-            stopForeground(false);
-        }
-
-        return START_NOT_STICKY;
     }
 
     private Notification buildNotification(AudioPlayerManager mgr) {
@@ -170,8 +178,8 @@ public class AudioPlaybackService extends Service {
         expanded.setOnClickPendingIntent(R.id.btnNotifNext, nextPi);
         expanded.setOnClickPendingIntent(R.id.btnNotifClose, stopPi);
 
-        if (artwork != null && !artwork.isRecycled()) {
-            Bitmap notifThumb = FileThumbnailLoader.createRoundedSquareBitmap(artwork, 160, 24f);
+        Bitmap notifThumb = resolveCachedNotifThumb(song, artwork);
+        if (notifThumb != null && !notifThumb.isRecycled()) {
             collapsed.setImageViewBitmap(R.id.ivNotifArt, notifThumb);
             expanded.setImageViewBitmap(R.id.ivNotifArt, notifThumb);
         } else {
@@ -180,7 +188,7 @@ public class AudioPlaybackService extends Service {
         }
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_app_logo)
+                .setSmallIcon(R.drawable.ic_audio)
                 .setContentTitle(songTitle)
                 .setContentText(formatClock(pos) + " / " + formatClock(dur))
                 .setCustomContentView(collapsed)
@@ -193,6 +201,21 @@ public class AudioPlaybackService extends Service {
                 .setPriority(NotificationCompat.PRIORITY_LOW);
 
         return builder.build();
+    }
+
+    private Bitmap resolveCachedNotifThumb(File song, Bitmap artwork) {
+        if (song == null || artwork == null || artwork.isRecycled()) {
+            cachedArtPath = null;
+            cachedNotifThumb = null;
+            return null;
+        }
+        String path = song.getAbsolutePath();
+        if (path.equals(cachedArtPath) && cachedNotifThumb != null && !cachedNotifThumb.isRecycled()) {
+            return cachedNotifThumb;
+        }
+        cachedArtPath = path;
+        cachedNotifThumb = FileThumbnailLoader.createRoundedSquareBitmap(artwork, 96, 18f);
+        return cachedNotifThumb;
     }
 
     private String formatClock(int ms) {
