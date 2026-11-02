@@ -200,10 +200,7 @@ public class AboutDialogHelper {
 
         scroll.addView(root);
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
+        ThemedDialogHelper.applyResponsiveDialogWindow(activity, dialog);
     }
 
     private static Button buildCenteredActionButton(Activity activity, String text, int bg, int fg, View.OnClickListener listener) {

@@ -31,7 +31,7 @@ public class ThemedDialogHelper {
         return Math.round(value * activity.getResources().getDisplayMetrics().density);
     }
 
-    private static void applyResponsiveDialogWindow(Activity activity, AlertDialog dialog) {
+    public static void applyResponsiveDialogWindow(Activity activity, AlertDialog dialog) {
         Window window = dialog.getWindow();
         if (window != null) {
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));

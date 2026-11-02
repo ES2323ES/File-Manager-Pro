@@ -201,7 +201,7 @@ public class ChangelogDialogHelper {
 
         scroll.addView(outer);
         dialog.show();
-        ThemedDialogHelper.applyResponsiveDialogWindow(dialog, activity);
+        ThemedDialogHelper.applyResponsiveDialogWindow(activity, dialog);
     }
 
     private static void appendRichBullet(
