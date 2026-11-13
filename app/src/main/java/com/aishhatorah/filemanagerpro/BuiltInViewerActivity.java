@@ -57,6 +57,7 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
+import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.AppCompatTextView;
 import androidx.cardview.widget.CardView;
@@ -64,10 +65,22 @@ import androidx.core.content.FileProvider;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.common.VideoSize;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.extractor.DefaultExtractorsFactory;
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 
 import com.google.android.material.button.MaterialButton;
 
 import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -130,15 +143,19 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean isVideoMode = false;
     private final List<File> videoPlaylist = new ArrayList<>();
     private int currentVideoIdx = 0;
+    private ExoPlayer exoPlayer;
     private MediaPlayer videoPlayer;
+    private Closeable legacyMediaSourceCloser;
     private Surface activeVideoSurface;
     private TextureView videoTextureView;
     private boolean videoPrepared = false;
     private boolean videoTickerActive = false;
     private int currentVideoWidth = 0;
     private int currentVideoHeight = 0;
+    private float currentVideoPixelRatio = 1.0f;
     private int knownVideoDurationMs = 0;
     private boolean isUserSeekingVideo = false;
+    private long lastLiveSeekUiMs = 0L;
     private boolean videoUsedFdFallback = false;
     private boolean speedModifiedFromDefault = false;
     private LinearLayout videoFallbackBar = null;
@@ -1653,13 +1670,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         };
 
         btnCenterPlayPause.setOnClickListener(v -> {
-            if (videoPlayer == null) {
+            if (exoPlayer == null && videoPlayer == null) {
                 loadVideoTrackAtIndex(currentVideoIdx, syncVidButtons);
                 return;
             }
             if (!videoPrepared) return;
             try {
-                if (isVideoPlayingSafely()) videoPlayer.pause();
+                if (isVideoPlayingSafely()) pauseVideoSafely();
                 else applyVideoSpeedInternal(true);
             } catch (Exception ignored) {
             }
@@ -1693,16 +1710,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         videoSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-                if (fromUser && videoPrepared && videoPlayer != null) {
+                if (fromUser && videoPrepared) {
                     tvVidPos.setText(formatClock(Math.max(0, progress)));
-                    try {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            videoPlayer.seekTo(progress, MediaPlayer.SEEK_CLOSEST_SYNC);
-                        } else {
-                            videoPlayer.seekTo(progress);
-                        }
-                    } catch (Exception ignored) {
-                        try { videoPlayer.seekTo(progress); } catch (Exception ignored2) {}
+                    long now = System.currentTimeMillis();
+                    if (now - lastLiveSeekUiMs >= 220L) {
+                        lastLiveSeekUiMs = now;
+                        seekVideoToMs(progress);
                     }
                 }
             }
@@ -1713,6 +1726,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             @Override
             public void onStopTrackingTouch(SeekBar sb) {
                 isUserSeekingVideo = false;
+                if (videoPrepared) {
+                    seekVideoToMs(sb.getProgress());
+                }
             }
         });
 
@@ -1740,10 +1756,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             @Override
             public void run() {
                 if (!videoTickerActive) return;
-                if (videoPrepared && videoPlayer != null) {
+                if (videoPrepared && (exoPlayer != null || videoPlayer != null)) {
                     try {
                         int dur = getEffectiveVideoDurationMs();
-                        int pos = Math.max(0, videoPlayer.getCurrentPosition());
+                        int pos = getCurrentVideoPositionMs();
                         if (dur > 0) {
                             videoSeek.setEnabled(true);
                             videoSeek.setMax(dur);
@@ -1772,7 +1788,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         int viewH = videoTextureView.getHeight();
         if (viewW <= 0 || viewH <= 0 || currentVideoWidth <= 0 || currentVideoHeight <= 0) return;
         float viewRatio = (float) viewW / (float) viewH;
-        float videoRatio = (float) currentVideoWidth / (float) currentVideoHeight;
+        float effectiveWidth = (float) currentVideoWidth * Math.max(0.1f, currentVideoPixelRatio);
+        float videoRatio = effectiveWidth / (float) currentVideoHeight;
         float scaleX = videoRatio > viewRatio ? 1.0f : videoRatio / viewRatio;
         float scaleY = videoRatio > viewRatio ? viewRatio / videoRatio : 1.0f;
 
@@ -1822,13 +1839,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.GONE);
         if (videoTextureView != null) videoTextureView.setKeepScreenOn(true);
 
-        startVideoMediaPlayer(nextFile, false, onReadyUi);
+        startVideoExoPlayer(nextFile, onReadyUi);
 
-        // קריאת משך זמן ורזולוציה מהמטא-דאטה ברקע עבור פורמטים שבהם MediaPlayer מחזיר משך 0
+        // קריאת משך זמן ומימדים מהמטא-דאטה ברקע (כולל תמיכה מלאה ב-.mts / .m2ts 192-byte)
         executor.execute(() -> {
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            Closeable tsDs = null;
             try {
-                mmr.setDataSource(nextFile.getAbsolutePath());
+                tsDs = MpegTsNormalizer.setMediaMetadataRetrieverSource(mmr, nextFile);
                 String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
                 if (durStr != null) {
                     int parsed = Integer.parseInt(durStr.trim());
@@ -1839,11 +1857,99 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             } catch (Throwable ignored) {
             } finally {
                 try { mmr.release(); } catch (Throwable ignored) {}
+                if (tsDs != null) {
+                    try { tsDs.close(); } catch (Throwable ignored) {}
+                }
             }
         });
     }
 
-    private void startVideoMediaPlayer(File nextFile, boolean useFileDescriptor, Runnable onReadyUi) {
+    @OptIn(markerClass = UnstableApi.class)
+    private void startVideoExoPlayer(File nextFile, Runnable onReadyUi) {
+        releaseVideoPlayer();
+        try {
+            DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory()
+                    .setConstantBitrateSeekingEnabled(true)
+                    .setConstantBitrateSeekingAlwaysEnabled(true)
+                    .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+                            | DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
+                    .setTsExtractorTimestampSearchBytes(2 * 1024 * 1024);
+
+            DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(
+                    new NormalizedTsExoDataSource.Factory(this), extractorsFactory);
+
+            DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+                    .setEnableDecoderFallback(true);
+
+            exoPlayer = new ExoPlayer.Builder(this, renderersFactory)
+                    .setMediaSourceFactory(mediaSourceFactory)
+                    .build();
+
+            androidx.media3.common.AudioAttributes media3AudioAttrs = new androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build();
+            exoPlayer.setAudioAttributes(media3AudioAttrs, true);
+            exoPlayer.setVideoSurface(activeVideoSurface);
+            exoPlayer.setVolume(videoMuted ? 0f : 1f);
+
+            exoPlayer.addListener(new Player.Listener() {
+                @Override
+                public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        currentVideoWidth = videoSize.width;
+                        currentVideoHeight = videoSize.height;
+                        currentVideoPixelRatio = videoSize.pixelWidthHeightRatio > 0f
+                                ? videoSize.pixelWidthHeightRatio : 1.0f;
+                        updateVideoAspectRatioMatrix();
+                    }
+                }
+
+                @Override
+                public void onPlaybackStateChanged(int playbackState) {
+                    if (exoPlayer == null) return;
+                    if (playbackState == Player.STATE_READY) {
+                        videoPrepared = true;
+                        long rawDur = exoPlayer.getDuration();
+                        if (rawDur > 0L && rawDur != C.TIME_UNSET) {
+                            knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, rawDur);
+                        }
+                        if (Math.abs(videoSpeed - 1.0f) >= 0.02f) {
+                            speedModifiedFromDefault = true;
+                            applyVideoSpeedInternal(exoPlayer.getPlayWhenReady());
+                        }
+                        if (onReadyUi != null) onReadyUi.run();
+                    } else if (playbackState == Player.STATE_ENDED) {
+                        if (videoRepeatMode == AudioPlayerManager.REPEAT_ONE) {
+                            exoPlayer.seekTo(0L);
+                            exoPlayer.play();
+                        } else if (videoRepeatMode == AudioPlayerManager.REPEAT_FOLDER && !videoPlaylist.isEmpty()) {
+                            currentVideoIdx = (currentVideoIdx + 1) % videoPlaylist.size();
+                            loadVideoTrackAtIndex(currentVideoIdx, onReadyUi);
+                        } else if (videoAutoNext && currentVideoIdx + 1 < videoPlaylist.size()) {
+                            currentVideoIdx++;
+                            loadVideoTrackAtIndex(currentVideoIdx, onReadyUi);
+                        } else if (onReadyUi != null) {
+                            onReadyUi.run();
+                        }
+                    }
+                }
+
+                @Override
+                public void onPlayerError(@NonNull PlaybackException error) {
+                    startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+                }
+            });
+
+            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(nextFile)));
+            exoPlayer.prepare();
+            exoPlayer.play();
+        } catch (Throwable t) {
+            startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+        }
+    }
+
+    private void startLegacyMediaPlayerFallback(File nextFile, boolean useFileDescriptor, Runnable onReadyUi) {
         releaseVideoPlayer();
         videoUsedFdFallback = useFileDescriptor;
         try {
@@ -1854,13 +1960,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
                         .build());
             }
-            if (useFileDescriptor) {
-                try (FileInputStream fis = new FileInputStream(nextFile)) {
-                    videoPlayer.setDataSource(fis.getFD());
-                }
-            } else {
-                videoPlayer.setDataSource(nextFile.getAbsolutePath());
-            }
+            legacyMediaSourceCloser = MpegTsNormalizer.setMediaPlayerSource(videoPlayer, nextFile, useFileDescriptor);
             videoPlayer.setSurface(activeVideoSurface);
             float vol = videoMuted ? 0f : 1f;
             videoPlayer.setVolume(vol, vol);
@@ -1868,6 +1968,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (width > 0 && height > 0) {
                     currentVideoWidth = width;
                     currentVideoHeight = height;
+                    currentVideoPixelRatio = 1.0f;
                     updateVideoAspectRatioMatrix();
                 }
             });
@@ -1878,6 +1979,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (rawDur > 0) knownVideoDurationMs = rawDur;
                 currentVideoWidth = mp.getVideoWidth();
                 currentVideoHeight = mp.getVideoHeight();
+                currentVideoPixelRatio = 1.0f;
                 updateVideoAspectRatioMatrix();
                 try {
                     mp.start();
@@ -1891,7 +1993,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             });
             videoPlayer.setOnErrorListener((mp, what, extra) -> {
                 if (!videoUsedFdFallback) {
-                    startVideoMediaPlayer(nextFile, true, onReadyUi);
+                    startLegacyMediaPlayerFallback(nextFile, true, onReadyUi);
                     return true;
                 }
                 videoPrepared = false;
@@ -1918,7 +2020,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             videoPlayer.prepareAsync();
         } catch (Exception e) {
             if (!useFileDescriptor) {
-                startVideoMediaPlayer(nextFile, true, onReadyUi);
+                startLegacyMediaPlayerFallback(nextFile, true, onReadyUi);
                 return;
             }
             videoPrepared = false;
@@ -1967,8 +2069,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         float w = Math.max(1f, viewport.getWidth());
                         float normX = e.getX() / w;
                         if (normX > 0.34f && normX < 0.66f) {
-                            if (videoPrepared && videoPlayer != null) {
-                                if (isVideoPlayingSafely()) videoPlayer.pause();
+                            if (videoPrepared && (exoPlayer != null || videoPlayer != null)) {
+                                if (isVideoPlayingSafely()) pauseVideoSafely();
                                 else applyVideoSpeedInternal(true);
                                 flashStatusBadge(badge, isVideoPlayingSafely() ? "▶ נגן" : "⏸ השהה");
                             }
@@ -1984,7 +2086,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                     @Override
                     public void onLongPress(MotionEvent e) {
-                        if (!videoPrepared || videoPlayer == null) return;
+                        if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
                         float w = Math.max(1f, viewport.getWidth());
                         float normX = e.getX() / w;
                         if (normX >= 0.62f) {
@@ -2141,8 +2243,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             break;
                         case 2:
                             videoMuted = !videoMuted;
+                            float vol = videoMuted ? 0f : 1f;
+                            if (exoPlayer != null) {
+                                exoPlayer.setVolume(vol);
+                            }
                             if (videoPlayer != null) {
-                                float vol = videoMuted ? 0f : 1f;
                                 videoPlayer.setVolume(vol, vol);
                             }
                             Toast.makeText(this, videoMuted ? "שמע הסרטון הושתק" : "שמע הסרטון הופעל", Toast.LENGTH_SHORT).show();
@@ -2367,6 +2472,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private boolean isVideoPlayingSafely() {
         try {
+            if (exoPlayer != null) {
+                return videoPrepared && exoPlayer.isPlaying();
+            }
             return videoPrepared && videoPlayer != null && videoPlayer.isPlaying();
         } catch (Exception e) {
             return false;
@@ -2375,12 +2483,27 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void pauseVideoSafely() {
         try {
+            if (exoPlayer != null) {
+                exoPlayer.pause();
+                return;
+            }
             if (isVideoPlayingSafely()) videoPlayer.pause();
         } catch (Exception ignored) {
         }
     }
 
     private int getEffectiveVideoDurationMs() {
+        if (exoPlayer != null) {
+            try {
+                long raw = exoPlayer.getDuration();
+                if (raw > 0L && raw != C.TIME_UNSET) {
+                    knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, raw);
+                    return knownVideoDurationMs;
+                }
+            } catch (Exception ignored) {
+            }
+            return knownVideoDurationMs;
+        }
         if (videoPlayer == null) return knownVideoDurationMs;
         try {
             int raw = videoPlayer.getDuration();
@@ -2393,28 +2516,71 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         return knownVideoDurationMs;
     }
 
-    private void seekVideoBy(int deltaMs) {
-        if (!videoPrepared || videoPlayer == null) return;
+    private int getCurrentVideoPositionMs() {
         try {
-            int dur = getEffectiveVideoDurationMs();
-            int cur = Math.max(0, videoPlayer.getCurrentPosition());
-            int next = dur > 0 ? Math.max(0, Math.min(dur, cur + deltaMs)) : Math.max(0, cur + deltaMs);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                videoPlayer.seekTo(next, MediaPlayer.SEEK_CLOSEST_SYNC);
-            } else {
-                videoPlayer.seekTo(next);
+            if (exoPlayer != null) {
+                return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, exoPlayer.getCurrentPosition()));
+            }
+            if (videoPlayer != null) {
+                return Math.max(0, videoPlayer.getCurrentPosition());
             }
         } catch (Exception ignored) {
+        }
+        return 0;
+    }
+
+    private void seekVideoToMs(int targetMs) {
+        int clamped = Math.max(0, targetMs);
+        if (exoPlayer != null) {
             try {
-                int next = Math.max(0, videoPlayer.getCurrentPosition() + deltaMs);
-                videoPlayer.seekTo(next);
-            } catch (Exception ignored2) {
+                exoPlayer.seekTo(clamped);
+            } catch (Exception ignored) {
             }
+            return;
+        }
+        if (videoPlayer == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                videoPlayer.seekTo(clamped, MediaPlayer.SEEK_CLOSEST_SYNC);
+            } else {
+                videoPlayer.seekTo(clamped);
+            }
+        } catch (Exception ignored) {
+            try { videoPlayer.seekTo(clamped); } catch (Exception ignored2) {}
+        }
+    }
+
+    private void seekVideoBy(int deltaMs) {
+        if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
+        try {
+            int dur = getEffectiveVideoDurationMs();
+            int cur = getCurrentVideoPositionMs();
+            int next = dur > 0 ? Math.max(0, Math.min(dur, cur + deltaMs)) : Math.max(0, cur + deltaMs);
+            seekVideoToMs(next);
+        } catch (Exception ignored) {
         }
     }
 
     private void applyVideoSpeedInternal(boolean shouldPlay) {
-        if (!videoPrepared || videoPlayer == null) return;
+        if (!videoPrepared) return;
+        if (exoPlayer != null) {
+            try {
+                if (!shouldPlay && exoPlayer.isPlaying()) {
+                    exoPlayer.pause();
+                } else if (shouldPlay && !exoPlayer.isPlaying()) {
+                    exoPlayer.play();
+                }
+                if (speedModifiedFromDefault || Math.abs(videoSpeed - 1.0f) >= 0.02f) {
+                    exoPlayer.setPlaybackSpeed(videoSpeed);
+                }
+            } catch (Throwable speedEx) {
+                videoSpeed = 1.0f;
+                speedModifiedFromDefault = false;
+                Toast.makeText(this, "שינוי מהירות אינו נתמך בפורמט וידאו זה", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+        if (videoPlayer == null) return;
         try {
             if (!shouldPlay && videoPlayer.isPlaying()) {
                 videoPlayer.pause();
@@ -2450,12 +2616,22 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         videoPrepared = false;
         currentVideoWidth = 0;
         currentVideoHeight = 0;
+        currentVideoPixelRatio = 1.0f;
         knownVideoDurationMs = 0;
         if (rewindPulseRunnable != null) uiHandler.removeCallbacks(rewindPulseRunnable);
+        if (exoPlayer != null) {
+            try { exoPlayer.stop(); } catch (Exception ignored) {}
+            try { exoPlayer.release(); } catch (Exception ignored) {}
+            exoPlayer = null;
+        }
         if (videoPlayer != null) {
             try { videoPlayer.stop(); } catch (Exception ignored) {}
             try { videoPlayer.release(); } catch (Exception ignored) {}
             videoPlayer = null;
+        }
+        if (legacyMediaSourceCloser != null) {
+            try { legacyMediaSourceCloser.close(); } catch (Exception ignored) {}
+            legacyMediaSourceCloser = null;
         }
     }
 

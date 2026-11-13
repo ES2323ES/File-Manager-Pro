@@ -24,6 +24,7 @@ import android.util.LruCache;
 import android.widget.ImageView;
 
 import java.io.BufferedInputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -182,8 +183,9 @@ public class FileThumbnailLoader {
 
             if (MediaFormatHelper.isVideoFile(lower)) {
                 MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+                Closeable normalizedDs = null;
                 try {
-                    retriever.setDataSource(path);
+                    normalizedDs = MpegTsNormalizer.setMediaMetadataRetrieverSource(retriever, file);
                     Bitmap frame = retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
                     if (frame == null) {
                         frame = retriever.getFrameAtTime();
@@ -196,6 +198,12 @@ public class FileThumbnailLoader {
                     try {
                         retriever.release();
                     } catch (Throwable ignored) {
+                    }
+                    if (normalizedDs != null) {
+                        try {
+                            normalizedDs.close();
+                        } catch (Throwable ignored) {
+                        }
                     }
                 }
                 return ThumbnailUtils.createVideoThumbnail(path, MediaStore.Images.Thumbnails.MINI_KIND);

@@ -81,8 +81,8 @@ public class ChangelogDialogHelper {
 
         // ===================== גירסה 0.2.9 רשמית =====================
         SpannableStringBuilder v29 = new SpannableStringBuilder();
-        appendBullet(v29, "תיקון שליטה מלאה בנגן הווידאו בכל הפורמטים והסרת העורך ממסך הצפייה: ", accent,
-                "שליטה תקינה בהפעלה, השהייה, גרירת ציר זמן והקפצה (±10 שניות) בכל פורמטי הווידאו (MKV/AVI/TS/MOV/WebM/MP4) כולל גיבוי משך מ-MediaMetadataRetriever ופתיחה חלופית בנגן מערכת בעת הצורך, לצד מסך צפייה נקי ללא כפתור עורך וידאו מיותר.", textPrimary);
+        appendBullet(v29, "מנוע וידאו Media3 ExoPlayer ותמיכה מלאה בקבצי MTS / M2TS (AVCHD): ", accent,
+                "שדרוג נגן הווידאו למנוע Media3 ExoPlayer עם מנרמל זרם 192-byte BDAV ללא קובץ זמני, סריקת PCR מורחבת לדילוג מדויק ומהיר, יחס תצוגה SAR נכון (16:9), תמונות ממוזערות גם ל-MTS, שליטה מלאה בכל הפורמטים (MTS/M2TS/TS/MKV/AVI/MOV/WebM/MP4) ומסך צפייה נקי ללא כפתור עורך מיותר.", textPrimary);
         appendBullet(v29, "\n\nטעינה מיידית בכל הקטגוריות (פי 50–100 מהר יותר): ", accent,
                 "מנוע אינדוקס מהיר מבוסס MediaStore SQLite עם שמירת מטמון מלא של הקטגוריות, חישוב מטא-דאטה מקדים למיון מהיר וביטול סריקות כפולות בחזרה למסך.", textPrimary);
         appendBullet(v29, "\n\nתיקון ניסוח הודעת 'האפליקציה מעודכנת': ", accent,
