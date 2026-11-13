@@ -19,7 +19,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
@@ -49,8 +48,7 @@ public class VideoCutterActivity extends AppCompatActivity {
     private VideoView videoView;
     private TextView tvSelectedVideo;
     private TextView tvVideoRange;
-    private SeekBar seekStart;
-    private SeekBar seekEnd;
+    private RangeWaveformTrimView rangeTrimView;
     private Button btnCutVideo;
     private Button btnShareCutVideo;
 
@@ -61,10 +59,11 @@ public class VideoCutterActivity extends AppCompatActivity {
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
 
-        int bg = ThemeHelper.getBgColor(theme);
-        int cardBg = ThemeHelper.getCardColor(theme);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
+        int bg = ThemeHelper.getBgColor(this, theme);
+        int cardBg = ThemeHelper.getCardColor(this, theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(this, theme);
+        int accent = ThemeHelper.getAccentColor(this, theme);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -74,7 +73,7 @@ public class VideoCutterActivity extends AppCompatActivity {
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
+        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
         topBar.setPadding(24, 22, 24, 22);
 
         Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
@@ -82,8 +81,8 @@ public class VideoCutterActivity extends AppCompatActivity {
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("חותך וידאו מקצועי");
-        tvTitle.setTextSize(18f);
+        tvTitle.setText("חותך וידאו");
+        tvTitle.setTextSize(17.5f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -94,13 +93,13 @@ public class VideoCutterActivity extends AppCompatActivity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(32, 28, 32, 32);
+        body.setPadding(28, 28, 28, 28);
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(32, 32, 32, 32);
+        card.setPadding(28, 28, 28, 28);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(30f);
+        shape.setCornerRadius(24f);
         shape.setColor(cardBg);
         card.setBackground(shape);
 
@@ -114,10 +113,10 @@ public class VideoCutterActivity extends AppCompatActivity {
         videoView = new VideoView(this);
         LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 460);
-        vLp.topMargin = 20;
+        vLp.topMargin = 16;
         card.addView(videoView, vLp);
 
-        Button btnPick = createButton("בחירת סרטון מהמכשיר (MP4)", Color.parseColor("#1D4ED8"), v -> {
+        Button btnPick = createButton("בחירת סרטון מהמכשיר (MP4)", accent, v -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             pick.addCategory(Intent.CATEGORY_OPENABLE);
             pick.setType("video/*");
@@ -128,45 +127,29 @@ public class VideoCutterActivity extends AppCompatActivity {
         tvVideoRange = new TextView(this);
         tvVideoRange.setText("התחלה: 00:00  •  סיום: 00:00");
         tvVideoRange.setTextColor(textSecondary);
-        tvVideoRange.setPadding(0, 22, 0, 12);
+        tvVideoRange.setPadding(0, 22, 0, 10);
         card.addView(tvVideoRange);
 
-        seekStart = new SeekBar(this);
-        seekStart.setMax(1000);
-        seekStart.setEnabled(false);
-        card.addView(seekStart);
-
-        seekEnd = new SeekBar(this);
-        seekEnd.setMax(1000);
-        seekEnd.setProgress(1000);
-        seekEnd.setEnabled(false);
-        card.addView(seekEnd);
-
-        SeekBar.OnSeekBarChangeListener listener = new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
-                if (durationMs <= 0) return;
-                startMs = (seekStart.getProgress() * durationMs) / 1000L;
-                endMs = (seekEnd.getProgress() * durationMs) / 1000L;
-                if (endMs <= startMs + 1000) endMs = Math.min(durationMs, startMs + 1000);
-                if (fromUser && sb == seekStart) {
-                    videoView.seekTo((int) startMs);
-                }
-                tvVideoRange.setText(String.format(Locale.US, "התחלה: %02d:%02d  •  סיום: %02d:%02d",
-                        (startMs / 1000) / 60, (startMs / 1000) % 60,
-                        (endMs / 1000) / 60, (endMs / 1000) % 60));
+        // סעיף 36: פס חיתוך משולב ונוח
+        rangeTrimView = new RangeWaveformTrimView(this);
+        rangeTrimView.setAccentColor(accent);
+        rangeTrimView.setEnabled(false);
+        rangeTrimView.setOnRangeChangedListener((s, e, movingStart) -> {
+            startMs = s;
+            endMs = e;
+            if (movingStart) {
+                try { videoView.seekTo((int) startMs); } catch (Exception ignored) {}
             }
-            @Override public void onStartTrackingTouch(SeekBar sb) {}
-            @Override public void onStopTrackingTouch(SeekBar sb) {}
-        };
-        seekStart.setOnSeekBarChangeListener(listener);
-        seekEnd.setOnSeekBarChangeListener(listener);
+            tvVideoRange.setText(String.format(Locale.US, "התחלה: %02d:%02d  •  סיום: %02d:%02d",
+                    (startMs / 1000) / 60, (startMs / 1000) % 60,
+                    (endMs / 1000) / 60, (endMs / 1000) % 60));
+        });
+        card.addView(rangeTrimView);
 
         btnCutVideo = createButton("חתוך סרטון ושמור לתיקיית הסרטונים", Color.parseColor("#0284C7"), v -> executeVideoCut());
         btnCutVideo.setEnabled(false);
         card.addView(btnCutVideo);
 
-        // סעיף כד: שיתוף הסרטון שנחתך ישירות מחותך הוידאו
         btnShareCutVideo = createButton("שיתוף הסרטון שנחתך", Color.parseColor("#0D9488"), v -> {
             if (lastCutVideoFile != null && lastCutVideoFile.exists()) {
                 shareVideoFile(lastCutVideoFile);
@@ -201,14 +184,14 @@ public class VideoCutterActivity extends AppCompatActivity {
         b.setTextColor(Color.WHITE);
         b.setTypeface(Typeface.DEFAULT_BOLD);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(22f);
+        shape.setCornerRadius(18f);
         shape.setColor(bgColor);
         b.setBackground(shape);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = 18;
+        lp.topMargin = 16;
         b.setLayoutParams(lp);
-        b.setPadding(24, 24, 24, 24);
+        b.setPadding(22, 22, 22, 22);
         b.setOnClickListener(l);
         return b;
     }
@@ -231,11 +214,9 @@ public class VideoCutterActivity extends AppCompatActivity {
             mmr.release();
 
             startMs = 0;
-            endMs = durationMs;
-            seekStart.setEnabled(true);
-            seekEnd.setEnabled(true);
-            seekStart.setProgress(0);
-            seekEnd.setProgress(1000);
+            endMs = Math.max(500L, durationMs);
+            rangeTrimView.setEnabled(true);
+            rangeTrimView.setDurationAndRange(durationMs, startMs, endMs);
             btnCutVideo.setEnabled(true);
 
             tvSelectedVideo.setText("סרטון נבחר: " + (displayName != null ? displayName : uri.toString()));
@@ -319,8 +300,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                     ThemedDialogHelper.showCustomDialog(
                             this,
                             "הסרטון נחתך ונשמר בהצלחה",
-                            "הסרטון החתוך נשמר בתיקיית הסרטונים:\n" + finalOut.getName() +
-                                    "\n\nתוכל לשתף את הסרטון שנחתך כעת:",
+                            "הסרטון החתוך נשמר בתיקיית הסרטונים:\n" + finalOut.getName(),
                             null,
                             "שיתוף הסרטון שנחתך",
                             () -> shareVideoFile(finalOut),
@@ -336,9 +316,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                 });
             } finally {
                 try { extractor.release(); } catch (Exception ignored) {}
-                if (muxer != null) {
-                    try { muxer.release(); } catch (Exception ignored) {}
-                }
+                if (muxer != null) try { muxer.release(); } catch (Exception ignored) {}
             }
         });
     }

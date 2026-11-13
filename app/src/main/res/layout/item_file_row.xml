@@ -4,30 +4,28 @@
     android:id="@+id/rowCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginStart="8dp"
-    android:layout_marginTop="4dp"
-    android:layout_marginEnd="8dp"
-    android:layout_marginBottom="4dp"
+    android:layout_marginStart="6dp"
+    android:layout_marginTop="3dp"
+    android:layout_marginEnd="6dp"
+    android:layout_marginBottom="3dp"
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
     app:cardCornerRadius="12dp"
     app:cardElevation="0dp">
 
-    <!-- סעיף יב: פריסת LTR מפורשת כך שסימון התיקייה/קובץ תמיד מצד שמאל ושלוש הנקודות תמיד מצד ימין -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:layoutDirection="ltr"
         android:orientation="horizontal"
-        android:padding="12dp">
+        android:padding="11dp">
 
-        <!-- צד שמאל: לחיצה על האייקון פותחת את אפשרויות העריכה של הקובץ או התיקייה (סעיף ח) -->
         <ImageView
             android:id="@+id/ivFileIcon"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:contentDescription="אפשרויות עריכה"
@@ -36,12 +34,11 @@
             android:scaleType="fitCenter"
             android:src="@drawable/ic_file_generic" />
 
-        <!-- מרכז וימין: שם הפריט במלואו גם בשורות נוספות במידת הצורך (סעיף ו) -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="12dp"
-            android:layout_marginRight="4dp"
+            android:layout_marginStart="11dp"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
             android:gravity="right"
             android:orientation="vertical">
@@ -53,7 +50,7 @@
                 android:gravity="right"
                 android:lineSpacingExtra="2dp"
                 android:textDirection="anyRtl"
-                android:textSize="14sp"
+                android:textSize="13.5sp"
                 android:textStyle="bold" />
 
             <TextView

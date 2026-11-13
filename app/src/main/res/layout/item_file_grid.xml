@@ -4,26 +4,25 @@
     android:id="@+id/rowCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_margin="5dp"
+    android:layout_margin="4dp"
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    app:cardCornerRadius="16dp"
-    app:cardElevation="1dp">
+    app:cardCornerRadius="13dp"
+    app:cardElevation="0dp">
 
-    <!-- סעיף ח: תצוגת רשת זהה בעיצובה לאריחי המסך הראשי (אייקון ממורכז למעלה, שם מתחתיו ומידע בתחתית) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:minHeight="108dp"
+        android:minHeight="104dp"
         android:orientation="vertical"
         android:padding="8dp">
 
         <ImageView
             android:id="@+id/ivFileIcon"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:contentDescription="אפשרויות עריכה"
@@ -36,13 +35,13 @@
             android:id="@+id/tvFileName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="7dp"
+            android:layout_marginTop="6dp"
             android:ellipsize="end"
             android:gravity="center"
             android:maxLines="2"
             android:textAlignment="center"
             android:textDirection="anyRtl"
-            android:textSize="12.5sp"
+            android:textSize="12sp"
             android:textStyle="bold" />
 
         <TextView
@@ -50,11 +49,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:ellipsize="marquee"
+            android:ellipsize="end"
             android:gravity="center"
-            android:marqueeRepeatLimit="marquee_forever"
-            android:scrollHorizontally="true"
-            android:singleLine="true"
+            android:maxLines="1"
             android:textAlignment="center"
             android:textDirection="anyRtl"
             android:textSize="10.5sp" />

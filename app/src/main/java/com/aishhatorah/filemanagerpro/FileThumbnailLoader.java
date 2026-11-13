@@ -36,12 +36,13 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * סעיפים ד, ט, יא, יב: טוען אייקונים ותמונות ממוזערות עבור כל סוגי הקבצים:
- * - תמונות מכל הפורמטים (כולל HEIC / HEIF / AVIF / WEBP דרך ImageDecoder)
+ * סעיפים ד, ט, יא, יב, 2, 23, 40, 41:
+ * טוען אייקונים ותמונות ממוזערות עבור כל סוגי הקבצים:
+ * - תמונות מכל הפורמטים (כולל GIF, HEIC, AVIF, WEBP, ICO; SVG ללא קריסה)
  * - עטיפת אלבום מוטמעת לכל פורמטי השמע
  * - פריים מקדים לכל פורמטי הוידאו
  * - אייקון אפליקציה מקורי עבור APK וכן לחבילות APKS / APKM / XAPK
- * - אייקונים מותאמים ייחודיים לקובצי ZIP ולקובצי טקסט (סעיף יא)
+ * - אייקונים ייחודיים לארכיונים (ZIP/TAR/GZ), לקוד תכנות, לגיבויי .bak ולטקסט
  */
 public class FileThumbnailLoader {
 
@@ -49,7 +50,7 @@ public class FileThumbnailLoader {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     private static final LruCache<String, Bitmap> BITMAP_CACHE = new LruCache<String, Bitmap>(
-            (int) (Runtime.getRuntime().maxMemory() / 1024 / 8)) {
+            (int) Math.max(4096, Runtime.getRuntime().maxMemory() / 1024 / 8)) {
         @Override
         protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getByteCount() / 1024);
@@ -100,9 +101,9 @@ public class FileThumbnailLoader {
 
         final Context appCtx = context.getApplicationContext();
         THUMB_EXECUTOR.execute(() -> {
-            Bitmap extracted = extractRealFileBitmap(appCtx, file, nameLower, 256);
+            Bitmap extracted = extractRealFileBitmap(appCtx, file, nameLower, 224);
             if (extracted != null) {
-                Bitmap rounded = createRoundedSquareBitmap(extracted, 256, 34f);
+                Bitmap rounded = createRoundedSquareBitmap(extracted, 224, 30f);
                 BITMAP_CACHE.put(cacheKey, rounded);
                 MAIN_HANDLER.post(() -> {
                     if (cacheKey.equals(targetView.getTag())) {
@@ -134,11 +135,11 @@ public class FileThumbnailLoader {
                 decodeOpts.inSampleSize = sample;
                 return BitmapFactory.decodeByteArray(artBytes, 0, artBytes.length, decodeOpts);
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         } finally {
             try {
                 retriever.release();
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
         }
         return null;
@@ -147,6 +148,9 @@ public class FileThumbnailLoader {
     private static Bitmap extractRealFileBitmap(Context context, File file, String lower, int sizePx) {
         String path = file.getAbsolutePath();
         try {
+            if (MediaFormatHelper.isSvgFile(lower)) {
+                return null; // SVG משתמש באייקון הוקטור המותאם
+            }
             if (MediaFormatHelper.isImageFile(lower)) {
                 BitmapFactory.Options bounds = new BitmapFactory.Options();
                 bounds.inJustDecodeBounds = true;
@@ -187,11 +191,11 @@ public class FileThumbnailLoader {
                     if (frame != null) {
                         return ThumbnailUtils.extractThumbnail(frame, sizePx, sizePx);
                     }
-                } catch (Exception ignored) {
+                } catch (Throwable ignored) {
                 } finally {
                     try {
                         retriever.release();
-                    } catch (Exception ignored) {
+                    } catch (Throwable ignored) {
                     }
                 }
                 return ThumbnailUtils.createVideoThumbnail(path, MediaStore.Images.Thumbnails.MINI_KIND);
@@ -202,7 +206,7 @@ public class FileThumbnailLoader {
                 if (directApkIcon != null) return directApkIcon;
                 return extractBundleIcon(context, file, sizePx);
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         }
         return null;
     }
@@ -220,7 +224,7 @@ public class FileThumbnailLoader {
                     return drawableToBitmap(iconDrawable, sizePx);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         }
         return null;
     }
@@ -247,7 +251,7 @@ public class FileThumbnailLoader {
             if (tempBaseApk != null) {
                 return extractApkArchiveIcon(context, tempBaseApk.getAbsolutePath(), sizePx);
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         } finally {
             if (tempBaseApk != null) {
                 //noinspection ResultOfMethodCallIgnored
@@ -285,7 +289,6 @@ public class FileThumbnailLoader {
         return output;
     }
 
-    // סעיף יא: אייקונים ייחודיים מותאמים לקובצי ZIP ולקובצי טקסט!
     public static int resolveFallbackDrawable(String lower) {
         if (MediaFormatHelper.isImageFile(lower)) return R.drawable.ic_images;
         if (MediaFormatHelper.isAudioFile(lower)) return R.drawable.ic_audio;
@@ -294,6 +297,12 @@ public class FileThumbnailLoader {
         if (MediaFormatHelper.isZipOrArchiveFile(lower)
                 || endsWithAny(lower, ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz")) {
             return R.drawable.ic_zip_archive;
+        }
+        if (MediaFormatHelper.isBackupFile(lower)) {
+            return R.drawable.ic_text_file;
+        }
+        if (MediaFormatHelper.isCodeOrSyntaxFile(lower)) {
+            return R.drawable.ic_code;
         }
         if (MediaFormatHelper.isTextFile(lower)) {
             return R.drawable.ic_text_file;
@@ -305,6 +314,7 @@ public class FileThumbnailLoader {
     }
 
     private static boolean supportsRealIconExtraction(String lower) {
+        if (MediaFormatHelper.isSvgFile(lower)) return false;
         return MediaFormatHelper.isImageFile(lower)
                 || MediaFormatHelper.isAudioFile(lower)
                 || MediaFormatHelper.isVideoFile(lower)

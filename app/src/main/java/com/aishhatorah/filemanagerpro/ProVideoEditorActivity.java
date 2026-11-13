@@ -24,7 +24,6 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -42,9 +41,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * סעיף טו: עורך וידאו מקצועי מובנה באפליקציה
- * כולל חיתוך התחלה/סיום מדויק, סיבוב כיוון הסרטון (90°/180°/270°), השתקת ערוץ השמע,
- * בדיקת מהירות ניגון בתצוגה המקדימה, ייצוא MP4 מהיר ושיתוף ישיר.
+ * סעיף 36 + 9: עורך וידאו מקצועי עם פס חיתוך משולב ואפשרות ייצוא ל-GIF.
  */
 public class ProVideoEditorActivity extends AppCompatActivity {
 
@@ -63,6 +60,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     private float previewSpeed = 1.0f;
 
     private TextView tvRangeSummary;
+    private RangeWaveformTrimView rangeTrimView;
     private Button btnExport;
     private Button btnShareOutput;
     private File lastExportedFile = null;
@@ -85,21 +83,20 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
-        int bgColor = ThemeHelper.getBgColor(theme);
-        int cardColor = ThemeHelper.getCardColor(theme);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
+        int bgColor = ThemeHelper.getBgColor(this, theme);
+        int cardColor = ThemeHelper.getCardColor(this, theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        int accent = ThemeHelper.getAccentColor(this, theme);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(bgColor);
 
-        // סרגל עליון
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
+        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
         topBar.setPadding(24, 20, 24, 20);
 
         Button btnClose = ThemedDialogHelper.createThemedButton(this, "סגור", theme, false, false);
@@ -123,7 +120,6 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         root.addView(topBar);
 
-        // תצוגה מקדימה של הסרטון
         FrameLayout previewBox = new FrameLayout(this);
         previewBox.setBackgroundColor(Color.BLACK);
         textureView = new TextureView(this);
@@ -132,7 +128,6 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         root.addView(previewBox, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // כלי עריכה למטה
         ScrollView toolsScroll = new ScrollView(this);
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.VERTICAL);
@@ -143,75 +138,36 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         tvRangeSummary.setTextColor(textPrimary);
         tvRangeSummary.setTextSize(13.5f);
         tvRangeSummary.setTypeface(Typeface.DEFAULT_BOLD);
-        tvRangeSummary.setPadding(0, 0, 0, 14);
+        tvRangeSummary.setPadding(0, 0, 0, 12);
         tools.addView(tvRangeSummary);
 
-        TextView tvStartLbl = new TextView(this);
-        tvStartLbl.setText("נקודת התחלה:");
-        tvStartLbl.setTextColor(textSecondary);
-        tvStartLbl.setTextSize(12f);
-        tools.addView(tvStartLbl);
-
-        final SeekBar sbStart = new SeekBar(this);
-        sbStart.setMax(1000);
-        sbStart.setProgress(0);
-        tools.addView(sbStart);
-
-        TextView tvEndLbl = new TextView(this);
-        tvEndLbl.setText("נקודת סיום:");
-        tvEndLbl.setTextColor(textSecondary);
-        tvEndLbl.setTextSize(12f);
-        tvEndLbl.setPadding(0, 10, 0, 0);
-        tools.addView(tvEndLbl);
-
-        final SeekBar sbEnd = new SeekBar(this);
-        sbEnd.setMax(1000);
-        sbEnd.setProgress(1000);
-        tools.addView(sbEnd);
-
-        SeekBar.OnSeekBarChangeListener rangeListener = new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (!fromUser) return;
-                int s = (int) ((sbStart.getProgress() / 1000.0) * durationMs);
-                int e = (int) ((sbEnd.getProgress() / 1000.0) * durationMs);
-                if (e <= s + 500) {
-                    e = Math.min(durationMs, s + 500);
-                }
-                trimStartMs = s;
-                trimEndMs = e;
-                updateSummaryLabel();
-                if (previewPlayer != null) {
-                    try {
-                        previewPlayer.seekTo(trimStartMs);
-                    } catch (Exception ignored) {
-                    }
-                }
+        rangeTrimView = new RangeWaveformTrimView(this);
+        rangeTrimView.setAccentColor(accent);
+        rangeTrimView.setOnRangeChangedListener((s, e, movingStart) -> {
+            trimStartMs = (int) s;
+            trimEndMs = (int) e;
+            updateSummaryLabel();
+            if (previewPlayer != null && movingStart) {
+                try { previewPlayer.seekTo(trimStartMs); } catch (Exception ignored) {}
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        };
-        sbStart.setOnSeekBarChangeListener(rangeListener);
-        sbEnd.setOnSeekBarChangeListener(rangeListener);
+        });
+        tools.addView(rangeTrimView);
 
-        // שורת פעולות: הפעל/השהה, סיבוב כיוון 90°, מהירות תצוגה מקדימה
         HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
         chipsScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout chipsRow = new LinearLayout(this);
         chipsRow.setOrientation(LinearLayout.HORIZONTAL);
-        chipsRow.setPadding(0, 18, 0, 12);
+        chipsRow.setPadding(0, 16, 0, 10);
 
         addChip(chipsRow, "נגן / השהה מקטע", theme, () -> {
             if (previewPlayer == null) return;
             try {
-                if (previewPlayer.isPlaying()) {
-                    previewPlayer.pause();
-                } else {
+                if (previewPlayer.isPlaying()) previewPlayer.pause();
+                else {
                     previewPlayer.seekTo(trimStartMs);
                     previewPlayer.start();
                 }
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) {}
         });
 
         addChip(chipsRow, "סובב כיוון 90°", theme, () -> {
@@ -219,6 +175,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
             textureView.setRotation(rotationDegrees);
             updateSummaryLabel();
         });
+
+        addChip(chipsRow, "ייצא כ-GIF מונפש", theme, this::exportAsGif);
 
         float[] speeds = {0.5f, 1.0f, 1.5f, 2.0f};
         for (float sp : speeds) {
@@ -230,8 +188,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                         if (p == null) p = new PlaybackParams();
                         p.setSpeed(previewSpeed);
                         previewPlayer.setPlaybackParams(p);
-                    } catch (Exception ignored) {
-                    }
+                    } catch (Exception ignored) {}
                 }
                 updateSummaryLabel();
             });
@@ -240,14 +197,13 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         chipsScroll.addView(chipsRow);
         tools.addView(chipsScroll);
 
-        // מתג השתקת שמע הסרטון
         LinearLayout muteRow = new LinearLayout(this);
         muteRow.setOrientation(LinearLayout.HORIZONTAL);
         muteRow.setGravity(Gravity.CENTER_VERTICAL);
         muteRow.setPadding(0, 10, 0, 10);
 
         TextView tvMute = new TextView(this);
-        tvMute.setText("הסר ערוץ שמע (ייצוא סרטון מושתק ללא קול)");
+        tvMute.setText("הסר ערוץ שמע (ייצוא מושתק)");
         tvMute.setTextColor(textPrimary);
         tvMute.setTextSize(13f);
         tvMute.setTypeface(Typeface.DEFAULT_BOLD);
@@ -266,7 +222,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         muteRow.addView(swMute);
         tools.addView(muteRow);
 
-        btnShareOutput = ThemedDialogHelper.createThemedButton(this, "שיתוף הסרטון הערוך", theme, false, false);
+        btnShareOutput = ThemedDialogHelper.createThemedButton(this, "שיתוף הקובץ הערוך", theme, false, false);
         LinearLayout.LayoutParams shLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         shLp.topMargin = 14;
@@ -277,10 +233,10 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 try {
                     Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", lastExportedFile);
                     Intent share = new Intent(Intent.ACTION_SEND);
-                    share.setType("video/*");
+                    share.setType(lastExportedFile.getName().endsWith(".gif") ? "image/gif" : "video/*");
                     share.putExtra(Intent.EXTRA_STREAM, uri);
                     share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivity(Intent.createChooser(share, "שיתוף סרטון ערוך"));
+                    startActivity(Intent.createChooser(share, "שיתוף קובץ ערוך"));
                 } catch (Exception e) {
                     Toast.makeText(this, "שגיאה בשיתוף: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -290,7 +246,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         toolsScroll.addView(tools);
         root.addView(toolsScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 660));
+                ViewGroup.LayoutParams.MATCH_PARENT, 620));
 
         setContentView(root);
         setupTexturePreview();
@@ -321,6 +277,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                     durationMs = Math.max(1000, previewPlayer.getDuration());
                     trimStartMs = 0;
                     trimEndMs = durationMs;
+                    rangeTrimView.setDurationAndRange(durationMs, trimStartMs, trimEndMs);
                     updateSummaryLabel();
                     previewPlayer.start();
                 } catch (Exception e) {
@@ -346,6 +303,28 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     private String formatClock(int ms) {
         int sec = Math.max(0, ms / 1000);
         return String.format(Locale.US, "%02d:%02d", sec / 60, sec % 60);
+    }
+
+    private void exportAsGif() {
+        Toast.makeText(this, "מייצא GIF מונפש...", Toast.LENGTH_SHORT).show();
+        executor.execute(() -> {
+            try {
+                File outDir = sourceVideo.getParentFile();
+                if (outDir == null || !outDir.canWrite()) {
+                    outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+                }
+                String base = sourceVideo.getName().replaceAll("\\.[^.]+$", "");
+                File outGif = StorageUtils.uniqueDestinationFile(outDir, base + ".gif");
+                GifToolsHelper.videoToGif(this, sourceVideo, outGif, 420, 10);
+                runOnUiThread(() -> {
+                    lastExportedFile = outGif;
+                    btnShareOutput.setVisibility(View.VISIBLE);
+                    Toast.makeText(this, "ה-GIF נשמר: " + outGif.getName(), Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "שגיאה ביצירת GIF: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
     }
 
     private void exportEditedVideo() {
@@ -431,9 +410,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 });
             } finally {
                 try { extractor.release(); } catch (Exception ignored) {}
-                if (muxer != null) {
-                    try { muxer.release(); } catch (Exception ignored) {}
-                }
+                if (muxer != null) try { muxer.release(); } catch (Exception ignored) {}
             }
         });
     }

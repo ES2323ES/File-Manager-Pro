@@ -84,6 +84,78 @@ public final class AppPackageInstaller {
     private AppPackageInstaller() {
     }
 
+    /**
+     * סעיפים 15, 16: הצגת פרטי חבילת ההתקנה לפני התקנה + אפשרויות "התקן", "הצג מקור ה-APK" (בסגנון MT Manager)
+     * ו"צפה בתוכן הארכיון".
+     */
+    public static void inspectAndInstall(Activity activity, File packageFile) {
+        if (activity == null || packageFile == null || !packageFile.exists()) return;
+        INSTALL_EXEC.execute(() -> {
+            PackageManager pm = activity.getPackageManager();
+            String label = packageFile.getName();
+            String pkgName = "לא מזוהה (חבילה מפוצלת / ארכיון)";
+            String verName = "לא צוין";
+            long verCode = 0L;
+            String installedText = "לא מותקנת במכשיר";
+
+            PackageInfo info = getArchivePackageInfoCompat(pm, packageFile.getAbsolutePath());
+            if (info != null && info.packageName != null) {
+                pkgName = info.packageName;
+                verName = (info.versionName != null && !info.versionName.trim().isEmpty())
+                        ? info.versionName.trim() : "לא צוין";
+                verCode = getVersionCodeCompat(info);
+                try {
+                    if (info.applicationInfo != null) {
+                        info.applicationInfo.sourceDir = packageFile.getAbsolutePath();
+                        info.applicationInfo.publicSourceDir = packageFile.getAbsolutePath();
+                        CharSequence cs = info.applicationInfo.loadLabel(pm);
+                        if (cs != null && cs.length() > 0) label = cs.toString();
+                    }
+                } catch (Exception ignored) {
+                }
+                InstalledAppDetails installed = queryInstalledAppDetails(activity, pkgName);
+                if (installed != null) {
+                    installedText = installed.versionName + " (קוד " + installed.versionCode + ")";
+                }
+            }
+
+            final String fLabel = label;
+            final String fPkg = pkgName;
+            final String fVer = verName + (verCode > 0 ? " (" + verCode + ")" : "");
+            final String fInstalled = installedText;
+
+            MAIN.post(() -> {
+                if (activity.isFinishing() || activity.isDestroyed()) return;
+                String msg = "שם אפליקציה: " + fLabel
+                        + "\nשם חבילה: " + fPkg
+                        + "\nגירסה בקובץ: " + fVer
+                        + "\nגירסה מותקנת כעת: " + fInstalled
+                        + "\nנפח קובץ: " + StorageUtils.formatSize(packageFile.length());
+
+                int theme = PrefsManager.getThemeMode(activity);
+                Button btnViewSource = ThemedDialogHelper.createThemedButton(
+                        activity, "הצג מקור ה-APK (Manifest / DEX)", theme, false, false);
+                btnViewSource.setOnClickListener(v -> {
+                    Intent i = new Intent(activity, ApkSourceInspectorActivity.class);
+                    i.putExtra(ApkSourceInspectorActivity.EXTRA_APK_PATH, packageFile.getAbsolutePath());
+                    activity.startActivity(i);
+                });
+
+                ThemedDialogHelper.showCustomDialog(
+                        activity,
+                        "מנהל התקנת אפליקציה",
+                        msg,
+                        btnViewSource,
+                        "התקן",
+                        () -> installAnyPackage(activity, packageFile),
+                        "סגור",
+                        null,
+                        false
+                );
+            });
+        });
+    }
+
     public static void installAnyPackage(Activity activity, File packageFile) {
         if (activity == null || packageFile == null || !packageFile.exists()) return;
 
@@ -133,6 +205,7 @@ public final class AppPackageInstaller {
                         return;
                     }
                     cleanupStagingDir(failedPlan);
+                    AppLogger.error(activity, "Installer", "Install failed for " + packageFile.getName(), ex);
                     Toast.makeText(activity, "לא ניתן היה להתקין את החבילה: " + packageFile.getName() + " (" + ex.getMessage() + ")", Toast.LENGTH_LONG).show();
                 });
             }

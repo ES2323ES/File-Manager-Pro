@@ -2,6 +2,7 @@ package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -19,7 +20,8 @@ import android.widget.TextView;
 import java.util.List;
 
 /**
- * סעיף ז: התאמה אוטומטית מלאה של כלל הדיאלוגים והתפריטים לכל גודלי המסכים (מסכים קטנים, טלפונים רגילים, מתקפלים וטאבלטים)
+ * סעיפים ז, 3, 6, 7, 8: התאמה אוטומטית מלאה לכל גודלי המסכים, תמיכה בגודל תצוגה מדורג,
+ * ערכות נושא דינאמיות (כולל שחור עמוק / מערכת / צבע מותאם), ועיצוב מינימליסטי נקי.
  */
 public class ThemedDialogHelper {
 
@@ -43,12 +45,15 @@ public class ThemedDialogHelper {
     }
 
     public static GradientDrawable createDialogBackground(int theme) {
+        return createDialogBackground(null, theme);
+    }
+
+    public static GradientDrawable createDialogBackground(Context context, int theme) {
         GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(36f);
-        bg.setColor(ThemeHelper.getCardColor(theme));
-        int accent = ThemeHelper.getAccentColor(theme);
-        int strokeAlpha = theme == PrefsManager.THEME_NEON ? 150 : 65;
-        bg.setStroke(2, Color.argb(strokeAlpha, Color.red(accent), Color.green(accent), Color.blue(accent)));
+        bg.setCornerRadius(28f);
+        bg.setColor(ThemeHelper.getCardColor(context, theme));
+        int divider = ThemeHelper.getDividerColor(context, theme);
+        bg.setStroke(2, divider);
         return bg;
     }
 
@@ -56,12 +61,12 @@ public class ThemedDialogHelper {
         Button btn = new Button(activity);
         btn.setText(text);
         btn.setAllCaps(false);
-        btn.setTextSize(13.5f);
+        btn.setTextSize(ThemeHelper.spScaled(activity, 13.5f));
         btn.setTypeface(Typeface.DEFAULT_BOLD);
 
-        int accent = ThemeHelper.getAccentColor(theme);
+        int accent = ThemeHelper.getAccentColor(activity, theme);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(activity, 11));
+        shape.setCornerRadius(dp(activity, 10));
 
         if (destructive) {
             int danger = Color.parseColor("#DC2626");
@@ -69,21 +74,15 @@ public class ThemedDialogHelper {
                 shape.setColor(danger);
                 btn.setTextColor(Color.WHITE);
             } else {
-                shape.setColor(Color.argb(28, 220, 38, 38));
+                shape.setColor(Color.argb(24, 220, 38, 38));
                 shape.setStroke(Math.max(2, dp(activity, 1)), danger);
-                btn.setTextColor(theme == PrefsManager.THEME_LIGHT ? danger : Color.parseColor("#F87171"));
+                btn.setTextColor(ThemeHelper.isDarkSurface(activity, theme) ? Color.parseColor("#F87171") : danger);
             }
         } else if (filledPrimary) {
-            if (theme == PrefsManager.THEME_NEON) {
-                shape.setColor(Color.parseColor("#00B4D8"));
-                shape.setStroke(Math.max(2, dp(activity, 1)), accent);
-                btn.setTextColor(Color.parseColor("#030712"));
-            } else {
-                shape.setColor(accent);
-                btn.setTextColor(Color.WHITE);
-            }
+            shape.setColor(accent);
+            btn.setTextColor(theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE);
         } else {
-            shape.setColor(Color.argb(theme == PrefsManager.THEME_LIGHT ? 22 : 38,
+            shape.setColor(Color.argb(ThemeHelper.isDarkSurface(activity, theme) ? 28 : 16,
                     Color.red(accent), Color.green(accent), Color.blue(accent)));
             shape.setStroke(Math.max(2, dp(activity, 1)), accent);
             btn.setTextColor(accent);
@@ -108,9 +107,8 @@ public class ThemedDialogHelper {
             boolean destructivePositive
     ) {
         int theme = PrefsManager.getThemeMode(activity);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
@@ -121,13 +119,13 @@ public class ThemedDialogHelper {
         int hPad = dp(activity, 18);
         int vPad = dp(activity, 16);
         outer.setPadding(hPad, vPad, hPad, dp(activity, 14));
-        outer.setBackground(createDialogBackground(theme));
+        outer.setBackground(createDialogBackground(activity, theme));
 
         if (title != null && !title.isEmpty()) {
             TextView tvTitle = new TextView(activity);
             tvTitle.setText(title);
-            tvTitle.setTextColor(theme == PrefsManager.THEME_NEON ? accent : textPrimary);
-            tvTitle.setTextSize(16.5f);
+            tvTitle.setTextColor(textPrimary);
+            tvTitle.setTextSize(ThemeHelper.spScaled(activity, 16f));
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
             tvTitle.setPadding(0, 0, 0, dp(activity, 8));
             outer.addView(tvTitle);
@@ -137,7 +135,7 @@ public class ThemedDialogHelper {
             TextView tvMsg = new TextView(activity);
             tvMsg.setText(message);
             tvMsg.setTextColor(textSecondary);
-            tvMsg.setTextSize(13.5f);
+            tvMsg.setTextSize(ThemeHelper.spScaled(activity, 13.5f));
             tvMsg.setLineSpacing(dp(activity, 2), 1.15f);
             tvMsg.setPadding(0, 0, 0, dp(activity, 12));
             outer.addView(tvMsg);
@@ -202,9 +200,11 @@ public class ThemedDialogHelper {
             MenuSelectionListener listener
     ) {
         int theme = PrefsManager.getThemeMode(activity);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
+        int divider = ThemeHelper.getDividerColor(activity, theme);
+        int bgSubtle = ThemeHelper.getBgColor(activity, theme);
+        boolean dark = ThemeHelper.isDarkSurface(activity, theme);
 
         ScrollView scroll = new ScrollView(activity);
         LinearLayout outer = new LinearLayout(activity);
@@ -212,12 +212,12 @@ public class ThemedDialogHelper {
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         int hPad = dp(activity, 17);
         outer.setPadding(hPad, dp(activity, 16), hPad, dp(activity, 14));
-        outer.setBackground(createDialogBackground(theme));
+        outer.setBackground(createDialogBackground(activity, theme));
 
         TextView tvTitle = new TextView(activity);
         tvTitle.setText(title);
-        tvTitle.setTextColor(theme == PrefsManager.THEME_NEON ? accent : textPrimary);
-        tvTitle.setTextSize(16f);
+        tvTitle.setTextColor(textPrimary);
+        tvTitle.setTextSize(ThemeHelper.spScaled(activity, 15.5f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         outer.addView(tvTitle);
 
@@ -225,7 +225,7 @@ public class ThemedDialogHelper {
             TextView tvSub = new TextView(activity);
             tvSub.setText(subtitle);
             tvSub.setTextColor(textSecondary);
-            tvSub.setTextSize(12f);
+            tvSub.setTextSize(ThemeHelper.spScaled(activity, 12f));
             tvSub.setPadding(0, dp(activity, 3), 0, dp(activity, 9));
             outer.addView(tvSub);
         } else {
@@ -246,21 +246,17 @@ public class ThemedDialogHelper {
             itemBtn.setAllCaps(false);
             itemBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             itemBtn.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
-            itemBtn.setTextSize(13.5f);
+            itemBtn.setTextSize(ThemeHelper.spScaled(activity, 13.5f));
             itemBtn.setTypeface(Typeface.DEFAULT_BOLD);
             itemBtn.setTextColor(isDanger
-                    ? (theme == PrefsManager.THEME_LIGHT ? Color.parseColor("#DC2626") : Color.parseColor("#F87171"))
+                    ? (dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626"))
                     : textPrimary);
 
             GradientDrawable itemShape = new GradientDrawable();
             itemShape.setCornerRadius(dp(activity, 10));
-            int rowBg = theme == PrefsManager.THEME_LIGHT
-                    ? Color.parseColor("#F1F5F9")
-                    : (theme == PrefsManager.THEME_NEON ? Color.parseColor("#111D42") : Color.parseColor("#0F172A"));
-            itemShape.setColor(rowBg);
-            itemShape.setStroke(Math.max(2, dp(activity, 1)), isDanger
-                    ? Color.argb(90, 220, 38, 38)
-                    : Color.argb(55, Color.red(accent), Color.green(accent), Color.blue(accent)));
+            itemShape.setColor(bgSubtle);
+            itemShape.setStroke(Math.max(1, dp(activity, 1)),
+                    isDanger ? Color.argb(90, 220, 38, 38) : divider);
             itemBtn.setBackground(itemShape);
             itemBtn.setMinHeight(0);
             itemBtn.setMinimumHeight(0);

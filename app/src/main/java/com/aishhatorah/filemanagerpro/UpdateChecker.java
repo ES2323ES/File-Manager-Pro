@@ -1,7 +1,6 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
-import android.app.ActivityOptions;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.Intent;
@@ -12,7 +11,6 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -45,7 +43,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -54,6 +51,10 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * סעיף 1 + 35: בודק ומתקין עדכונים ישירות מ-GitHub תוך תמיכה מלאה בסינון אינטרנט (נטפרי)
+ * באמצעות GitHubTrustHelper המוגבל אך ורק לדומיינים הרשמיים של GitHub, ועיצוב נקי ומתקפל.
+ */
 public class UpdateChecker {
 
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
@@ -63,16 +64,17 @@ public class UpdateChecker {
     public static void checkForUpdates(Activity activity, boolean manualTrigger) {
         final String repoSlug = PrefsManager.getGithubRepo(activity);
         if (manualTrigger) {
-            Toast.makeText(activity, "בודק עידכונים זמינים...", Toast.LENGTH_SHORT).show();
+            Toast.makeText(activity, "בודק עדכונים זמינים...", Toast.LENGTH_SHORT).show();
         }
 
         EXECUTOR.execute(() -> {
             try {
                 String apiUrl = "https://api.github.com/repos/" + repoSlug + "/releases/latest";
-                HttpURLConnection conn = openRedirectAwareConnection(apiUrl, "application/vnd.github+json");
+                HttpURLConnection conn = GitHubTrustHelper.openRedirectAwareConnection(apiUrl, "application/vnd.github+json");
 
                 int status = conn.getResponseCode();
                 if (status != 200) {
+                    AppLogger.warn(activity, "Updater", "GitHub API returned status " + status);
                     if (manualTrigger) {
                         MAIN.post(() -> ThemedDialogHelper.showCustomDialog(
                                 activity,
@@ -150,6 +152,7 @@ public class UpdateChecker {
                     }
                 });
             } catch (Exception e) {
+                AppLogger.warn(activity, "Updater", "Update check error: " + e.getMessage());
                 if (manualTrigger) {
                     MAIN.post(() -> Toast.makeText(activity,
                             "לא ניתן להתחבר לשרת העדכונים כעת, בדוק חיבור אינטרנט",
@@ -157,36 +160,6 @@ public class UpdateChecker {
                 }
             }
         });
-    }
-
-    private static HttpURLConnection openRedirectAwareConnection(String urlStr, String acceptHeader) throws Exception {
-        String currentUrl = urlStr;
-        for (int hop = 0; hop < 6; hop++) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(currentUrl).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", "FileManagerPro-Android/" + BuildConfig.VERSION_NAME);
-            if (acceptHeader != null) {
-                conn.setRequestProperty("Accept", acceptHeader);
-            }
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(20000);
-            int code = conn.getResponseCode();
-            if (code == HttpURLConnection.HTTP_MOVED_PERM
-                    || code == HttpURLConnection.HTTP_MOVED_TEMP
-                    || code == HttpURLConnection.HTTP_SEE_OTHER
-                    || code == 307
-                    || code == 308) {
-                String loc = conn.getHeaderField("Location");
-                conn.disconnect();
-                if (loc != null && !loc.isEmpty()) {
-                    currentUrl = new URL(new URL(currentUrl), loc).toString();
-                    continue;
-                }
-            }
-            return conn;
-        }
-        throw new IllegalStateException("Too many redirects");
     }
 
     public static String formatOfficialVer(String ver) {
@@ -199,9 +172,7 @@ public class UpdateChecker {
         for (String src : sources) {
             if (src == null) continue;
             Matcher m = SEMVER_PATTERN.matcher(src);
-            if (m.find()) {
-                return m.group(1);
-            }
+            if (m.find()) return m.group(1);
         }
         return null;
     }
@@ -212,23 +183,18 @@ public class UpdateChecker {
             String[] lines = rawMarkdown.split("\n");
             for (String raw : lines) {
                 String line = raw.trim();
-                if (line.isEmpty()) continue;
-                if (line.startsWith("#")) continue;
+                if (line.isEmpty() || line.startsWith("#")) continue;
                 if (line.contains("SHA-256") || line.contains("File-Manager-Pro") || line.contains("Source.zip")) continue;
                 if (line.contains("הורדה ישירה") || line.contains("פרטים טכניים") || line.contains("פיתוח והנדסה") || line.contains("מפתח:")) continue;
                 line = line.replace("**", "").replace("`", "").trim();
                 if (line.startsWith("• ")) line = line.substring(2).trim();
                 else if (line.startsWith("- ")) line = line.substring(2).trim();
                 else if (line.startsWith("* ")) line = line.substring(2).trim();
-                if (!line.isEmpty()) {
-                    items.add(line);
-                }
+                if (!line.isEmpty()) items.add(line);
             }
         }
         if (items.isEmpty()) {
-            items.add("תצוגת מדיה נקייה ומסך מלא: הקשה על וידאו או תמונה מציגה אותם בלבד ללא אופציות, ובסיבוב מסך הוידאו מוצג במסך מלא ללא מעיכה.");
-            items.add("דפדוף בתמונות והגדלה עמוקה: מעבר קדימה ואחורה בין תמונות בתיקייה, הגדלה עד פי 25 ותצוגה צלולה וברורה מאוד.");
-            items.add("תצוגת רשת מתוקנת, פס הרצה בימין והתקנת APKX / APK+: רשת בסגנון המסך הראשי, פס גלילה בימין והתראה על גירסה חדשה מותקנת.");
+            items.add("שדרוגים מקצועיים בביצועים, ממשק נקי, תמיכה בארכיונים ועריכת קוד, נגני מדיה מלאים ועוד.");
         }
         return items;
     }
@@ -253,142 +219,111 @@ public class UpdateChecker {
         }
     }
 
-    /**
-     * סעיף כג: הודעת עדכון מעוצבת בדיוק בסגנון יומן השינויים (כרטיס מהודר עם נקודות ◆ צבעוניות ומודגשות)
-     * ולמטה לחצן "הורדה והתקנה ישירה" המבצע הורדה והתקנה עצמאית בתוך האפליקציה!
-     */
     private static void showUpdateAvailableDialog(Activity activity, String remoteVersion, List<String> bulletLines, String apkUrl, String htmlUrl) {
         int theme = PrefsManager.getThemeMode(activity);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
-        boolean isLight = theme == PrefsManager.THEME_LIGHT;
-
-        int[] palette = new int[]{
-                isLight ? Color.parseColor("#1D4ED8") : Color.parseColor("#60A5FA"),
-                isLight ? Color.parseColor("#047857") : Color.parseColor("#34D399"),
-                isLight ? Color.parseColor("#6D28D9") : Color.parseColor("#C084FC"),
-                isLight ? Color.parseColor("#B45309") : Color.parseColor("#FBBF24"),
-                isLight ? Color.parseColor("#BE123C") : Color.parseColor("#FB7185"),
-                isLight ? Color.parseColor("#0E7490") : Color.parseColor("#22D3EE")
-        };
+        int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+        int accent = ThemeHelper.getAccentColor(activity, theme);
 
         ScrollView scroll = new ScrollView(activity);
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        outer.setPadding(44, 42, 44, 36);
+        outer.setPadding(42, 40, 42, 34);
         outer.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
         LinearLayout heroBanner = new LinearLayout(activity);
         heroBanner.setOrientation(LinearLayout.VERTICAL);
         heroBanner.setGravity(Gravity.CENTER);
-        heroBanner.setPadding(28, 26, 28, 26);
-        GradientDrawable heroShape = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.parseColor("#1E3A8A"), Color.parseColor("#4C1D95"), Color.parseColor("#0F766E")}
-        );
-        heroShape.setCornerRadius(28f);
+        heroBanner.setPadding(24, 24, 24, 24);
+        GradientDrawable heroShape = new GradientDrawable();
+        heroShape.setCornerRadius(24f);
+        heroShape.setColor(accent);
         heroBanner.setBackground(heroShape);
 
         ImageView heroIcon = new ImageView(activity);
         heroIcon.setImageResource(R.drawable.ic_app_logo);
-        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(96, 96);
-        icLp.bottomMargin = 12;
+        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(88, 88);
+        icLp.bottomMargin = 10;
         heroBanner.addView(heroIcon, icLp);
 
         TextView tvHeroTitle = new TextView(activity);
         tvHeroTitle.setText("גירסה " + formatOfficialVer(remoteVersion) + " זמינה");
         tvHeroTitle.setTextColor(Color.WHITE);
-        tvHeroTitle.setTextSize(17f);
+        tvHeroTitle.setTextSize(16.5f);
         tvHeroTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvHeroTitle.setGravity(Gravity.CENTER);
-        tvHeroTitle.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         heroBanner.addView(tvHeroTitle);
-
-        TextView tvHeroSub = new TextView(activity);
-        tvHeroSub.setText("File Manager Pro");
-        tvHeroSub.setTextColor(Color.parseColor("#E0E7FF"));
-        tvHeroSub.setTextSize(13f);
-        tvHeroSub.setTypeface(Typeface.DEFAULT_BOLD);
-        tvHeroSub.setGravity(Gravity.CENTER);
-        tvHeroSub.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        tvHeroSub.setPadding(0, 4, 0, 0);
-        heroBanner.addView(tvHeroSub);
 
         LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        heroLp.bottomMargin = 20;
+        heroLp.bottomMargin = 16;
         outer.addView(heroBanner, heroLp);
 
+        // כרטיס מתקפל עם פירוט מה חדש
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(30, 26, 30, 26);
-
+        card.setPadding(24, 20, 24, 20);
         GradientDrawable cardShape = new GradientDrawable();
-        cardShape.setCornerRadius(26f);
-        int innerBg = isLight
-                ? Color.parseColor("#F8FAFC")
-                : (theme == PrefsManager.THEME_NEON ? Color.parseColor("#071029") : Color.parseColor("#0F172A"));
-        cardShape.setColor(innerBg);
-        cardShape.setStroke(3, Color.argb(115, Color.red(accent), Color.green(accent), Color.blue(accent)));
+        cardShape.setCornerRadius(20f);
+        cardShape.setColor(ThemeHelper.getCardColor(activity, theme));
+        cardShape.setStroke(2, ThemeHelper.getDividerColor(activity, theme));
         card.setBackground(cardShape);
 
+        LinearLayout headerRow = new LinearLayout(activity);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+
         TextView tvCardHeader = new TextView(activity);
-        tvCardHeader.setText("מה התחדש בגירסה " + formatOfficialVer(remoteVersion) + ":");
+        tvCardHeader.setText("מה חדש בגירסה " + formatOfficialVer(remoteVersion));
         tvCardHeader.setTextColor(accent);
-        tvCardHeader.setTextSize(14.5f);
+        tvCardHeader.setTextSize(14f);
         tvCardHeader.setTypeface(Typeface.DEFAULT_BOLD);
-        tvCardHeader.setPadding(0, 0, 0, 14);
-        card.addView(tvCardHeader);
+        headerRow.addView(tvCardHeader, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView tvToggle = new TextView(activity);
+        tvToggle.setText("הסתר ▾");
+        tvToggle.setTextColor(ThemeHelper.getSecondaryTextColor(activity, theme));
+        tvToggle.setTextSize(12.5f);
+        headerRow.addView(tvToggle);
+        card.addView(headerRow);
 
         SpannableStringBuilder richNotes = new SpannableStringBuilder();
         for (int i = 0; i < bulletLines.size(); i++) {
             if (i > 0) richNotes.append("\n\n");
             String line = bulletLines.get(i);
-            int color = palette[i % palette.length];
-            int colonIdx = line.indexOf(':');
-            if (colonIdx > 0 && colonIdx < 45) {
-                String lead = "◆ " + line.substring(0, colonIdx + 1) + " ";
-                String rest = line.substring(colonIdx + 1).trim();
-                int s = richNotes.length();
-                richNotes.append(lead);
-                richNotes.setSpan(new StyleSpan(Typeface.BOLD), s, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                richNotes.setSpan(new ForegroundColorSpan(color), s, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                int b = richNotes.length();
-                richNotes.append(rest);
-                richNotes.setSpan(new ForegroundColorSpan(textPrimary), b, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            } else {
-                int s = richNotes.length();
-                richNotes.append("◆ ");
-                richNotes.setSpan(new StyleSpan(Typeface.BOLD), s, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                richNotes.setSpan(new ForegroundColorSpan(color), s, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                int b = richNotes.length();
-                richNotes.append(line);
-                richNotes.setSpan(new ForegroundColorSpan(textPrimary), b, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            }
+            int s = richNotes.length();
+            richNotes.append("• ");
+            richNotes.setSpan(new StyleSpan(Typeface.BOLD), s, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            richNotes.setSpan(new ForegroundColorSpan(accent), s, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            int b = richNotes.length();
+            richNotes.append(line);
+            richNotes.setSpan(new ForegroundColorSpan(textPrimary), b, richNotes.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
 
         TextView tvBody = new TextView(activity);
         tvBody.setText(richNotes);
-        tvBody.setTextSize(13.2f);
-        tvBody.setLineSpacing(6f, 1.18f);
+        tvBody.setTextSize(13f);
+        tvBody.setPadding(0, 12, 0, 0);
+        tvBody.setLineSpacing(4f, 1.15f);
         card.addView(tvBody);
+
+        headerRow.setOnClickListener(v -> {
+            boolean showing = tvBody.getVisibility() == View.VISIBLE;
+            tvBody.setVisibility(showing ? View.GONE : View.VISIBLE);
+            tvToggle.setText(showing ? "הרחב ◂" : "הסתר ▾");
+        });
 
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardLp.bottomMargin = 20;
+        cardLp.bottomMargin = 18;
         outer.addView(card, cardLp);
 
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setView(scroll)
-                .create();
+        AlertDialog dialog = new AlertDialog.Builder(activity).setView(scroll).create();
 
         Button btnDirectInstall = ThemedDialogHelper.createThemedButton(activity, "הורדה והתקנה ישירה", theme, true, false);
-        btnDirectInstall.setGravity(Gravity.CENTER);
-        btnDirectInstall.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         LinearLayout.LayoutParams installLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        installLp.bottomMargin = 12;
+        installLp.bottomMargin = 10;
         btnDirectInstall.setLayoutParams(installLp);
         btnDirectInstall.setOnClickListener(v -> {
             dialog.dismiss();
@@ -401,51 +336,43 @@ public class UpdateChecker {
         outer.addView(btnDirectInstall);
 
         Button btnClose = ThemedDialogHelper.createThemedButton(activity, "סגור", theme, false, false);
-        btnClose.setGravity(Gravity.CENTER);
-        btnClose.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        btnClose.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         btnClose.setOnClickListener(v -> dialog.dismiss());
         outer.addView(btnClose);
 
         scroll.addView(outer);
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
+        ThemedDialogHelper.applyResponsiveDialogWindow(activity, dialog);
     }
 
     private static void downloadAndAutoUpdateApk(Activity activity, String apkUrl, String remoteVersion) {
         int theme = PrefsManager.getThemeMode(activity);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
 
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        box.setPadding(52, 46, 52, 40);
+        box.setPadding(48, 42, 48, 36);
         box.setBackground(ThemedDialogHelper.createDialogBackground(theme));
 
         TextView tvTitle = new TextView(activity);
         tvTitle.setText("מעדכן לגירסה " + formatOfficialVer(remoteVersion));
         tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(16.5f);
+        tvTitle.setTextSize(16f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        tvTitle.setPadding(0, 0, 0, 14);
+        tvTitle.setPadding(0, 0, 0, 12);
         box.addView(tvTitle);
 
         TextView tvStatus = new TextView(activity);
-        tvStatus.setText("מוריד את העדכון הישיר לתוך האפליקציה...");
+        tvStatus.setText("מוריד עדכון ישיר באופן מאובטח...");
         tvStatus.setTextColor(textSecondary);
         tvStatus.setTextSize(13.5f);
-        tvStatus.setPadding(0, 0, 0, 18);
+        tvStatus.setPadding(0, 0, 0, 16);
         box.addView(tvStatus);
 
         ProgressBar bar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
         bar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         bar.setMax(100);
-        bar.setProgress(0);
         box.addView(bar);
 
         AlertDialog progressDialog = new AlertDialog.Builder(activity)
@@ -454,17 +381,13 @@ public class UpdateChecker {
                 .create();
         progressDialog.show();
         Window window = progressDialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
+        if (window != null) window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
 
         EXECUTOR.execute(() -> {
             try {
-                HttpURLConnection conn = openRedirectAwareConnection(apkUrl, "application/octet-stream");
+                HttpURLConnection conn = GitHubTrustHelper.openRedirectAwareConnection(apkUrl, "application/octet-stream");
                 int respCode = conn.getResponseCode();
-                if (respCode != 200) {
-                    throw new IllegalStateException("HTTP " + respCode);
-                }
+                if (respCode != 200) throw new IllegalStateException("HTTP " + respCode);
 
                 int fileLength = conn.getContentLength();
                 File outDir = activity.getExternalCacheDir() != null ? activity.getExternalCacheDir() : activity.getCacheDir();
@@ -483,7 +406,7 @@ public class UpdateChecker {
                             long finalTotal = total;
                             MAIN.post(() -> {
                                 bar.setProgress(pct);
-                                tvStatus.setText("הורדה ישירה: " + pct + "%  (" + StorageUtils.formatSize(finalTotal) + ")");
+                                tvStatus.setText("הורדה: " + pct + "%  (" + StorageUtils.formatSize(finalTotal) + ")");
                             });
                         }
                     }
@@ -500,20 +423,15 @@ public class UpdateChecker {
                     }
                 });
             } catch (Exception e) {
+                AppLogger.error(activity, "Updater", "Download failed", e);
                 MAIN.post(() -> {
-                    if (!activity.isFinishing()) {
-                        progressDialog.dismiss();
-                    }
+                    if (!activity.isFinishing()) progressDialog.dismiss();
                     Toast.makeText(activity, "ההורדה נכשלה — בדוק חיבור אינטרנט ונסה שוב", Toast.LENGTH_LONG).show();
                 });
             }
         });
     }
 
-    /**
-     * סעיף כב: התקנה עצמאית וישירה של העדכון מתוך האפליקציה עצמה באמצעות PackageInstaller.Session,
-     * עם תמיכה מלאה ב-Android 12..15 (כולל MODE_BACKGROUND_ACTIVITY_START_ALLOWED ב-Android 14+ וגיבוי אוטומטי).
-     */
     private static void installApkAutomatically(Activity activity, File apkFile) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (!activity.getPackageManager().canRequestPackageInstalls()) {
@@ -535,10 +453,7 @@ public class UpdateChecker {
                 params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                try {
-                    params.setRequestUpdateOwnership(true);
-                } catch (Throwable ignored) {
-                }
+                try { params.setRequestUpdateOwnership(true); } catch (Throwable ignored) {}
             }
 
             sessionId = packageInstaller.createSession(params);
@@ -547,9 +462,7 @@ public class UpdateChecker {
                      InputStream in = new FileInputStream(apkFile)) {
                     byte[] buffer = new byte[16 * 1024];
                     int c;
-                    while ((c = in.read(buffer)) != -1) {
-                        out.write(buffer, 0, c);
-                    }
+                    while ((c = in.read(buffer)) != -1) out.write(buffer, 0, c);
                     session.fsync(out);
                 }
 
@@ -559,31 +472,18 @@ public class UpdateChecker {
                 callbackIntent.putExtra(UpdateInstallReceiver.EXTRA_APK_FILE_PATH, apkFile.getAbsolutePath());
 
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    flags |= PendingIntent.FLAG_MUTABLE;
-                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags |= PendingIntent.FLAG_MUTABLE;
 
                 PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                        activity,
-                        sessionId,
-                        callbackIntent,
-                        flags
-                );
+                        activity, sessionId, callbackIntent, flags);
                 session.commit(pendingIntent.getIntentSender());
                 return;
             }
         } catch (Exception fallbackEx) {
             if (sessionId != -1) {
-                try {
-                    packageInstaller.abandonSession(sessionId);
-                } catch (Exception ignored) {
-                }
+                try { packageInstaller.abandonSession(sessionId); } catch (Exception ignored) {}
             }
-            Uri apkUri = FileProvider.getUriForFile(
-                    activity,
-                    activity.getPackageName() + ".fileprovider",
-                    apkFile
-            );
+            Uri apkUri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".fileprovider", apkFile);
             Intent installIntent = new Intent(Intent.ACTION_VIEW);
             installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
             installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);

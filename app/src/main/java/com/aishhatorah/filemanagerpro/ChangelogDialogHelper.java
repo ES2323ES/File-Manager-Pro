@@ -2,7 +2,6 @@ package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.SpannableStringBuilder;
@@ -20,7 +19,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * יומן שינויים מעוצב ומותאם לכל גודלי המסכים (גירסה 0.2.7 רשמית).
+ * סעיפים 7, 35: יומן שינויים נקי ומינימליסטי עם כרטיסיות מתרחבות (Accordion) לפי גירסה.
+ * גירסה 0.2.8 פתוחה כברירת מחדל והגרסאות הקודמות נפתחות בהקשה.
  */
 public class ChangelogDialogHelper {
 
@@ -34,15 +34,11 @@ public class ChangelogDialogHelper {
 
     public static void show(Activity activity) {
         int theme = PrefsManager.getThemeMode(activity);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        boolean isLight = theme == PrefsManager.THEME_LIGHT;
-
-        int cBlue = isLight ? Color.parseColor("#1D4ED8") : Color.parseColor("#60A5FA");
-        int cEmerald = isLight ? Color.parseColor("#047857") : Color.parseColor("#34D399");
-        int cViolet = isLight ? Color.parseColor("#6D28D9") : Color.parseColor("#C084FC");
-        int cAmber = isLight ? Color.parseColor("#B45309") : Color.parseColor("#FBBF24");
-        int cRose = isLight ? Color.parseColor("#BE123C") : Color.parseColor("#FB7185");
-        int cCyan = isLight ? Color.parseColor("#0E7490") : Color.parseColor("#22D3EE");
+        int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
+        int accent = ThemeHelper.getAccentColor(activity, theme);
+        int divider = ThemeHelper.getDividerColor(activity, theme);
+        int subtleBg = ThemeHelper.getBgColor(activity, theme);
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
@@ -50,140 +46,101 @@ public class ChangelogDialogHelper {
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         outer.setPadding(dp(activity, 16), dp(activity, 16), dp(activity, 16), dp(activity, 14));
-        outer.setBackground(ThemedDialogHelper.createDialogBackground(theme));
+        outer.setBackground(ThemedDialogHelper.createDialogBackground(activity, theme));
 
-        LinearLayout heroBanner = new LinearLayout(activity);
-        heroBanner.setOrientation(LinearLayout.VERTICAL);
-        heroBanner.setGravity(Gravity.CENTER);
-        heroBanner.setPadding(dp(activity, 14), dp(activity, 14), dp(activity, 14), dp(activity, 14));
-
-        GradientDrawable heroShape = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.parseColor("#1E3A8A"), Color.parseColor("#4C1D95"), Color.parseColor("#0F766E")}
-        );
-        heroShape.setCornerRadius(dp(activity, 18));
-        heroBanner.setBackground(heroShape);
+        // כותרת נקייה
+        LinearLayout headerRow = new LinearLayout(activity);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        headerRow.setPadding(dp(activity, 4), 0, dp(activity, 4), dp(activity, 12));
 
         ImageView heroIcon = new ImageView(activity);
         heroIcon.setImageResource(R.drawable.ic_app_logo);
-        int heroLogoPx = dp(activity, 48);
-        LinearLayout.LayoutParams hIcLp = new LinearLayout.LayoutParams(heroLogoPx, heroLogoPx);
-        hIcLp.bottomMargin = dp(activity, 8);
-        heroBanner.addView(heroIcon, hIcLp);
+        int iconPx = dp(activity, 36);
+        LinearLayout.LayoutParams hIcLp = new LinearLayout.LayoutParams(iconPx, iconPx);
+        hIcLp.setMarginEnd(dp(activity, 10));
+        headerRow.addView(heroIcon, hIcLp);
 
+        LinearLayout headerText = new LinearLayout(activity);
+        headerText.setOrientation(LinearLayout.VERTICAL);
         TextView tvHeader = new TextView(activity);
         tvHeader.setText("יומן שינויים");
-        tvHeader.setTextSize(18f);
+        tvHeader.setTextSize(ThemeHelper.spScaled(activity, 17.5f));
         tvHeader.setTypeface(Typeface.DEFAULT_BOLD);
-        tvHeader.setTextColor(Color.WHITE);
-        tvHeader.setGravity(Gravity.CENTER);
-        tvHeader.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        heroBanner.addView(tvHeader);
+        tvHeader.setTextColor(textPrimary);
+        headerText.addView(tvHeader);
 
         TextView tvSub = new TextView(activity);
         tvSub.setText("File Manager Pro");
-        tvSub.setTextSize(14f);
-        tvSub.setTypeface(Typeface.DEFAULT_BOLD);
-        tvSub.setTextColor(Color.parseColor("#E0E7FF"));
-        tvSub.setGravity(Gravity.CENTER);
-        tvSub.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        tvSub.setPadding(0, dp(activity, 3), 0, 0);
-        heroBanner.addView(tvSub);
+        tvSub.setTextSize(ThemeHelper.spScaled(activity, 13f));
+        tvSub.setTextColor(textSecondary);
+        headerText.addView(tvSub);
 
-        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        heroLp.bottomMargin = dp(activity, 12);
-        outer.addView(heroBanner, heroLp);
+        headerRow.addView(headerText);
+        outer.addView(headerRow);
+
+        // ===================== גירסה 0.2.8 רשמית =====================
+        SpannableStringBuilder v28 = new SpannableStringBuilder();
+        appendBullet(v28, "שחזור עיצוב נקי, ערכות נושא מותאמות וגודל תצוגה: ", accent,
+                "ממשק מינימליסטי ורספונסיבי לכל מסך, ערכות נושא (כולל שחור עמוק AMOLED, אוקיינוס, יער ומערכת דינאמית), בחירת צבע מרכזי וסקאלת גודל תצוגה.", textPrimary);
+        appendBullet(v28, "\n\nתפריט המבורגר, בחירה מרובה, Breadcrumbs ושינוי שם אצווה: ", accent,
+                "תפריט המבורגר מרוכז עם מיון (כולל תאריך יצירה), סייר נתיב לחיץ, בחירה מרובה עם פעולות שיתוף/העתקה/העברה/מחיקה/שינוי שם אוטומטי והתראות התקדמות.", textPrimary);
+        appendBullet(v28, "\n\nעורך קוד מתקדם, Markdown, SVG וקבצי גיבוי .bak: ", accent,
+                "מספור שורות, Undo/Redo, חיפוש והחלפה, צביעת תחביר (Java/Kotlin/Python/JSON/XML/JS/TS/SQL/HTML/CSS), עטיפת שורות, תצוגת SVG וקבצי גיבוי אוטומטיים.", textPrimary);
+        appendBullet(v28, "\n\nמנהל ארכיונים מלא (ZIP+סיסמה / TAR / TAR.GZ / GZ): ", accent,
+                "פתיחה ויצירת ארכיונים במספר פורמטים כולל הצפנה בסיסמה, צפייה פנימית בקבצים בתוך ארכיון, הוספה, עריכה ומחיקת פריטים מתוכו.", textPrimary);
+        appendBullet(v28, "\n\nתמיכה מלאה ב-GIF, עורך וידאו Pro, מחוות נגן, אקולייזר, טפט ו-OTG: ", accent,
+                "הפעלת GIF מונפש וכלי יצירת/פירוק GIF, טיימר שינה ואקולייזר בנגן, מצב מחוות אוטומטי (הרצה כפולה בלחיצה ארוכה), קביעת טפט בחיתוך, זיהוי USB OTG ומנתח קוד ה-APK.", textPrimary);
+        appendBullet(v28, "\n\nתמיכה מאובטחת בנטפרי, יומן אבחון ומטמון מהיר: ", accent,
+                "אימות תעודת משתמש מוגבל ל-GitHub בלבד, זיכרון מטמון מהיר לתיקיות, חיבור USB OTG, מדריך למשתמש ודיווח תקלות נקי מפרטים מזהים.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.2.8 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+                accent, textPrimary, textSecondary, subtleBg, divider, v28);
 
         // ===================== גירסה 0.2.7 רשמית =====================
         SpannableStringBuilder v27 = new SpannableStringBuilder();
-        appendRichBullet(v27, "תצוגת מדיה נקייה בהקשה ומסך מלא בסיבוב: ", cBlue,
-                "בהקשה על תמונה או וידאו מוצגים התמונה או הוידאו בלבד ללא שאר האופציות ובהקשה שנייה האופציות חוזרות, ובסיבוב מסך הוידאו מוצג במסך מלא ללא מעיכה ובחדות גבוהה.", textPrimary);
-        appendRichBullet(v27, "\n\nדפדוף בין תמונות והגדלה עמוקה בחדות מלאה: ", cViolet,
-                "אפשרות להעביר קדימה ואחורה לכל התמונות שבתיקייה (בלחצנים או בהחלקה), הגדלה עמוקה מאוד (עד פי 25) והצגה צלולה וברורה מאוד לתמונות ולוידאו.", textPrimary);
-        appendRichBullet(v27, "\n\nתיקון תצוגת רשת ופס הרצה מהיר בצד ימין: ", cEmerald,
-                "תצוגת הרשת בתיקיות ובקטגוריות מותאמת בדיוק לסגנון המסך הראשי, ונוסף פס הרצה בצד ימין לגלילה מהירה מלמעלה למטה בכל התיקיות ובכל קטגוריות הקבצים.", textPrimary);
-        appendRichBullet(v27, "\n\nהתקנת קובצי APKX ו-APK+ וזיהוי גירסה חדשה מותקנת: ", cAmber,
-                "תמיכה מלאה בהתקנת כל סוגי האפליקציות ללא יוצא מן הכלל כולל APKX ו-APK+, והתראה מפורטת כאשר מותקנת במכשיר גירסה חדשה יותר כולל פרטי שתי הגירסאות.", textPrimary);
-        appendRichBullet(v27, "\n\nהתאמה מלאה לכל גודלי המסכים: ", cCyan,
-                "התאמה אוטומטית של כל מסכי האפליקציה, הכפתורים והחלונות לכל גודלי המסכים באשר הם.", textPrimary);
-
-        addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.7 רשמית", "הגירסה הנוכחית והחדשה ביותר",
-                Color.parseColor("#1D4ED8"), R.drawable.ic_app_logo, v27);
+        appendBullet(v27, "תצוגת מדיה נקייה ומסך מלא בסיבוב: ", accent,
+                "הצגה נקייה בהקשה, סיבוב מלא לוידאו, דפדוף בין תמונות, זום עמוק ופס הרצה מהיר בצד ימין.", textPrimary);
+        appendBullet(v27, "\n\nהתקנת חבילות APKX / APK+ וזיהוי גירסה חדשה: ", accent,
+                "תמיכה בכל חבילות ההתקנה והתרעה כשמותקנת גירסה חדשה יותר במכשיר.", textPrimary);
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.2.7 רשמית", "תצוגת מדיה, פס גלילה מהיר ומתקין אוניברסלי",
+                accent, textPrimary, textSecondary, subtleBg, divider, v27);
 
         // ===================== גירסה 0.2.6 רשמית =====================
         SpannableStringBuilder v26 = new SpannableStringBuilder();
-        appendRichBullet(v26, "תצוגת תיקיות ברשת לתמונות וסרטונים: ", cBlue,
-                "בכניסה לקטגוריות תמונות או סרטונים הקבצים מוצגים בתיקיות שלהם בתצוגת רשת, ובתוך התיקיות התצוגה היא תצוגת רשת עם אפשרות למעבר לתצוגת רשימה.", textPrimary);
-        appendRichBullet(v26, "\n\nשליטה בתצוגת רשת / רשימה לכל הקטגוריות בהגדרות: ", cEmerald,
-                "אפשרות לבחור בין תצוגת רשת לתצוגת רשימה עבור כל הקטגוריות באפליקציה, כולל תמונות וסרטונים.", textPrimary);
-        appendRichBullet(v26, "\n\nעריכת קובצי טקסט בנגיעה באותיות: ", cViolet,
-                "בכניסה לקובץ טקסט, נגיעה באותיות פותחת מיד את המקלדת למחיקה או הוספת מילים ושמירה ישירה בקובץ.", textPrimary);
-        appendRichBullet(v26, "\n\nניקיון כותרות בקטגוריות: ", cAmber,
-                "הוסר הכיתוב המיותר 'קטגוריה: שמע' וכדומה בכניסה לקטגוריות השונות.", textPrimary);
-
-        addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.6 רשמית", "תצוגת תיקיות ברשת ועורך טקסט מובנה",
-                Color.parseColor("#2563EB"), R.drawable.ic_app_logo, v26);
+        appendBullet(v26, "תיקיות רשת למדיה ועריכת טקסט בנגיעה: ", accent,
+                "תצוגת רשת לקטגוריות תמונות וסירטונים לפי תיקיות, בחירת רשת/רשימה לכל קטגוריה בהגדרות וניקוי כותרות.", textPrimary);
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.2.6 רשמית", "תיקיות רשת ועורך טקסט מהיר",
+                accent, textPrimary, textSecondary, subtleBg, divider, v26);
 
         // ===================== גירסה 0.2.5 רשמית =====================
         SpannableStringBuilder v25 = new SpannableStringBuilder();
-        appendRichBullet(v25, "נגן אודיו משודרג ומותאם לסיבוב מסך: ", cBlue,
-                "פס התקדמות משמאל לימין, החלפת מצב חזרה בלחיצה ישירה, אייקונים מותאמים לגודל וסיבוב המסך, עטיפת שיר על כל השטח ומונה קבצים בתיקייה (כגון 1/20).", textPrimary);
-        appendRichBullet(v25, "\n\nהתראת מדיה חכמה ושורה תחתונה עם פס התקדמות: ", cViolet,
-                "סמלי מדיה בבר ההתראות עם פס התקדמות משמאל לימין וחזרה חכמה לתיקיית השיר המתנגן, ופס התקדמות בשורה החכמה התחתונה ביציאה מהשיר.", textPrimary);
-        appendRichBullet(v25, "\n\nתמיכה בכל סוגי המדיה והאפליקציות: ", cEmerald,
-                "פתיחה מובנית של כלל פורמטי האודיו, הוידאו והתמונות, התקנת כל סוגי האפליקציות (APK / APKS / APKM / XAPK), ואייקונים ייחודיים לקובצי ZIP וטקסט.", textPrimary);
-        appendRichBullet(v25, "\n\nתצוגת תיקיות, מסך ראשי ואייקון Pro חדש: ", cAmber,
-                "הצגת שמות קבצים ותיקיות ארוכים במלואם, פתיחת אפשרויות עריכה בלחיצה על האייקון משמאל, שורת שם אפליקציה ומוני קבצים נעים במסך הראשי, וכיתוב Pro בתיקייה הלבנה של האייקון.", textPrimary);
-        appendRichBullet(v25, "\n\nהתקנת עדכונים עצמאית ומסך עדכון מעוצב: ", cCyan,
-                "חלון עדכון חדש המעוצב בסגנון יומן השינויים עם הורדה והתקנה ישירה ועצמאית בתוך האפליקציה, וקישורים למתמחים טופ ולעוגן פליי באודות.", textPrimary);
-
-        addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.5 רשמית", "נגן מדיה מותאם, התראות חכמות והתקנה אוניברסלית",
-                Color.parseColor("#2563EB"), R.drawable.ic_app_logo, v25);
+        appendBullet(v25, "נגן אודיו משודרג, התראות מדיה ומתקין אוניברסלי: ", accent,
+                "פס התקדמות משמאל לימין, מונה שירים בתיקייה, עדכון עצמאי מאפליקציה ואייקוני ZIP/טקסט.", textPrimary);
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.2.5 רשמית", "נגן אודיו, אייקונים מותאמים ועדכונים",
+                accent, textPrimary, textSecondary, subtleBg, divider, v25);
 
         // ===================== גירסה 0.2.4 =====================
         SpannableStringBuilder v24 = new SpannableStringBuilder();
-        appendRichBullet(v24, "אייקונים אמיתיים לכל קובץ: ", cBlue,
-                "חילוץ והצגת עטיפת השיר המוטמעת בקובצי שמע, תצוגה מקדימה לתמונות ולסירטונים, והאייקון המקורי של כל קובץ APK.", textPrimary);
-        appendRichBullet(v24, "\n\nמספר קבצים ונפח במסך הבית: ", cEmerald,
-                "לצד משקל כל קטגוריה מוצג כעת גם מספר הקבצים המדויק בסוגריים, עם רענון מלא בהחלקה מלמעלה למטה עד לסיום הסריקה.", textPrimary);
-        appendRichBullet(v24, "\n\nנגן אודיו מתקדם + מיני-נגן תחתון והתראה פעילה: ", cViolet,
-                "ניגון ברקע גם ביציאה מהשיר עם שורה תחתונה חכמה (החלקה על השורה עוצרת את השיר), סמל האפליקציה בבר ההתראות, בחירת מהירות באמצע למטה, חזרה על השיר או התיקייה, העברה לשיר הבא/הקודם ותצוגת זמן מסודרת משמאל.", textPrimary);
-        appendRichBullet(v24, "\n\nעורך תמונות מקצועי + הגדלה ביד: ", cAmber,
-                "זום חופשי בשתי אצבעות בתמונות ולחצן עורך תמונות מקצועי (עיפרון) עם חיתוך, סיבוב, פילטרים, בהירות/ניגודיות ומכחול ציור.", textPrimary);
-        appendRichBullet(v24, "\n\nנגן ועורך וידאו מקצועי: ", cRose,
-                "הגדלת הסרטון ביד, סיבוב מסך, הגדרות וידאו מתחת לסגור, מהירות הפעלה, 10 שניות קדימה/אחורה, מעבר בין סרטוני התיקייה ועורך וידאו מקצועי מובנה.", textPrimary);
-        appendRichBullet(v24, "\n\nמחוות לחיצה כפולה וכותרת נעה: ", cCyan,
-                "לחיצה כפולה בצד ימין (+10) או בצד שמאל (-10) באודיו ובוידאו, ושורת שם קובץ הנעה תדיר למעלה באמצע.", textPrimary);
+        appendBullet(v24, "אייקונים אמיתיים ומיני-נגן ברקע: ", accent,
+                "תמונות ממוזערות לקבצים, עורכי תמונות ווידאו, וניגון שמע ברקע.", textPrimary);
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.2.4", "עורכי מדיה וניגון ברקע",
+                accent, textPrimary, textSecondary, subtleBg, divider, v24);
 
-        addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.4", "נגן שמע ברקע ועורכי מדיה מקצועיים",
-                Color.parseColor("#2563EB"), R.drawable.ic_audio, v24);
-
-        // ===================== גירסה 0.2.3 =====================
-        SpannableStringBuilder v23 = new SpannableStringBuilder();
-        appendRichBullet(v23, "פתיחה פנימית מלאה באפליקציה: ", cCyan,
-                "פתיחת אודיו, תמונות, סרטונים, מסמכי PDF / Office וחילוץ ZIP ללא הזדקקות לאפליקציות חיצוניות.", textPrimary);
-        appendRichBullet(v23, "\n\nארכיוני ZIP ויצירה מהירה (+): ", cEmerald,
-                "דחיסת קבצים ותיקיות לקובץ ZIP בלחיצה ארוכה, ולחצן + ליצירת תיקייה חדשה או קובץ חדש.", textPrimary);
-        appendRichBullet(v23, "\n\nסדר תיקיות בעברית ותצוגת רשת/רשימה: ", cViolet,
-                "תיקיות בעברית מופיעות תמיד לפני אנגלית, שליטה בתצוגת רשת או רשימה, אימות כפול בריקון סל המיחזור ועדכון אוטומטי חכם.", textPrimary);
-
-        addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.3", "מנוע מדיה וארכיונים מובנה",
-                Color.parseColor("#7C3AED"), R.drawable.ic_folder, v23);
-
-        // ===================== גירסה 0.2.2 =====================
+        // ===================== גירסה 0.2.3 & 0.2.2 =====================
         SpannableStringBuilder v22 = new SpannableStringBuilder();
-        appendRichBullet(v22, "", cAmber,
-                "מסך בית 4×3 בעברית מלאה, ערכות נושא בהיר / כהה / ניאון, כלי ניתוח הקבצים הכבדים ביותר, התרעת 96% תפוסה וסל מיחזור חכם.", textPrimary);
-
-        addLuxuriousVersionCard(outer, activity, theme,
-                "גירסה 0.2.2", "השקת האפליקציה",
-                Color.parseColor("#0D9488"), R.drawable.ic_storage_internal, v22);
+        appendBullet(v22, "גירסה 0.2.3: ", accent,
+                "מנוע מדיה וארכיוני ZIP מובנים, תיקיות בעברית תחילה וסל מיחזור מוגן.", textPrimary);
+        appendBullet(v22, "\nגירסה 0.2.2: ", accent,
+                "השקת האפליקציה — מסך בית בעברית מלאה, ערכות נושא ומנתח אחסון.", textPrimary);
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסאות 0.2.2 – 0.2.3", "השקת האפליקציה והתשתית הראשונית",
+                accent, textPrimary, textSecondary, subtleBg, divider, v22);
 
         AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setView(scroll)
@@ -194,7 +151,7 @@ public class ChangelogDialogHelper {
         btnClose.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        closeLp.topMargin = dp(activity, 4);
+        closeLp.topMargin = dp(activity, 6);
         btnClose.setLayoutParams(closeLp);
         btnClose.setOnClickListener(v -> dialog.dismiss());
         outer.addView(btnClose);
@@ -204,7 +161,7 @@ public class ChangelogDialogHelper {
         ThemedDialogHelper.applyResponsiveDialogWindow(activity, dialog);
     }
 
-    private static void appendRichBullet(
+    private static void appendBullet(
             SpannableStringBuilder sb,
             String coloredLead,
             int leadColor,
@@ -212,10 +169,13 @@ public class ChangelogDialogHelper {
             int bodyColor
     ) {
         int startLead = sb.length();
-        sb.append("◆ ").append(coloredLead.replaceFirst("^\\n+", ""));
+        sb.append("• ").append(coloredLead.replaceFirst("^\\n+", ""));
         if (coloredLead.startsWith("\n\n")) {
-            sb.replace(startLead, sb.length(), "\n\n◆ " + coloredLead.substring(2));
+            sb.replace(startLead, sb.length(), "\n\n• " + coloredLead.substring(2));
             startLead += 2;
+        } else if (coloredLead.startsWith("\n")) {
+            sb.replace(startLead, sb.length(), "\n• " + coloredLead.substring(1));
+            startLead += 1;
         }
         int endLead = sb.length();
         sb.setSpan(new StyleSpan(Typeface.BOLD), startLead, endLead, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -226,72 +186,78 @@ public class ChangelogDialogHelper {
         sb.setSpan(new ForegroundColorSpan(bodyColor), startBody, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
     }
 
-    private static void addLuxuriousVersionCard(
+    private static void addCollapsibleVersionCard(
             LinearLayout parent,
             Activity activity,
-            int theme,
+            boolean initiallyExpanded,
             String versionTag,
             String subtitleBadge,
             int accentColor,
-            int iconRes,
+            int textPrimary,
+            int textSecondary,
+            int cardBg,
+            int dividerColor,
             CharSequence richContent
     ) {
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
+        card.setPadding(dp(activity, 13), dp(activity, 11), dp(activity, 13), dp(activity, 11));
 
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(activity, 16));
-        int innerBg = theme == PrefsManager.THEME_LIGHT
-                ? Color.parseColor("#F8FAFC")
-                : (theme == PrefsManager.THEME_NEON ? Color.parseColor("#071029") : Color.parseColor("#0F172A"));
-        shape.setColor(innerBg);
-        shape.setStroke(Math.max(2, dp(activity, 1.3f)),
-                Color.argb(115, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor)));
+        shape.setCornerRadius(dp(activity, 12));
+        shape.setColor(cardBg);
+        shape.setStroke(2, initiallyExpanded ? accentColor : dividerColor);
         card.setBackground(shape);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(activity, 10);
+        lp.bottomMargin = dp(activity, 8);
         card.setLayoutParams(lp);
 
         LinearLayout headerRow = new LinearLayout(activity);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        headerRow.setPadding(0, 0, 0, dp(activity, 8));
-
-        ImageView iv = new ImageView(activity);
-        iv.setImageResource(iconRes);
-        int iconPx = dp(activity, 28);
-        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(iconPx, iconPx);
-        ivLp.setMarginEnd(dp(activity, 8));
-        headerRow.addView(iv, ivLp);
 
         LinearLayout titleCol = new LinearLayout(activity);
         titleCol.setOrientation(LinearLayout.VERTICAL);
 
         TextView tvVer = new TextView(activity);
         tvVer.setText(versionTag);
-        tvVer.setTextSize(15.5f);
+        tvVer.setTextSize(ThemeHelper.spScaled(activity, 14.5f));
         tvVer.setTypeface(Typeface.DEFAULT_BOLD);
-        tvVer.setTextColor(accentColor);
+        tvVer.setTextColor(initiallyExpanded ? accentColor : textPrimary);
         titleCol.addView(tvVer);
 
         TextView tvBadge = new TextView(activity);
         tvBadge.setText(subtitleBadge);
-        tvBadge.setTextSize(11.5f);
-        tvBadge.setTypeface(Typeface.DEFAULT_BOLD);
-        tvBadge.setTextColor(ThemeHelper.getSecondaryTextColor(theme));
+        tvBadge.setTextSize(ThemeHelper.spScaled(activity, 11.5f));
+        tvBadge.setTextColor(textSecondary);
         titleCol.addView(tvBadge);
 
         headerRow.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView tvChevron = new TextView(activity);
+        tvChevron.setText(initiallyExpanded ? "▲" : "▼");
+        tvChevron.setTextColor(textSecondary);
+        tvChevron.setTextSize(13f);
+        tvChevron.setPadding(dp(activity, 6), 0, dp(activity, 2), 0);
+        headerRow.addView(tvChevron);
+
         card.addView(headerRow);
 
         TextView tvBody = new TextView(activity);
         tvBody.setText(richContent);
-        tvBody.setTextSize(13f);
-        tvBody.setLineSpacing(4f, 1.16f);
+        tvBody.setTextSize(ThemeHelper.spScaled(activity, 12.8f));
+        tvBody.setLineSpacing(4f, 1.15f);
+        tvBody.setPadding(0, dp(activity, 8), 0, 0);
+        tvBody.setVisibility(initiallyExpanded ? View.VISIBLE : View.GONE);
         card.addView(tvBody);
+
+        headerRow.setOnClickListener(v -> {
+            boolean open = tvBody.getVisibility() != View.VISIBLE;
+            tvBody.setVisibility(open ? View.VISIBLE : View.GONE);
+            tvChevron.setText(open ? "▲" : "▼");
+        });
 
         parent.addView(card);
     }

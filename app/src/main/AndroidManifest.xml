@@ -15,7 +15,7 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
 
-    <!-- הרשאת ניהול ועריכת כל הקבצים (מחיקה, העברה, העתקה בכל האחסון וכרטיס SD) -->
+    <!-- הרשאת ניהול ועריכת כל הקבצים (מחיקה, העברה, העתקה בכל האחסון, SD ו-OTG) -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
@@ -26,17 +26,20 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
-    <!-- סעיף יג: הרשאות התראות ושירות ניגון שמע ברקע להצגת סמל האפליקציה בבר ההתראות בזמן ניגון שיר -->
+    <!-- סעיף 42: הגדרת טפט מסך בית/נעילה מתוך תמונות -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+
+    <!-- שירות ניגון שמע ברקע והתראות -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- סעיפים יב, יג: בדיקת גירסאות מותקנות במכשיר לפני התקנת חבילות APK / APKX / APK+ / XAPK / APKS / APKM -->
+    <!-- בדיקת גירסאות מותקנות ואיסוף פרטי אפליקציות -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- סעיף ז: התאמה מלאה לכל גודלי וצפיפויות המסכים באשר הם -->
     <supports-screens
         android:anyDensity="true"
         android:largeScreens="true"
@@ -52,10 +55,12 @@
     </queries>
 
     <application
+        android:name=".FileManagerApp"
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:requestLegacyExternalStorage="true"
         android:resizeableActivity="true"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -65,6 +70,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -74,38 +80,74 @@
 
         <activity
             android:name=".FileBrowserActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <activity
             android:name=".SettingsActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <activity
             android:name=".StorageAnalyzerActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <activity
             android:name=".AudioCutterActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <activity
             android:name=".VideoCutterActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <activity
             android:name=".BuiltInViewerActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
+            android:name=".CodeEditorActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize|stateHidden" />
+
+        <activity
+            android:name=".ApkSourceInspectorActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".WallpaperCropActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".HomeLayoutActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".UserGuideActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false" />
+
+        <activity
             android:name=".ProImageEditorActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <activity
             android:name=".ProVideoEditorActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false" />
 
         <service

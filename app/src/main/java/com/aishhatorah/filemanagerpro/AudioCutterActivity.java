@@ -19,7 +19,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -48,8 +47,7 @@ public class AudioCutterActivity extends AppCompatActivity {
 
     private TextView tvSelectedFile;
     private TextView tvRangeInfo;
-    private SeekBar seekStart;
-    private SeekBar seekEnd;
+    private RangeWaveformTrimView rangeTrimView;
     private Button btnPlayPreview;
     private Button btnCutSave;
     private Button btnShareCut;
@@ -61,11 +59,11 @@ public class AudioCutterActivity extends AppCompatActivity {
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
 
-        int bg = ThemeHelper.getBgColor(theme);
-        int cardBg = ThemeHelper.getCardColor(theme);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
+        int bg = ThemeHelper.getBgColor(this, theme);
+        int cardBg = ThemeHelper.getCardColor(this, theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(this, theme);
+        int accent = ThemeHelper.getAccentColor(this, theme);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -75,7 +73,7 @@ public class AudioCutterActivity extends AppCompatActivity {
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
+        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
         topBar.setPadding(24, 22, 24, 22);
 
         Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
@@ -83,8 +81,8 @@ public class AudioCutterActivity extends AppCompatActivity {
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("חותך אודיו מקצועי");
-        tvTitle.setTextSize(18f);
+        tvTitle.setText("חותך אודיו");
+        tvTitle.setTextSize(17.5f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -95,13 +93,13 @@ public class AudioCutterActivity extends AppCompatActivity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(36, 36, 36, 36);
+        body.setPadding(32, 32, 32, 32);
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(36, 36, 36, 36);
+        card.setPadding(32, 32, 32, 32);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(30f);
+        shape.setCornerRadius(24f);
         shape.setColor(cardBg);
         card.setBackground(shape);
 
@@ -112,7 +110,7 @@ public class AudioCutterActivity extends AppCompatActivity {
         tvSelectedFile.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(tvSelectedFile);
 
-        Button btnPick = createActionButton("בחירת קובץ שמע לחיתוך (M4A / AAC / MP4)", Color.parseColor("#1D4ED8"), v -> {
+        Button btnPick = createActionButton("בחירת קובץ שמע לחיתוך (M4A / AAC / MP4)", accent, v -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             pick.addCategory(Intent.CATEGORY_OPENABLE);
             pick.setType("audio/*");
@@ -124,57 +122,28 @@ public class AudioCutterActivity extends AppCompatActivity {
         tvRangeInfo.setText("התחלה: 00:00.0  •  סיום: 00:00.0");
         tvRangeInfo.setTextColor(textSecondary);
         tvRangeInfo.setTextSize(13.5f);
-        tvRangeInfo.setPadding(0, 28, 0, 14);
+        tvRangeInfo.setPadding(0, 26, 0, 12);
         card.addView(tvRangeInfo);
 
-        TextView lblStart = new TextView(this);
-        lblStart.setText("נקודת התחלה:");
-        lblStart.setTextColor(textPrimary);
-        card.addView(lblStart);
-
-        seekStart = new SeekBar(this);
-        seekStart.setMax(1000);
-        seekStart.setEnabled(false);
-        card.addView(seekStart);
-
-        TextView lblEnd = new TextView(this);
-        lblEnd.setText("נקודת סיום:");
-        lblEnd.setTextColor(textPrimary);
-        lblEnd.setPadding(0, 18, 0, 0);
-        card.addView(lblEnd);
-
-        seekEnd = new SeekBar(this);
-        seekEnd.setMax(1000);
-        seekEnd.setProgress(1000);
-        seekEnd.setEnabled(false);
-        card.addView(seekEnd);
-
-        SeekBar.OnSeekBarChangeListener rangeListener = new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (durationMs <= 0) return;
-                startMs = (seekStart.getProgress() * durationMs) / 1000L;
-                endMs = (seekEnd.getProgress() * durationMs) / 1000L;
-                if (endMs <= startMs + 500) {
-                    endMs = Math.min(durationMs, startMs + 500);
-                }
-                updateRangeLabel();
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        };
-        seekStart.setOnSeekBarChangeListener(rangeListener);
-        seekEnd.setOnSeekBarChangeListener(rangeListener);
+        // סעיף 36: פס חיתוך משולב ונוח (התחלה וסיום על גל השמע)
+        rangeTrimView = new RangeWaveformTrimView(this);
+        rangeTrimView.setAccentColor(accent);
+        rangeTrimView.setEnabled(false);
+        rangeTrimView.setOnRangeChangedListener((s, e, movingStart) -> {
+            startMs = s;
+            endMs = e;
+            updateRangeLabel();
+        });
+        card.addView(rangeTrimView);
 
         btnPlayPreview = createActionButton("נגן תצוגה מקדימה מהקטע שנבחר", Color.parseColor("#0D9488"), v -> togglePreview());
         btnPlayPreview.setEnabled(false);
         card.addView(btnPlayPreview);
 
-        btnCutSave = createActionButton("חתוך ושמור קובץ אודיו חדש", Color.parseColor("#7C3AED"), v -> performLosslessAudioCut());
+        btnCutSave = createActionButton("חתוך ושמור קובץ אודיו חדש", Color.parseColor("#6D28D9"), v -> performLosslessAudioCut());
         btnCutSave.setEnabled(false);
         card.addView(btnCutSave);
 
-        // סעיף כד: שיתוף הקובץ שנחתך ישירות מחותך האודיו
         btnShareCut = createActionButton("שיתוף הקובץ שנחתך", Color.parseColor("#0284C7"), v -> {
             if (lastCutOutputFile != null && lastCutOutputFile.exists()) {
                 shareAudioFile(lastCutOutputFile);
@@ -209,14 +178,14 @@ public class AudioCutterActivity extends AppCompatActivity {
         b.setTextColor(Color.WHITE);
         b.setTypeface(Typeface.DEFAULT_BOLD);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(22f);
+        shape.setCornerRadius(18f);
         shape.setColor(bgColor);
         b.setBackground(shape);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = 22;
+        lp.topMargin = 18;
         b.setLayoutParams(lp);
-        b.setPadding(24, 24, 24, 24);
+        b.setPadding(22, 22, 22, 22);
         b.setOnClickListener(listener);
         return b;
     }
@@ -239,11 +208,9 @@ public class AudioCutterActivity extends AppCompatActivity {
             mmr.release();
 
             startMs = 0;
-            endMs = durationMs;
-            seekStart.setEnabled(true);
-            seekEnd.setEnabled(true);
-            seekStart.setProgress(0);
-            seekEnd.setProgress(1000);
+            endMs = Math.max(500L, durationMs);
+            rangeTrimView.setEnabled(true);
+            rangeTrimView.setDurationAndRange(durationMs, startMs, endMs);
             btnPlayPreview.setEnabled(true);
             btnCutSave.setEnabled(true);
 
@@ -363,8 +330,7 @@ public class AudioCutterActivity extends AppCompatActivity {
                     ThemedDialogHelper.showCustomDialog(
                             this,
                             "קובץ השמע נחתך בהצלחה",
-                            "הקובץ החדש נשמר בתיקיית המוזיקה:\n" + finalOut.getName() +
-                                    "\n\nתוכל לשתף את הקובץ שנחתך כעת:",
+                            "הקובץ החדש נשמר בתיקיית המוזיקה:\n" + finalOut.getName(),
                             null,
                             "שיתוף הקובץ שנחתך",
                             () -> shareAudioFile(finalOut),
@@ -376,13 +342,11 @@ public class AudioCutterActivity extends AppCompatActivity {
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     btnCutSave.setEnabled(true);
-                    Toast.makeText(this, "שגיאה בחיתוך אודיו (ודא פורמט M4A/AAC/MP4): " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "שגיאה בחיתוך אודיו: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             } finally {
                 try { extractor.release(); } catch (Exception ignored) {}
-                if (muxer != null) {
-                    try { muxer.release(); } catch (Exception ignored) {}
-                }
+                if (muxer != null) try { muxer.release(); } catch (Exception ignored) {}
             }
         });
     }

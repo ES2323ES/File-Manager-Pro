@@ -12,17 +12,18 @@ import android.view.ScaleGestureDetector;
 import androidx.appcompat.widget.AppCompatImageView;
 
 /**
- * סעיפים א, ג, ד, ה:
- * - ד: הגדלה עמוקה וחזקה מאוד של התמונה ביד (עד פי 25x!) + לחיצה כפולה מרובת שלבים
- * - ה: הצגה צלולה וחדה מאוד של התמונות (סינון בילינארי איכותי ללא ירידת איכות)
- * - א: הקשה בודדת מציגה את התמונה בלבד ללא שאר האופציות, ובהקשה שנייה מחזירה את האופציות
- * - ג: החלקה אופקית (כשהתמונה אינה מוגדלת) למעבר מהיר לתמונה הבאה או הקודמת בתיקייה
+ * תצוגת תמונות חדה וצלולה עם הגדלה עמוקה (עד 25x), דפדוף אופקי,
+ * הקשות אזוריות חכמות ותמיכה מלאה ב-GIF מונפש.
  */
 public class ZoomableImageView extends AppCompatImageView {
 
     public interface HorizontalSwipeListener {
         void onSwipeToNext();
         void onSwipeToPrevious();
+    }
+
+    public interface TapPositionListener {
+        void onSingleTapAt(float normalizedX, boolean isZoomedIn);
     }
 
     private final Matrix matrix = new Matrix();
@@ -39,6 +40,7 @@ public class ZoomableImageView extends AppCompatImageView {
     private boolean isDragging = false;
 
     private Runnable singleTapListener = null;
+    private TapPositionListener tapPositionListener = null;
     private HorizontalSwipeListener horizontalSwipeListener = null;
 
     public ZoomableImageView(Context context) {
@@ -74,6 +76,12 @@ public class ZoomableImageView extends AppCompatImageView {
 
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
+                boolean zoomed = currentScale > minScale * 1.06f;
+                if (tapPositionListener != null && getWidth() > 0) {
+                    float normX = Math.max(0f, Math.min(1f, e.getX() / (float) getWidth()));
+                    tapPositionListener.onSingleTapAt(normX, zoomed);
+                    return true;
+                }
                 if (singleTapListener != null) {
                     singleTapListener.run();
                     return true;
@@ -129,6 +137,10 @@ public class ZoomableImageView extends AppCompatImageView {
         this.singleTapListener = listener;
     }
 
+    public void setOnTapPositionListener(TapPositionListener listener) {
+        this.tapPositionListener = listener;
+    }
+
     public void setOnHorizontalSwipeListener(HorizontalSwipeListener listener) {
         this.horizontalSwipeListener = listener;
     }
@@ -140,6 +152,16 @@ public class ZoomableImageView extends AppCompatImageView {
         if (d != null) {
             d.setFilterBitmap(true);
             d.setDither(false);
+        }
+        post(this::fitImageToCenter);
+    }
+
+    @Override
+    public void setImageDrawable(Drawable drawable) {
+        super.setImageDrawable(drawable);
+        if (drawable != null) {
+            drawable.setFilterBitmap(true);
+            drawable.setDither(false);
         }
         post(this::fitImageToCenter);
     }
@@ -162,7 +184,6 @@ public class ZoomableImageView extends AppCompatImageView {
         float scaleY = (float) getHeight() / (float) dh;
         baseScale = Math.min(scaleX, scaleY);
         minScale = baseScale;
-        // סעיף ד: אפשרות להגדיל את התמונה הרבה מאוד במידת הצורך (עד פי 25 מגודל ההתאמה!)
         maxScale = Math.max(baseScale * 25f, 25f);
         currentScale = baseScale;
 

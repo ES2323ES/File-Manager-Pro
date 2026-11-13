@@ -1,21 +1,31 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Environment;
 import android.os.StatFs;
+import android.os.storage.StorageManager;
+import android.os.storage.StorageVolume;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.text.Collator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public class StorageUtils {
@@ -25,6 +35,7 @@ public class StorageUtils {
 
     public static class StorageStat {
         public final File root;
+        public final String label;
         public final long totalBytes;
         public final long usedBytes;
         public final long freeBytes;
@@ -32,7 +43,12 @@ public class StorageUtils {
         public final boolean available;
 
         public StorageStat(File root, long totalBytes, long usedBytes, long freeBytes, boolean available) {
+            this(root, "", totalBytes, usedBytes, freeBytes, available);
+        }
+
+        public StorageStat(File root, String label, long totalBytes, long usedBytes, long freeBytes, boolean available) {
             this.root = root;
+            this.label = label == null ? "" : label;
             this.totalBytes = totalBytes;
             this.usedBytes = usedBytes;
             this.freeBytes = freeBytes;
@@ -67,6 +83,104 @@ public class StorageUtils {
         public int recycleBinCount = 0;
     }
 
+    public static boolean hasAllStoragePermissions(Context context) {
+        if (context == null) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    public static long getFileCreatedTimeMillis(File file) {
+        if (file == null || !file.exists()) return 0L;
+        try {
+            BasicFileAttributes attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
+            long created = attr.creationTime().toMillis();
+            if (created > 0) return created;
+        } catch (Throwable ignored) {
+        }
+        return file.lastModified();
+    }
+
+    // סעיף 40: יצירת קובץ גיבוי .bak לפני שמירה אם מופעל בהגדרות
+    public static File createBackupIfEnabled(Context context, File target) {
+        if (context == null || target == null || !target.exists() || !target.isFile()) return null;
+        if (!PrefsManager.isCreateBackupOnSave(context)) return null;
+        try {
+            File bak = new File(target.getParentFile(), target.getName() + ".bak");
+            try (FileInputStream fis = new FileInputStream(target);
+                 FileOutputStream fos = new FileOutputStream(bak);
+                 FileChannel in = fis.getChannel();
+                 FileChannel out = fos.getChannel()) {
+                in.transferTo(0, in.size(), out);
+            }
+            return bak;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    // סעיף 34: זיהוי כונני USB OTG מחוברים בזמן אמת
+    public static List<StorageStat> getConnectedUsbOtgVolumes(Context context) {
+        List<StorageStat> out = new ArrayList<>();
+        if (context == null) return out;
+        try {
+            File internal = Environment.getExternalStorageDirectory();
+            StorageStat sd = getExternalSdCardStat(context);
+            String internalPath = internal != null ? internal.getAbsolutePath() : "";
+            String sdPath = (sd.available && sd.root != null) ? sd.root.getAbsolutePath() : "";
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                StorageManager sm = (StorageManager) context.getSystemService(Context.STORAGE_SERVICE);
+                if (sm != null) {
+                    for (StorageVolume vol : sm.getStorageVolumes()) {
+                        if (vol.isPrimary() || !vol.isRemovable()) continue;
+                        File dir = vol.getDirectory();
+                        if (dir == null || !dir.exists() || !dir.canRead()) continue;
+                        String path = dir.getAbsolutePath();
+                        if (path.equals(internalPath) || path.equals(sdPath)) continue;
+                        try {
+                            StatFs stat = new StatFs(path);
+                            long total = stat.getTotalBytes();
+                            if (total <= 0) continue;
+                            long free = stat.getAvailableBytes();
+                            long used = Math.max(0, total - free);
+                            String desc = vol.getDescription(context);
+                            out.add(new StorageStat(dir, desc != null ? desc : "USB OTG", total, used, free, true));
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+
+            if (out.isEmpty()) {
+                File storageDir = new File("/storage");
+                File[] mounts = storageDir.listFiles();
+                if (mounts != null) {
+                    for (File m : mounts) {
+                        if (!m.isDirectory() || !m.canRead()) continue;
+                        String name = m.getName();
+                        if ("emulated".equals(name) || "self".equals(name)) continue;
+                        String path = m.getAbsolutePath();
+                        if (path.equals(internalPath) || path.equals(sdPath)) continue;
+                        try {
+                            StatFs stat = new StatFs(path);
+                            long total = stat.getTotalBytes();
+                            if (total <= 0) continue;
+                            long free = stat.getAvailableBytes();
+                            long used = Math.max(0, total - free);
+                            out.add(new StorageStat(m, "USB (" + name + ")", total, used, free, true));
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
     public static CategoryBytesSummary computeCategorySizes(Context context, boolean includeHidden) {
         CategoryBytesSummary summary = new CategoryBytesSummary();
         summary.recycleBinBytes = RecycleBinManager.getTrashTotalBytes(context);
@@ -77,7 +191,8 @@ public class StorageUtils {
         summary.downloadsBytes = dlStats[0];
         summary.downloadsCount = (int) dlStats[1];
 
-        long recentCutoff = System.currentTimeMillis() - (7L * 24L * 3600L * 1000L);
+        long sevenDaysAgo = System.currentTimeMillis() - (7L * 24L * 3600L * 1000L);
+        long recentCutoff = Math.max(sevenDaysAgo, PrefsManager.getRecentClearedTimestamp(context));
         File root = Environment.getExternalStorageDirectory();
         accumulateCategoryBytes(root, summary, includeHidden, recentCutoff, 0);
 
@@ -144,7 +259,7 @@ public class StorageUtils {
                     out.appsBytes += len;
                     out.appsCount++;
                 }
-                if (f.lastModified() >= recentCutoff) {
+                if (f.lastModified() >= recentCutoff && !lower.startsWith(".")) {
                     out.recentBytes += len;
                     out.recentCount++;
                 }
@@ -152,8 +267,10 @@ public class StorageUtils {
         }
     }
 
-    // השוואת שמות כך שתיקיות ושמות בעברית יופיעו תמיד לפני שמות באנגלית (סעיף כא)
+    // השוואת שמות כך שתיקיות ושמות בעברית יופיעו תמיד לפני שמות באנגלית
     public static int compareHebrewFirst(String a, String b) {
+        if (a == null) a = "";
+        if (b == null) b = "";
         boolean aHeb = startsWithHebrew(a);
         boolean bHeb = startsWithHebrew(b);
         if (aHeb != bHeb) {
@@ -184,7 +301,7 @@ public class StorageUtils {
             long total = stat.getTotalBytes();
             long free = stat.getAvailableBytes();
             long used = Math.max(0, total - free);
-            return new StorageStat(path, total, used, free, true);
+            return new StorageStat(path, "אחסון ראשי", total, used, free, true);
         } catch (Exception e) {
             return new StorageStat(null, 0, 0, 0, false);
         }
@@ -204,7 +321,7 @@ public class StorageUtils {
                     long total = stat.getTotalBytes();
                     long free = stat.getAvailableBytes();
                     long used = Math.max(0, total - free);
-                    return new StorageStat(sdRoot, total, used, free, total > 0);
+                    return new StorageStat(sdRoot, "כרטיס SD", total, used, free, total > 0);
                 }
             }
         } catch (Exception ignored) {

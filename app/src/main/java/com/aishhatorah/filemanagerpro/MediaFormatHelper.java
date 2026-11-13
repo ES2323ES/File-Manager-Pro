@@ -3,8 +3,9 @@ package com.aishhatorah.filemanagerpro;
 import java.util.Locale;
 
 /**
- * סעיפים ט, יא, יב: זיהוי מרכזי ומלא של כלל סוגי קובצי האודיו, הוידאו, התמונות,
- * הארכיונים, המסמכים וחבילות ההתקנה לאנדרואיד (APK / APKS / APKM / XAPK).
+ * סעיפים 2, 9, 12, 13, 14, 40, 41:
+ * זיהוי מלא של כלל פורמטי תמונה (כולל GIF ו-SVG), שמע, וידאו, קוד ותכנות, ארכיונים (ZIP/TAR/GZ/TAR.GZ),
+ * קבצי גיבוי .bak, מסמכים וחבילות התקנה לאנדרואיד.
  */
 public final class MediaFormatHelper {
 
@@ -35,22 +36,57 @@ public final class MediaFormatHelper {
     };
 
     private static final String[] ARCHIVE_EXTS = {
-            ".zip", ".jar", ".cbz"
+            ".tar.gz", ".tgz", ".zip", ".tar", ".gz", ".jar", ".cbz"
+    };
+
+    private static final String[] CODE_EXTS = {
+            ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx", ".py", ".sh", ".bash", ".zsh",
+            ".java", ".kt", ".kts", ".c", ".h", ".cpp", ".hpp", ".cc", ".cs",
+            ".html", ".htm", ".css", ".scss", ".rs", ".bat", ".cmd", ".ps1",
+            ".properties", ".prop", ".smali", ".php", ".yaml", ".yml", ".json",
+            ".xml", ".svg", ".sql", ".md", ".markdown", ".gradle", ".ini", ".cfg", ".conf", ".toml"
     };
 
     private static final String[] TEXT_EXTS = {
-            ".txt", ".log", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml",
-            ".ini", ".cfg", ".conf", ".properties", ".html", ".htm", ".js", ".css",
-            ".java", ".kt", ".py", ".sh", ".sql", ".rtf"
+            ".txt", ".log", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml",
+            ".ini", ".cfg", ".conf", ".properties", ".prop", ".html", ".htm", ".js", ".mjs", ".jsx",
+            ".ts", ".tsx", ".css", ".scss", ".java", ".kt", ".kts", ".c", ".h", ".cpp", ".hpp", ".cc",
+            ".py", ".sh", ".bash", ".rs", ".bat", ".cmd", ".smali", ".php", ".sql", ".rtf", ".gradle",
+            ".toml", ".bak"
     };
 
     private static final String[] DOCUMENT_EXTS = {
             ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
-            ".txt", ".rtf", ".csv", ".tsv", ".md", ".log", ".json", ".xml", ".html", ".htm"
+            ".txt", ".rtf", ".csv", ".tsv", ".md", ".markdown", ".log", ".json", ".xml", ".html", ".htm",
+            ".yaml", ".yml", ".sql", ".java", ".kt", ".py", ".js", ".ts", ".css", ".php", ".smali", ".c", ".cpp"
     };
 
     public static boolean isImageFile(String fileName) {
         return endsWithAny(fileName, IMAGE_EXTS);
+    }
+
+    public static boolean isGifFile(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".gif");
+    }
+
+    public static boolean isSvgFile(String fileName) {
+        if (fileName == null) return false;
+        String l = fileName.toLowerCase(Locale.ROOT);
+        return l.endsWith(".svg") || l.endsWith(".svgz");
+    }
+
+    public static boolean isMarkdownFile(String fileName) {
+        if (fileName == null) return false;
+        String l = fileName.toLowerCase(Locale.ROOT);
+        return l.endsWith(".md") || l.endsWith(".markdown");
+    }
+
+    public static boolean isBackupFile(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".bak");
+    }
+
+    public static boolean isPdfFile(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".pdf");
     }
 
     public static boolean isAudioFile(String fileName) {
@@ -58,7 +94,10 @@ public final class MediaFormatHelper {
     }
 
     public static boolean isVideoFile(String fileName) {
-        return endsWithAny(fileName, VIDEO_EXTS);
+        if (fileName == null) return false;
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        // קובץ .ts במדיה לרוב וידאו, אך בקוד TypeScript קטן נזהה אותו בקוד רק כשנדרש או נאפשר פתיחה בשניהם
+        return endsWithAny(lower, VIDEO_EXTS);
     }
 
     public static boolean isInstallableAppPackage(String fileName) {
@@ -79,12 +118,64 @@ public final class MediaFormatHelper {
         return endsWithAny(fileName, ARCHIVE_EXTS);
     }
 
+    public static boolean isZipContainer(String fileName) {
+        if (fileName == null) return false;
+        String l = fileName.toLowerCase(Locale.ROOT);
+        return l.endsWith(".zip") || l.endsWith(".jar") || l.endsWith(".cbz");
+    }
+
+    public static boolean isTarGzArchive(String fileName) {
+        if (fileName == null) return false;
+        String l = fileName.toLowerCase(Locale.ROOT);
+        return l.endsWith(".tar.gz") || l.endsWith(".tgz");
+    }
+
+    public static boolean isTarArchive(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".tar");
+    }
+
+    public static boolean isGzArchive(String fileName) {
+        if (fileName == null) return false;
+        String l = fileName.toLowerCase(Locale.ROOT);
+        return l.endsWith(".gz") && !l.endsWith(".tar.gz");
+    }
+
+    public static boolean isCodeOrSyntaxFile(String fileName) {
+        return endsWithAny(fileName, CODE_EXTS);
+    }
+
     public static boolean isTextFile(String fileName) {
         return endsWithAny(fileName, TEXT_EXTS);
     }
 
     public static boolean isDocumentFile(String fileName) {
         return endsWithAny(fileName, DOCUMENT_EXTS);
+    }
+
+    public static String getExtensionNormalized(String fileName) {
+        if (fileName == null) return "";
+        String lower = fileName.trim().toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".tar.gz")) return ".tar.gz";
+        int dot = lower.lastIndexOf('.');
+        if (dot >= 0 && dot < lower.length() - 1) {
+            return lower.substring(dot);
+        }
+        return "";
+    }
+
+    public static boolean isSupportedBuiltInFormat(String fileName) {
+        if (fileName == null) return false;
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        return isImageFile(lower)
+                || isAudioFile(lower)
+                || isVideoFile(lower)
+                || isInstallableAppPackage(lower)
+                || isZipOrArchiveFile(lower)
+                || isTextFile(lower)
+                || isPdfFile(lower)
+                || lower.endsWith(".docx")
+                || lower.endsWith(".xlsx")
+                || lower.endsWith(".pptx");
     }
 
     private static boolean endsWithAny(String fileName, String... exts) {
