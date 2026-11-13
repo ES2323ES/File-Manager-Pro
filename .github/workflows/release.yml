@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_slot:
-        description: 'Release tag label (e.g. V1, V2, V3, V4, V5, V6, V7, V8) - leave empty for auto-increment'
+        description: 'Release tag label (e.g. V1, V2, ..., V9) - leave empty for auto-increment'
         required: false
         default: ''
 
@@ -53,10 +53,10 @@ jobs:
           mkdir -p dist-artifacts
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           cp "$APK_PATH" dist-artifacts/File-Manager-Pro.apk
-          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.2.8.apk
-          zip -r dist-artifacts/File-Manager-Pro-v0.2.8-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
+          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.2.9.apk
+          zip -r dist-artifacts/File-Manager-Pro-v0.2.9-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
 
-      - name: Determine Release Tag (V1..V8...)
+      - name: Determine Release Tag (V1..V9...)
         id: calc_tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +67,7 @@ jobs:
           else
             LATEST_TITLE=$(gh release list --limit 1 --json name --jq '.[0].name' 2>/dev/null || true)
             LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.2.8"; then
+            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.2.9"; then
               NEXT_TAG="$LATEST_TAG"
             else
               HIGHEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^V[0-9]+$' | sed 's/V//' | sort -nr | head -n 1 || true)
@@ -87,19 +87,16 @@ jobs:
           TAG: ${{ steps.calc_tag.outputs.tag }}
         run: |
           cat <<EOF > release-notes.md
-          ### חידושים עיקריים בגירסה 0.2.8 רשמית (${TAG})
-          • **תמיכה מאובטחת בעדכונים דרך נטפרי ורשתות מסוננות:** אימות תעודות אבטחה שהמשתמש התקין המוגבל באופן קשיח ומאובטח לדומיינים הרשמיים של GitHub בלבד
-          • **מנהל ארכיונים מלא (ZIP + סיסמה / TAR / TAR.GZ / GZ):** דחיסה, חילוץ, צפייה פנימית בקבצים ועריכה/הוספה/מחיקה ישירות בתוך הארכיון עם הגנת Zip-Slip
-          • **עיצוב מינימליסטי, ערכות נושא מורחבות וגודל תצוגה:** שחור עמוק (AMOLED), אוקיינוס, יער, מערכת דינאמית (Material You), בחירת צבע דגש ומחוון גודל תצוגה
-          • **תפריט המבורגר, בחירה מרובה, Breadcrumbs ושינוי שם אצווה:** ניווט מהיר, מיון כולל תאריך יצירה, פתיחה באמצעות + ברירות מחדל, והתראות התקדמות לפעולות קבצים
-          • **עורך קוד וטקסט מקצועי (20+ שפות + Markdown + SVG + גיבויי .bak):** מספור שורות, Undo/Redo, חיפוש והחלפה, עטיפת שורות ושחזור גיבוי בלחיצה
-          • **מדיה Pro (GIF מונפש, טיימר שינה, אקולייזר, מחוות 2x, טפט ו-OTG):** הפעלת GIF ופירוק/יצירת GIF, תמיכה בהגנת מסך, כונני USB OTG, ניהול אפליקציות מותקנות ומנתח קוד APK (Manifest/DEX)
-          • **יומן אבחון שגיאות ומטמון סריקה מהיר:** לוג יומי של 14 יום, הסתרת מידע רגיש לפני דיווח וזמני טעינה מיידיים
+          ### חידושים ושיפורים בגירסה 0.2.9 רשמית (${TAG})
+          • **תיקון שליטה בנגן הווידאו והסרת העורך ממסך הנגן:** תוקן הבאג שמנע שליטה בהפעלה, ציר הזמן והקפצה בחלק מפורמטי הווידאו (MKV/AVI/TS/MOV/WebM), כולל גיבוי משך מ-MediaMetadataRetriever, מעבר חלק על תעלת FileDescriptor בעת הצורך ופתיחה בנגן חיצוני כגיבוי; כפתור עורך הווידאו הוסר ממסך הווידאו הנקי
+          • **טעינה מהירה ומיידית בכל הקטגוריות:** שדרוג מנוע האינדוקס לשימוש ישיר במסד הנתונים MediaStore SQLite עם שמירת מטמון מלא של תמונות/שמע/וידאו/מסמכים/אפליקציות/קבצים חדשים, ביטול סריקות כפולות בחזרה מקובץ וחישוב מטא-דאטה מקדים למיון מהיר
+          • **תיקון הודעת "האפליקציה מעודכנת":** תיקון וליטוש נוסח הודעת הגרסה העדכנית וטיפול מדויק בשגיאות תקשורת זמניות מול GitHub
+          • **ממשק מינימליסטי ונטפרי:** שמירה מלאה על תמיכת עדכוני נטפרי ל-GitHub, מנהל ארכיונים מלא, עורך קוד (20+ שפות) וחותך אודיו/וידאו
 
           ### הורדה ישירה
           - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
-          - **קובץ התקנה מתויג גירסה 0.2.8 רשמית:** \`File-Manager-Pro-v0.2.8.apk\`
-          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.2.8-Source.zip\`
+          - **קובץ התקנה מתויג גירסה 0.2.9 רשמית:** \`File-Manager-Pro-v0.2.9.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.2.9-Source.zip\`
 
           ### פיתוח והנדסה
           - **פיתוח והנדסה:** @אש התורה — [במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [בעוגן פליי](https://ogenplay.com/users/724ec656-a4a7-4d31-8ece-fa9938851704)
@@ -108,21 +105,21 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
             gh release edit "$TAG" \
-              --title "${TAG} — File Manager Pro v0.2.8 רשמית" \
+              --title "${TAG} — File Manager Pro v0.2.9 רשמית" \
               --notes-file release-notes.md \
               --draft=false \
               --prerelease=false
             gh release upload "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.8.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.8-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.2.9.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.9-Source.zip \
               --clobber
           else
             gh release create "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.8.apk \
-              dist-artifacts/File-Manager-Pro-v0.2.8-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.2.9.apk \
+              dist-artifacts/File-Manager-Pro-v0.2.9-Source.zip \
               --target "$GITHUB_SHA" \
-              --title "${TAG} — File Manager Pro v0.2.8 רשמית" \
+              --title "${TAG} — File Manager Pro v0.2.9 רשמית" \
               --notes-file release-notes.md
           fi

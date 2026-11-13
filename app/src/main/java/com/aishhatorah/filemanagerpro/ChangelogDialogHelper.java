@@ -79,6 +79,19 @@ public class ChangelogDialogHelper {
         headerRow.addView(headerText);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.2.9 רשמית =====================
+        SpannableStringBuilder v29 = new SpannableStringBuilder();
+        appendBullet(v29, "תיקון שליטה מלאה בנגן הווידאו בכל הפורמטים והסרת העורך ממסך הצפייה: ", accent,
+                "שליטה תקינה בהפעלה, השהייה, גרירת ציר זמן והקפצה (±10 שניות) בכל פורמטי הווידאו (MKV/AVI/TS/MOV/WebM/MP4) כולל גיבוי משך מ-MediaMetadataRetriever ופתיחה חלופית בנגן מערכת בעת הצורך, לצד מסך צפייה נקי ללא כפתור עורך וידאו מיותר.", textPrimary);
+        appendBullet(v29, "\n\nטעינה מיידית בכל הקטגוריות (פי 50–100 מהר יותר): ", accent,
+                "מנוע אינדוקס מהיר מבוסס MediaStore SQLite עם שמירת מטמון מלא של הקטגוריות, חישוב מטא-דאטה מקדים למיון מהיר וביטול סריקות כפולות בחזרה למסך.", textPrimary);
+        appendBullet(v29, "\n\nתיקון ניסוח הודעת 'האפליקציה מעודכנת': ", accent,
+                "טקסט ברור, מדויק ואחיד בהודעה שהאפליקציה מעודכנת לגרסה האחרונה וטיפול נקי בשגיאות תקשורת זמניות.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.2.9 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+                accent, textPrimary, textSecondary, subtleBg, divider, v29);
+
         // ===================== גירסה 0.2.8 רשמית =====================
         SpannableStringBuilder v28 = new SpannableStringBuilder();
         appendBullet(v28, "שחזור עיצוב נקי, ערכות נושא מותאמות וגודל תצוגה: ", accent,
@@ -94,8 +107,8 @@ public class ChangelogDialogHelper {
         appendBullet(v28, "\n\nתמיכה מאובטחת בנטפרי, יומן אבחון ומטמון מהיר: ", accent,
                 "אימות תעודת משתמש מוגבל ל-GitHub בלבד, זיכרון מטמון מהיר לתיקיות, חיבור USB OTG, מדריך למשתמש ודיווח תקלות נקי מפרטים מזהים.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.2.8 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.2.8 רשמית", "עיצוב נקי, נטפרי, ארכיונים ועורך קוד מתקדם",
                 accent, textPrimary, textSecondary, subtleBg, divider, v28);
 
         // ===================== גירסה 0.2.7 רשמית =====================

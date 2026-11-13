@@ -76,17 +76,25 @@ public class UpdateChecker {
                 if (status != 200) {
                     AppLogger.warn(activity, "Updater", "GitHub API returned status " + status);
                     if (manualTrigger) {
-                        MAIN.post(() -> ThemedDialogHelper.showCustomDialog(
-                                activity,
-                                "האפליקציה מעודכנת",
-                                "ברשותך הגירסה העדכנית ביותר (" + formatOfficialVer(BuildConfig.VERSION_NAME) + ").",
-                                null,
-                                "סגור",
-                                null,
-                                null,
-                                null,
-                                false
-                        ));
+                        MAIN.post(() -> {
+                            if (status == 404) {
+                                ThemedDialogHelper.showCustomDialog(
+                                        activity,
+                                        "האפליקציה מעודכנת",
+                                        "האפליקציה מעודכנת לגירסה האחרונה (" + formatOfficialVer(BuildConfig.VERSION_NAME) + ").",
+                                        null,
+                                        "סגור",
+                                        null,
+                                        null,
+                                        null,
+                                        false
+                                );
+                            } else {
+                                Toast.makeText(activity,
+                                        "לא ניתן לבדוק עדכונים כרגע (קוד " + status + "), נסה שוב בעוד רגע",
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        });
                     }
                     return;
                 }
@@ -141,7 +149,7 @@ public class UpdateChecker {
                         ThemedDialogHelper.showCustomDialog(
                                 activity,
                                 "האפליקציה מעודכנת",
-                                "ברשותך הגירסה החדשה ביותר (גירסה " + formatOfficialVer(BuildConfig.VERSION_NAME) + ").",
+                                "האפליקציה מעודכנת לגירסה האחרונה (" + formatOfficialVer(BuildConfig.VERSION_NAME) + ").",
                                 null,
                                 "סגור",
                                 null,

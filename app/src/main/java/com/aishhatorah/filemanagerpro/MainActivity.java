@@ -44,7 +44,7 @@ import java.util.concurrent.Executors;
 
 /**
  * סעיפים 3, 6, 7, 8, 17, 18, 19, 33, 34, 38:
- * מסך הבית המינימליסטי והרספונסיבי של File Manager Pro v0.2.8:
+ * מסך הבית המינימליסטי והרספונסיבי של File Manager Pro v0.2.9:
  * - טעינה מיידית ממטמון סריקה (FileScanCache) ועדכון ברקע
  * - כרטיס גישה מהירה לתיקייה האחרונה
  * - זיהוי והצגת כונני USB OTG מחוברים בזמן אמת
@@ -300,7 +300,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshCategoryVolumesAsync(final boolean notifyWhenScanFinished) {
         bgExecutor.execute(() -> {
-            StorageUtils.CategoryBytesSummary fresh = FileScanCache.refreshNow(this);
+            StorageUtils.CategoryBytesSummary fresh = FileScanCache
+                    .getSnapshot(this, PrefsManager.isShowHidden(this), notifyWhenScanFinished)
+                    .summary;
             runOnUiThread(() -> {
                 cachedSizes = fresh;
                 for (Map.Entry<String, TextView> entry : subtitleViewsById.entrySet()) {

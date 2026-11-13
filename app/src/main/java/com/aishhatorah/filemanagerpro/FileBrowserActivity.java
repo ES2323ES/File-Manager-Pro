@@ -55,6 +55,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -119,6 +120,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     private File rootBoundary = null;
     private File selectedCategoryFolder = null;
     private final Map<String, Integer> categoryFolderCounts = new ConcurrentHashMap<>();
+    private final Map<String, Integer> dirItemCountCache = new ConcurrentHashMap<>();
+    private final Set<String> pendingDirCountPaths = ConcurrentHashMap.newKeySet();
+    private final Map<String, Long> cachedSizesByPath = new ConcurrentHashMap<>();
+    private final Map<String, Long> cachedModifiedByPath = new ConcurrentHashMap<>();
+    private Boolean appliedGridLayout = null;
+    private int appliedSpanCount = -1;
 
     private boolean multiSelectMode = false;
     private boolean searchBarOpen = false;
@@ -391,6 +398,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                 dp(36), dp(36), Gravity.CENTER));
 
         recyclerView = new RecyclerView(this);
+        recyclerView.setHasFixedSize(true);
+        recyclerView.setItemViewCacheSize(24);
         recyclerView.setClipToPadding(false);
         recyclerView.setPadding(dp(5), dp(3), dp(20), dp(12));
         applyFolderLayoutMode();
@@ -682,7 +691,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                         executePasteHere();
                     } else if (chosen.startsWith("ניקוי רשימת")) {
                         PrefsManager.setRecentClearedTimestamp(this, System.currentTimeMillis());
-                        loadFilesForCurrentMode(false);
+                        FileScanCache.invalidate();
+                        loadFilesForCurrentMode(true);
                         Toast.makeText(this, "הרשימה נוקתה", Toast.LENGTH_SHORT).show();
                     } else if (chosen.startsWith("רוקן את כל")) {
                         confirmEmptyRecycleBinTwoStep();
@@ -860,7 +870,9 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (miniAudioListener != null) miniAudioListener.onPlaybackStateChanged();
         if (recyclerView != null && !showingInstalledAppsTab) {
             applyFolderLayoutMode();
-            loadFilesForCurrentMode(false);
+            if (allLoadedFiles.isEmpty() || FileScanCache.isDirty()) {
+                loadFilesForCurrentMode(false);
+            }
         }
     }
 
@@ -874,8 +886,16 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void applyFolderLayoutMode() {
-        if (PrefsManager.isGridLayoutForMode(this, currentMode)) {
-            recyclerView.setLayoutManager(new GridLayoutManager(this, computeResponsiveGridColumns()));
+        boolean wantGrid = PrefsManager.isGridLayoutForMode(this, currentMode);
+        int wantSpan = wantGrid ? computeResponsiveGridColumns() : 1;
+        if (appliedGridLayout != null && appliedGridLayout == wantGrid && appliedSpanCount == wantSpan
+                && recyclerView.getLayoutManager() != null) {
+            return;
+        }
+        appliedGridLayout = wantGrid;
+        appliedSpanCount = wantSpan;
+        if (wantGrid) {
+            recyclerView.setLayoutManager(new GridLayoutManager(this, wantSpan));
         } else {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));
         }
@@ -1049,16 +1069,22 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
 
         renderInteractiveBreadcrumbs();
-        loadingSpinner.setVisibility(allLoadedFiles.isEmpty() ? View.VISIBLE : View.GONE);
 
         final boolean showHidden = PrefsManager.isShowHidden(this);
         final File activeMediaFolder = selectedCategoryFolder;
-        final long sevenDaysAgo = System.currentTimeMillis() - (7L * 24L * 3600L * 1000L);
-        final long recentCutoff = Math.max(sevenDaysAgo, PrefsManager.getRecentClearedTimestamp(this));
+        final boolean isIndexedCat = isIndexedCategoryMode();
+        final StorageUtils.CategoryIndexSnapshot quickSnap =
+                (!fromUserPullToRefresh && isIndexedCat)
+                        ? FileScanCache.peekFreshSnapshot(showHidden)
+                        : null;
+
+        loadingSpinner.setVisibility((allLoadedFiles.isEmpty() && quickSnap == null) ? View.VISIBLE : View.GONE);
 
         executor.execute(() -> {
             List<File> result = new ArrayList<>();
             if (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) {
+                dirItemCountCache.clear();
+                pendingDirCountPaths.clear();
                 if (currentDir != null && currentDir.exists()) {
                     File[] children = currentDir.listFiles();
                     if (children != null) {
@@ -1089,12 +1115,12 @@ public class FileBrowserActivity extends AppCompatActivity {
                         }
                     }
                 } else {
-                    List<File> allMediaFiles = new ArrayList<>();
-                    collectMatchingCategoryFiles(Environment.getExternalStorageDirectory(), allMediaFiles, showHidden, recentCutoff, 0);
-                    StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
-                    if (sd.available && sd.root != null) {
-                        collectMatchingCategoryFiles(sd.root, allMediaFiles, showHidden, recentCutoff, 0);
-                    }
+                    StorageUtils.CategoryIndexSnapshot snap = quickSnap != null
+                            ? quickSnap
+                            : FileScanCache.getSnapshot(this, showHidden, fromUserPullToRefresh);
+                    cachedSizesByPath.putAll(snap.sizeByPath);
+                    cachedModifiedByPath.putAll(snap.modifiedByPath);
+                    List<File> allMediaFiles = FileScanCache.extractCategoryFiles(snap, currentMode);
                     Map<String, File> foldersByPath = new LinkedHashMap<>();
                     Map<String, Integer> countsByPath = new LinkedHashMap<>();
                     for (File mf : allMediaFiles) {
@@ -1109,7 +1135,16 @@ public class FileBrowserActivity extends AppCompatActivity {
                     categoryFolderCounts.putAll(countsByPath);
                     result.addAll(foldersByPath.values());
                 }
+            } else if (isIndexedCat) {
+                StorageUtils.CategoryIndexSnapshot snap = quickSnap != null
+                        ? quickSnap
+                        : FileScanCache.getSnapshot(this, showHidden, fromUserPullToRefresh);
+                cachedSizesByPath.putAll(snap.sizeByPath);
+                cachedModifiedByPath.putAll(snap.modifiedByPath);
+                result.addAll(FileScanCache.extractCategoryFiles(snap, currentMode));
             } else {
+                long sevenDaysAgo = System.currentTimeMillis() - (7L * 24L * 3600L * 1000L);
+                long recentCutoff = Math.max(sevenDaysAgo, PrefsManager.getRecentClearedTimestamp(this));
                 collectMatchingCategoryFiles(Environment.getExternalStorageDirectory(), result, showHidden, recentCutoff, 0);
                 StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
                 if (sd.available && sd.root != null) {
@@ -1131,6 +1166,15 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             });
         });
+    }
+
+    private boolean isIndexedCategoryMode() {
+        return MODE_IMAGES.equals(currentMode)
+                || MODE_AUDIO.equals(currentMode)
+                || MODE_VIDEOS.equals(currentMode)
+                || MODE_DOCUMENTS.equals(currentMode)
+                || MODE_APPS.equals(currentMode)
+                || MODE_RECENT.equals(currentMode);
     }
 
     private void loadInstalledAppsAsync() {
@@ -1198,25 +1242,53 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void sortFileList(List<File> list) {
+        if (list.size() <= 1) return;
         final int sortMode = PrefsManager.getSortMode(this);
         final boolean asc = PrefsManager.isSortAscending(this);
 
-        Collections.sort(list, (a, b) -> {
-            if (a.isDirectory() != b.isDirectory()) {
-                return a.isDirectory() ? -1 : 1;
+        // חישוב מטא-דאטה פעם אחת (O(N)) לפני המיון במקום אלפי קריאות מערכת בתוך ה-Comparator
+        final Map<File, Boolean> isDirMap = new HashMap<>(list.size());
+        final Map<File, Boolean> hebMap = new HashMap<>(list.size());
+        final Map<File, Long> metricMap = (sortMode == PrefsManager.SORT_SIZE
+                || sortMode == PrefsManager.SORT_DATE
+                || sortMode == PrefsManager.SORT_CREATED)
+                ? new HashMap<>(list.size()) : null;
+
+        final boolean onlyFileCategories = isIndexedCategoryMode() && !(isGroupedMediaCategoryMode() && selectedCategoryFolder == null);
+        for (File f : list) {
+            boolean dir = !onlyFileCategories && f.isDirectory();
+            isDirMap.put(f, dir);
+            hebMap.put(f, StorageUtils.startsWithHebrew(f.getName()));
+            if (metricMap != null) {
+                String p = f.getAbsolutePath();
+                if (sortMode == PrefsManager.SORT_SIZE) {
+                    Long cached = cachedSizesByPath.get(p);
+                    metricMap.put(f, cached != null ? cached : f.length());
+                } else if (sortMode == PrefsManager.SORT_DATE) {
+                    Long cached = cachedModifiedByPath.get(p);
+                    metricMap.put(f, cached != null ? cached : f.lastModified());
+                } else if (sortMode == PrefsManager.SORT_CREATED) {
+                    metricMap.put(f, StorageUtils.getFileCreatedTimeMillis(f));
+                }
             }
-            if (a.isDirectory() && b.isDirectory()) {
-                boolean aHeb = StorageUtils.startsWithHebrew(a.getName());
-                boolean bHeb = StorageUtils.startsWithHebrew(b.getName());
+        }
+
+        Collections.sort(list, (a, b) -> {
+            boolean aDir = Boolean.TRUE.equals(isDirMap.get(a));
+            boolean bDir = Boolean.TRUE.equals(isDirMap.get(b));
+            if (aDir != bDir) {
+                return aDir ? -1 : 1;
+            }
+            if (aDir && bDir) {
+                boolean aHeb = Boolean.TRUE.equals(hebMap.get(a));
+                boolean bHeb = Boolean.TRUE.equals(hebMap.get(b));
                 if (aHeb != bHeb) return aHeb ? -1 : 1;
             }
             int cmp;
-            if (sortMode == PrefsManager.SORT_SIZE) {
-                cmp = Long.compare(a.length(), b.length());
-            } else if (sortMode == PrefsManager.SORT_DATE) {
-                cmp = Long.compare(a.lastModified(), b.lastModified());
-            } else if (sortMode == PrefsManager.SORT_CREATED) {
-                cmp = Long.compare(StorageUtils.getFileCreatedTimeMillis(a), StorageUtils.getFileCreatedTimeMillis(b));
+            if (metricMap != null) {
+                Long va = metricMap.get(a);
+                Long vb = metricMap.get(b);
+                cmp = Long.compare(va != null ? va : 0L, vb != null ? vb : 0L);
             } else if (sortMode == PrefsManager.SORT_TYPE) {
                 cmp = getExtension(a.getName()).compareToIgnoreCase(getExtension(b.getName()));
             } else {
@@ -1286,6 +1358,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     if (!folderName.isEmpty()) {
                         File nf = new File(currentDir, folderName);
                         if (nf.mkdirs()) {
+                            FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "התיקייה נוצרה", Toast.LENGTH_SHORT).show();
                         } else {
@@ -1315,6 +1388,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     File target = StorageUtils.uniqueDestinationFile(currentDir, name);
                     try (FileOutputStream fos = new FileOutputStream(target)) {
                         fos.write("".getBytes(StandardCharsets.UTF_8));
+                        FileScanCache.invalidate();
                         loadFilesForCurrentMode();
                         Intent ed = new Intent(this, CodeEditorActivity.class);
                         ed.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, target.getAbsolutePath());
@@ -1391,6 +1465,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
                 FileOperationNotificationHelper.finish(this, opId,
                         "המחיקה הושלמה", "טופלו " + done + " פריטים");
+                FileScanCache.invalidate();
                 runOnUiThread(() -> loadFilesForCurrentMode(false));
             });
         };
@@ -1431,6 +1506,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         isMove ? "ההעברה הושלמה" : "ההעתקה הושלמה",
                         "הושלמו " + okCount + " מתוך " + total + " פריטים");
                 final int fOk = okCount;
+                FileScanCache.invalidate();
                 runOnUiThread(() -> {
                     clipboardFiles.clear();
                     updateClipboardBar();
@@ -1501,6 +1577,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         if (f.renameTo(target)) renamed++;
                     }
                     exitMultiSelectMode();
+                    if (renamed > 0) FileScanCache.invalidate();
                     loadFilesForCurrentMode(false);
                     Toast.makeText(this, "שונו שמות ל-" + renamed + " פריטים", Toast.LENGTH_SHORT).show();
                 },
@@ -1575,6 +1652,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                             ArchiveUtils.compressFiles(sources, targetArchive, fmt, pwd);
                             FileOperationNotificationHelper.finish(this, opId,
                                     "הארכיון נוצר בהצלחה", targetArchive.getName());
+                            FileScanCache.invalidate();
                             runOnUiThread(() -> {
                                 loadFilesForCurrentMode();
                                 Toast.makeText(this, "נוצר בהצלחה: " + targetArchive.getName(), Toast.LENGTH_LONG).show();
@@ -1607,6 +1685,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         "כן, רוקן לצמיתות",
                         () -> {
                             int count = RecycleBinManager.emptyTrash(this);
+                            FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "נמחקו לצמיתות " + count + " פריטים", Toast.LENGTH_SHORT).show();
                         },
@@ -1672,6 +1751,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         byte[] buf = new byte[16 * 1024];
                         int r;
                         while ((r = fis.read(buf)) != -1) fos.write(buf, 0, r);
+                        FileScanCache.invalidate();
                         loadFilesForCurrentMode(false);
                         Toast.makeText(this, "הקובץ שוחזר: " + dest.getName(), Toast.LENGTH_LONG).show();
                     } catch (Exception e) {
@@ -1699,11 +1779,13 @@ public class FileBrowserActivity extends AppCompatActivity {
                     which -> {
                         if (which == 0) {
                             if (RecycleBinManager.restoreFromTrash(this, file)) {
+                                FileScanCache.invalidate();
                                 loadFilesForCurrentMode();
                                 Toast.makeText(this, "הקובץ שוחזר בהצלחה", Toast.LENGTH_SHORT).show();
                             }
                         } else if (which == 1) {
                             StorageUtils.deleteRecursively(file);
+                            FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
                         } else {
@@ -1870,6 +1952,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     if (!newName.isEmpty() && file.getParentFile() != null) {
                         File dest = new File(file.getParentFile(), newName);
                         if (file.renameTo(dest)) {
+                            FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "השם שונה בהצלחה", Toast.LENGTH_SHORT).show();
                         } else {
@@ -1888,6 +1971,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         Runnable performDelete = () -> {
             boolean ok = toTrash ? RecycleBinManager.moveToTrash(this, file) : StorageUtils.deleteRecursively(file);
             if (ok) {
+                FileScanCache.invalidate();
                 loadFilesForCurrentMode();
                 Toast.makeText(this, toTrash ? "הועבר לסל המיחזור" : "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
             } else {
@@ -1995,24 +2079,34 @@ public class FileBrowserActivity extends AppCompatActivity {
             FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
 
             if (f.isDirectory()) {
+                String path = f.getAbsolutePath();
                 if (isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
-                    Integer matched = categoryFolderCounts.get(f.getAbsolutePath());
+                    Integer matched = categoryFolderCounts.get(path);
                     int count = matched != null ? matched : 0;
                     String unit = MODE_IMAGES.equals(currentMode) ? "תמונות" : "סירטונים";
                     h.tvMeta.setText(isGrid
                             ? (count + " " + unit)
                             : (count + " " + unit + " • " + df.format(new Date(f.lastModified()))));
                 } else {
-                    File[] sub = f.listFiles();
-                    int count = sub != null ? sub.length : 0;
-                    h.tvMeta.setText(isGrid
-                            ? (count + " פריטים")
-                            : (count + " פריטים • " + df.format(new Date(f.lastModified()))));
+                    Integer cachedDirCount = dirItemCountCache.get(path);
+                    if (cachedDirCount != null) {
+                        h.tvMeta.setText(isGrid
+                                ? (cachedDirCount + " פריטים")
+                                : (cachedDirCount + " פריטים • " + df.format(new Date(f.lastModified()))));
+                    } else {
+                        h.tvMeta.setText("תיקייה");
+                        scheduleDirChildCount(f, position);
+                    }
                 }
             } else {
+                String p = f.getAbsolutePath();
+                Long sz = cachedSizesByPath.get(p);
+                long fileLen = sz != null ? sz : f.length();
+                Long md = cachedModifiedByPath.get(p);
+                long modMs = md != null ? md : f.lastModified();
                 h.tvMeta.setText(isGrid
-                        ? StorageUtils.formatSize(f.length())
-                        : (StorageUtils.formatSize(f.length()) + " • " + df.format(new Date(f.lastModified()))));
+                        ? StorageUtils.formatSize(fileLen)
+                        : (StorageUtils.formatSize(fileLen) + " • " + df.format(new Date(modMs))));
             }
             h.tvMeta.setTextColor(textSecondary);
 
@@ -2032,6 +2126,22 @@ public class FileBrowserActivity extends AppCompatActivity {
         @Override
         public int getItemCount() {
             return displayedFiles.size();
+        }
+
+        private void scheduleDirChildCount(File dir, int adapterPos) {
+            final String path = dir.getAbsolutePath();
+            if (!pendingDirCountPaths.add(path)) return;
+            executor.execute(() -> {
+                File[] sub = dir.listFiles();
+                int count = sub != null ? sub.length : 0;
+                dirItemCountCache.put(path, count);
+                runOnUiThread(() -> {
+                    if (adapterPos >= 0 && adapterPos < displayedFiles.size()
+                            && displayedFiles.get(adapterPos).getAbsolutePath().equals(path)) {
+                        notifyItemChanged(adapterPos);
+                    }
+                });
+            });
         }
 
         class VH extends RecyclerView.ViewHolder {

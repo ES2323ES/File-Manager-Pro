@@ -18,6 +18,8 @@ import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.pdf.PdfRenderer;
+import android.media.AudioAttributes;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.net.Uri;
@@ -135,6 +137,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean videoTickerActive = false;
     private int currentVideoWidth = 0;
     private int currentVideoHeight = 0;
+    private int knownVideoDurationMs = 0;
+    private boolean isUserSeekingVideo = false;
+    private boolean videoUsedFdFallback = false;
+    private boolean speedModifiedFromDefault = false;
+    private LinearLayout videoFallbackBar = null;
     private float videoSpeed = 1.0f;
     private int videoRepeatMode = AudioPlayerManager.REPEAT_OFF;
     private boolean videoMuted = false;
@@ -1507,6 +1514,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         centerCluster.setOrientation(LinearLayout.HORIZONTAL);
         centerCluster.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         centerCluster.setGravity(Gravity.CENTER);
+        centerCluster.setClickable(true);
         centerCluster.setPadding(dp(12), dp(8), dp(12), dp(8));
         GradientDrawable clusterBg = new GradientDrawable();
         clusterBg.setCornerRadius(999f);
@@ -1530,9 +1538,41 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         stageRoot.addView(centerCluster, centerLp);
 
+        // סרגל חלופי לפתיחה בנגן חיצוני במקרה שקודק ספציפי אינו נתמך בחומרה
+        videoFallbackBar = new LinearLayout(this);
+        videoFallbackBar.setOrientation(LinearLayout.VERTICAL);
+        videoFallbackBar.setGravity(Gravity.CENTER);
+        videoFallbackBar.setClickable(true);
+        videoFallbackBar.setPadding(dp(18), dp(14), dp(18), dp(14));
+        GradientDrawable fbBg = new GradientDrawable();
+        fbBg.setCornerRadius(dp(16));
+        fbBg.setColor(Color.argb(225, 15, 23, 42));
+        fbBg.setStroke(dp(1), Color.argb(90, 255, 255, 255));
+        videoFallbackBar.setBackground(fbBg);
+        videoFallbackBar.setVisibility(View.GONE);
+
+        TextView tvFallbackMsg = new TextView(this);
+        tvFallbackMsg.setText("פורמט וידאו זה דורש מפענח מערכת חיצוני");
+        tvFallbackMsg.setTextColor(Color.WHITE);
+        tvFallbackMsg.setTextSize(14f);
+        tvFallbackMsg.setTypeface(Typeface.DEFAULT_BOLD);
+        tvFallbackMsg.setGravity(Gravity.CENTER);
+        tvFallbackMsg.setPadding(0, 0, 0, dp(10));
+        videoFallbackBar.addView(tvFallbackMsg);
+
+        Button btnOpenExternalVideo = ThemedDialogHelper.createThemedButton(this, "נגן בנגן מערכת / חיצוני", theme, true, false);
+        btnOpenExternalVideo.setOnClickListener(v -> FileOpenWithHelper.openWithSystemChooser(this, targetFile));
+        videoFallbackBar.addView(btnOpenExternalVideo);
+
+        FrameLayout.LayoutParams fbLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        fbLp.setMargins(dp(24), 0, dp(24), 0);
+        stageRoot.addView(videoFallbackBar, fbLp);
+
         // סעיף 25 + 44: פאנל תחתון שקוף הצף מעל קצה הווידאו
         LinearLayout bottomCard = new LinearLayout(this);
         bottomCard.setOrientation(LinearLayout.VERTICAL);
+        bottomCard.setClickable(true);
         bottomCard.setPadding(dp(12), dp(8), dp(12), dp(10));
         GradientDrawable transBottom = new GradientDrawable();
         transBottom.setCornerRadius(dp(16));
@@ -1575,20 +1615,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         ImageButton btnVidRotate = createResponsiveRoundIconButton(R.drawable.ic_screen_rotate, dp(36), dp(4), false, Color.WHITE, theme);
         final ImageButton btnVidRepeat = createResponsiveRoundIconButton(R.drawable.ic_repeat_off, dp(36), dp(4), false, Color.WHITE, theme);
         final MaterialButton btnVidSpeed = createSpeedPillButton(videoSpeed, Color.WHITE, theme);
-        MaterialButton btnProVideoEditor = createPencilEditorButton("עורך וידאו", accent, theme, v -> {
-            pauseVideoSafely();
-            Intent i = new Intent(this, ProVideoEditorActivity.class);
-            i.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, targetFile.getAbsolutePath());
-            startActivity(i);
-        });
-        LinearLayout.LayoutParams edLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        edLp.setMarginStart(dp(6));
-        edLp.setMarginEnd(dp(6));
-        btnProVideoEditor.setLayoutParams(edLp);
+        LinearLayout.LayoutParams speedLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        speedLp.setMarginStart(dp(6));
+        btnVidSpeed.setLayoutParams(speedLp);
 
+        View bottomSpacer = new View(this);
         bottomRow.addView(btnVidRotate);
         bottomRow.addView(btnVidRepeat);
-        bottomRow.addView(btnProVideoEditor);
+        bottomRow.addView(bottomSpacer, new LinearLayout.LayoutParams(0, 1, 1f));
         bottomRow.addView(btnVidSpeed);
         bottomCard.addView(bottomRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1618,9 +1653,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         };
 
         btnCenterPlayPause.setOnClickListener(v -> {
-            if (!videoPrepared || videoPlayer == null) return;
-            if (isVideoPlayingSafely()) videoPlayer.pause();
-            else applyVideoSpeedInternal(true);
+            if (videoPlayer == null) {
+                loadVideoTrackAtIndex(currentVideoIdx, syncVidButtons);
+                return;
+            }
+            if (!videoPrepared) return;
+            try {
+                if (isVideoPlayingSafely()) videoPlayer.pause();
+                else applyVideoSpeedInternal(true);
+            } catch (Exception ignored) {
+            }
             syncVidButtons.run();
         });
         btnCenterBack10.setOnClickListener(v -> seekVideoBy(-10_000));
@@ -1643,6 +1685,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         btnVidRotate.setOnClickListener(v -> toggleScreenOrientation());
         btnVidSpeed.setOnClickListener(v -> showSpeedPickerDialog("בחירת מהירות הסרטון", videoSpeed, chosen -> {
             videoSpeed = chosen;
+            speedModifiedFromDefault = true;
             applyVideoSpeedInternal(isVideoPlayingSafely());
             syncVidButtons.run();
         }));
@@ -1651,11 +1694,26 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 if (fromUser && videoPrepared && videoPlayer != null) {
-                    try { videoPlayer.seekTo(progress); } catch (Exception ignored) {}
+                    tvVidPos.setText(formatClock(Math.max(0, progress)));
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            videoPlayer.seekTo(progress, MediaPlayer.SEEK_CLOSEST_SYNC);
+                        } else {
+                            videoPlayer.seekTo(progress);
+                        }
+                    } catch (Exception ignored) {
+                        try { videoPlayer.seekTo(progress); } catch (Exception ignored2) {}
+                    }
                 }
             }
-            @Override public void onStartTrackingTouch(SeekBar sb) {}
-            @Override public void onStopTrackingTouch(SeekBar sb) {}
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) {
+                isUserSeekingVideo = true;
+            }
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+                isUserSeekingVideo = false;
+            }
         });
 
         videoTextureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
@@ -1684,12 +1742,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (!videoTickerActive) return;
                 if (videoPrepared && videoPlayer != null) {
                     try {
-                        int dur = Math.max(1, videoPlayer.getDuration());
+                        int dur = getEffectiveVideoDurationMs();
                         int pos = Math.max(0, videoPlayer.getCurrentPosition());
-                        videoSeek.setMax(dur);
-                        videoSeek.setProgress(pos);
-                        tvVidPos.setText(formatClock(pos));
-                        tvVidDur.setText(formatClock(dur));
+                        if (dur > 0) {
+                            videoSeek.setEnabled(true);
+                            videoSeek.setMax(dur);
+                            if (!isUserSeekingVideo) {
+                                videoSeek.setProgress(Math.min(dur, pos));
+                                tvVidPos.setText(formatClock(pos));
+                            }
+                            tvVidDur.setText(formatClock(dur));
+                        } else {
+                            videoSeek.setEnabled(false);
+                            if (!isUserSeekingVideo) tvVidPos.setText(formatClock(pos));
+                            tvVidDur.setText("--:--");
+                        }
                         syncVidButtons.run();
                     } catch (Exception ignored) {
                     }
@@ -1749,10 +1816,51 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         targetFile = nextFile;
         updateMarqueeHeaderName(nextFile.getName());
         resetVideoZoom();
+        knownVideoDurationMs = 0;
+        speedModifiedFromDefault = false;
+        videoUsedFdFallback = false;
+        if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.GONE);
+        if (videoTextureView != null) videoTextureView.setKeepScreenOn(true);
 
+        startVideoMediaPlayer(nextFile, false, onReadyUi);
+
+        // קריאת משך זמן ורזולוציה מהמטא-דאטה ברקע עבור פורמטים שבהם MediaPlayer מחזיר משך 0
+        executor.execute(() -> {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            try {
+                mmr.setDataSource(nextFile.getAbsolutePath());
+                String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                if (durStr != null) {
+                    int parsed = Integer.parseInt(durStr.trim());
+                    if (parsed > 0 && targetFile != null && targetFile.equals(nextFile)) {
+                        knownVideoDurationMs = parsed;
+                    }
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                try { mmr.release(); } catch (Throwable ignored) {}
+            }
+        });
+    }
+
+    private void startVideoMediaPlayer(File nextFile, boolean useFileDescriptor, Runnable onReadyUi) {
+        releaseVideoPlayer();
+        videoUsedFdFallback = useFileDescriptor;
         try {
             videoPlayer = new MediaPlayer();
-            videoPlayer.setDataSource(nextFile.getAbsolutePath());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                videoPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .build());
+            }
+            if (useFileDescriptor) {
+                try (FileInputStream fis = new FileInputStream(nextFile)) {
+                    videoPlayer.setDataSource(fis.getFD());
+                }
+            } else {
+                videoPlayer.setDataSource(nextFile.getAbsolutePath());
+            }
             videoPlayer.setSurface(activeVideoSurface);
             float vol = videoMuted ? 0f : 1f;
             videoPlayer.setVolume(vol, vol);
@@ -1765,15 +1873,37 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             });
             videoPlayer.setOnPreparedListener(mp -> {
                 videoPrepared = true;
+                int rawDur = 0;
+                try { rawDur = mp.getDuration(); } catch (Exception ignored) {}
+                if (rawDur > 0) knownVideoDurationMs = rawDur;
                 currentVideoWidth = mp.getVideoWidth();
                 currentVideoHeight = mp.getVideoHeight();
                 updateVideoAspectRatioMatrix();
-                applyVideoSpeedInternal(true);
+                try {
+                    mp.start();
+                } catch (Exception ignored) {
+                }
+                if (Math.abs(videoSpeed - 1.0f) >= 0.02f) {
+                    speedModifiedFromDefault = true;
+                    applyVideoSpeedInternal(true);
+                }
                 if (onReadyUi != null) onReadyUi.run();
+            });
+            videoPlayer.setOnErrorListener((mp, what, extra) -> {
+                if (!videoUsedFdFallback) {
+                    startVideoMediaPlayer(nextFile, true, onReadyUi);
+                    return true;
+                }
+                videoPrepared = false;
+                if (videoFallbackBar != null) {
+                    videoFallbackBar.setVisibility(View.VISIBLE);
+                }
+                if (onReadyUi != null) onReadyUi.run();
+                return true;
             });
             videoPlayer.setOnCompletionListener(mp -> {
                 if (videoRepeatMode == AudioPlayerManager.REPEAT_ONE) {
-                    mp.seekTo(0);
+                    try { mp.seekTo(0); } catch (Exception ignored) {}
                     applyVideoSpeedInternal(true);
                 } else if (videoRepeatMode == AudioPlayerManager.REPEAT_FOLDER && !videoPlaylist.isEmpty()) {
                     currentVideoIdx = (currentVideoIdx + 1) % videoPlaylist.size();
@@ -1787,7 +1917,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             });
             videoPlayer.prepareAsync();
         } catch (Exception e) {
-            Toast.makeText(this, "שגיאה בטעינת הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            if (!useFileDescriptor) {
+                startVideoMediaPlayer(nextFile, true, onReadyUi);
+                return;
+            }
+            videoPrepared = false;
+            if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.VISIBLE);
+            if (onReadyUi != null) onReadyUi.run();
         }
     }
 
@@ -1983,7 +2119,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 "סיבוב מסך מלא (אופקי / אנכי)",
                 "איפוס זום תצוגה (100%)",
                 "ייצוא קטע פתיחה ל-GIF מונפש",
-                "פתיחה בעורך וידאו מקצועי",
                 "שיתוף קובץ"
         );
 
@@ -1997,6 +2132,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         case 0:
                             showSpeedPickerDialog("בחירת מהירות הסרטון", videoSpeed, chosen -> {
                                 videoSpeed = chosen;
+                                speedModifiedFromDefault = true;
                                 applyVideoSpeedInternal(isVideoPlayingSafely());
                             });
                             break;
@@ -2041,12 +2177,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             });
                             break;
                         case 8:
-                            pauseVideoSafely();
-                            Intent ed = new Intent(this, ProVideoEditorActivity.class);
-                            ed.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, targetFile.getAbsolutePath());
-                            startActivity(ed);
-                            break;
-                        case 9:
                             shareCurrentFile();
                             break;
                     }
@@ -2250,31 +2380,63 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
     }
 
+    private int getEffectiveVideoDurationMs() {
+        if (videoPlayer == null) return knownVideoDurationMs;
+        try {
+            int raw = videoPlayer.getDuration();
+            if (raw > 0) {
+                knownVideoDurationMs = raw;
+                return raw;
+            }
+        } catch (Exception ignored) {
+        }
+        return knownVideoDurationMs;
+    }
+
     private void seekVideoBy(int deltaMs) {
         if (!videoPrepared || videoPlayer == null) return;
         try {
-            int dur = Math.max(1, videoPlayer.getDuration());
-            int next = Math.max(0, Math.min(dur, videoPlayer.getCurrentPosition() + deltaMs));
-            videoPlayer.seekTo(next);
+            int dur = getEffectiveVideoDurationMs();
+            int cur = Math.max(0, videoPlayer.getCurrentPosition());
+            int next = dur > 0 ? Math.max(0, Math.min(dur, cur + deltaMs)) : Math.max(0, cur + deltaMs);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                videoPlayer.seekTo(next, MediaPlayer.SEEK_CLOSEST_SYNC);
+            } else {
+                videoPlayer.seekTo(next);
+            }
         } catch (Exception ignored) {
+            try {
+                int next = Math.max(0, videoPlayer.getCurrentPosition() + deltaMs);
+                videoPlayer.seekTo(next);
+            } catch (Exception ignored2) {
+            }
         }
     }
 
     private void applyVideoSpeedInternal(boolean shouldPlay) {
         if (!videoPrepared || videoPlayer == null) return;
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PlaybackParams p = videoPlayer.getPlaybackParams();
-                if (p == null) p = new PlaybackParams();
-                p.setSpeed(videoSpeed);
-                videoPlayer.setPlaybackParams(p);
-                if (!shouldPlay && videoPlayer.isPlaying()) {
-                    videoPlayer.pause();
-                } else if (shouldPlay && !videoPlayer.isPlaying()) {
-                    videoPlayer.start();
-                }
-            } else if (shouldPlay) {
+            if (!shouldPlay && videoPlayer.isPlaying()) {
+                videoPlayer.pause();
+            } else if (shouldPlay && !videoPlayer.isPlaying()) {
                 videoPlayer.start();
+            }
+
+            boolean needSpeedParam = Math.abs(videoSpeed - 1.0f) >= 0.02f || speedModifiedFromDefault;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && needSpeedParam) {
+                try {
+                    PlaybackParams p = videoPlayer.getPlaybackParams();
+                    if (p == null) p = new PlaybackParams();
+                    p.setSpeed(videoSpeed);
+                    videoPlayer.setPlaybackParams(p);
+                    if (!shouldPlay && videoPlayer.isPlaying()) {
+                        videoPlayer.pause();
+                    }
+                } catch (Throwable speedEx) {
+                    videoSpeed = 1.0f;
+                    speedModifiedFromDefault = false;
+                    Toast.makeText(this, "שינוי מהירות אינו נתמך בפורמט וידאו זה", Toast.LENGTH_SHORT).show();
+                }
             }
         } catch (Exception e) {
             try {
@@ -2288,6 +2450,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         videoPrepared = false;
         currentVideoWidth = 0;
         currentVideoHeight = 0;
+        knownVideoDurationMs = 0;
         if (rewindPulseRunnable != null) uiHandler.removeCallbacks(rewindPulseRunnable);
         if (videoPlayer != null) {
             try { videoPlayer.stop(); } catch (Exception ignored) {}
