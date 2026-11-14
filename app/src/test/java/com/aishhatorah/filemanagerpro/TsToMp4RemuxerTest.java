@@ -14,7 +14,7 @@ import static org.junit.Assert.*;
 public class TsToMp4RemuxerTest {
 
     private static final byte[] SAMPLE_SPS_640X480 = new byte[]{
-            0x67, 0x42, (byte) 0xC0, 0x1E, (byte) 0xF4, 0x05, 0x01, (byte) 0xE8, (byte) 0x80
+            0x67, 0x42, (byte) 0xC0, 0x1E, (byte) 0xF8, 0x14, 0x03, (byte) 0xD9
     };
     private static final byte[] SAMPLE_PPS = new byte[]{0x68, (byte) 0xCE, 0x38, (byte) 0x80};
 

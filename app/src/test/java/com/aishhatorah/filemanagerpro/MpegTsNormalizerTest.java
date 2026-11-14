@@ -163,8 +163,8 @@ public class MpegTsNormalizerTest {
             raw[base + 7] = 0x20;
             raw[base + 8] = 0x07;
             raw[base + 9] = 0x10;
-            int localPkt = (p < 200) ? p : (p - 200);
-            // 10ms (900 ticks) per packet -> 400 packets = 4000ms (~4 seconds)
+            int localPkt = (p < 200) ? (200 + p) : (p - 200);
+            // 10ms (900 ticks) per packet -> 400 packets = 4000ms (~4 seconds), with tail PCR < head PCR due to reset
             long pcr90k = localPkt * 900L;
             raw[base + 10] = (byte) ((pcr90k >> 25) & 0xFF);
             raw[base + 11] = (byte) ((pcr90k >> 17) & 0xFF);
