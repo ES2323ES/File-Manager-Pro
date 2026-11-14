@@ -80,6 +80,7 @@ public class VideoCutterActivity extends AppCompatActivity {
     private int previewVideoWidth = 0;
     private int previewVideoHeight = 0;
     private float previewPixelRatio = 1.0f;
+    private long lastPreviewSeekMs = 0L;
 
     private TextView tvSelectedVideo;
     private TextView tvVideoRange;
@@ -209,9 +210,13 @@ public class VideoCutterActivity extends AppCompatActivity {
             startMs = s;
             endMs = e;
             if (movingStart && previewPlayer != null) {
-                try {
-                    previewPlayer.seekTo(startMs);
-                } catch (Exception ignored) {
+                long now = System.currentTimeMillis();
+                if (now - lastPreviewSeekMs >= 180L) {
+                    lastPreviewSeekMs = now;
+                    try {
+                        previewPlayer.seekTo(startMs);
+                    } catch (Exception ignored) {
+                    }
                 }
             }
             tvVideoRange.setText(String.format(Locale.US, "התחלה: %02d:%02d  •  סיום: %02d:%02d",
