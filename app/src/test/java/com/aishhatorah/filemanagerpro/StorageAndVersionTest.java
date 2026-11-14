@@ -19,7 +19,7 @@ public class StorageAndVersionTest {
 
     @Test
     public void videoFormatsRecognizedConsistently() {
-        String[] videoExts = {"clip.mp4", "movie.mkv", "legacy.avi", "stream.ts", "flash.flv", "win.wmv", "apple.mov", "web.webm", "mobile.3gp"};
+        String[] videoExts = {"clip.mp4", "movie.mkv", "legacy.avi", "stream.ts", "camcorder.mts", "bluray.m2ts", "flash.flv", "win.wmv", "apple.mov", "web.webm", "mobile.3gp"};
         for (String name : videoExts) {
             assertTrue("Expected video format: " + name, MediaFormatHelper.isVideoFile(name));
         }
@@ -46,8 +46,8 @@ public class StorageAndVersionTest {
 
     @Test
     public void versionHelperFormatsOfficialAndComparesSemver() {
-        assertEquals("0.2.9 רשמית", UpdateChecker.formatOfficialVer("0.2.9"));
-        assertTrue(UpdateChecker.compareSemver("0.2.9", "0.2.8") > 0);
-        assertEquals(0, UpdateChecker.compareSemver("0.2.9", "0.2.9"));
+        assertEquals("0.3.0 רשמית", UpdateChecker.formatOfficialVer("0.3.0"));
+        assertTrue(UpdateChecker.compareSemver("0.3.0", "0.2.9") > 0);
+        assertEquals(0, UpdateChecker.compareSemver("0.3.0", "0.3.0"));
     }
 }

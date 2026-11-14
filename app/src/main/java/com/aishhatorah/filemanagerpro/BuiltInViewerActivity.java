@@ -67,15 +67,16 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
-import androidx.media3.extractor.DefaultExtractorsFactory;
-import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
+import androidx.media3.extractor.ExtractorsFactory;
 
 import com.google.android.material.button.MaterialButton;
 
@@ -156,6 +157,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private int knownVideoDurationMs = 0;
     private boolean isUserSeekingVideo = false;
     private long lastLiveSeekUiMs = 0L;
+    private long holdSeekUiUntilMs = 0L;
+    private int pendingSeekTargetMs = -1;
+    private boolean exoAudioDisabledRetry = false;
+    private boolean exoForcedTsRetry = false;
     private boolean videoUsedFdFallback = false;
     private boolean speedModifiedFromDefault = false;
     private LinearLayout videoFallbackBar = null;
@@ -1711,11 +1716,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 if (fromUser && videoPrepared) {
-                    tvVidPos.setText(formatClock(Math.max(0, progress)));
+                    int clamped = Math.max(0, progress);
+                    tvVidPos.setText(formatClock(clamped));
                     long now = System.currentTimeMillis();
-                    if (now - lastLiveSeekUiMs >= 220L) {
+                    boolean isTs = targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName());
+                    long minInterval = isTs ? 450L : 220L;
+                    if (now - lastLiveSeekUiMs >= minInterval) {
                         lastLiveSeekUiMs = now;
-                        seekVideoToMs(progress);
+                        seekVideoToMs(clamped);
                     }
                 }
             }
@@ -1727,7 +1735,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             public void onStopTrackingTouch(SeekBar sb) {
                 isUserSeekingVideo = false;
                 if (videoPrepared) {
-                    seekVideoToMs(sb.getProgress());
+                    int target = Math.max(0, sb.getProgress());
+                    pendingSeekTargetMs = target;
+                    holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
+                    tvVidPos.setText(formatClock(target));
+                    seekVideoToMs(target);
                 }
             }
         });
@@ -1762,10 +1774,23 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         int pos = getCurrentVideoPositionMs();
                         if (dur > 0) {
                             videoSeek.setEnabled(true);
-                            videoSeek.setMax(dur);
-                            if (!isUserSeekingVideo) {
+                            if (videoSeek.getMax() != dur) {
+                                videoSeek.setMax(dur);
+                            }
+                            long now = System.currentTimeMillis();
+                            boolean holdingSeek = now < holdSeekUiUntilMs && pendingSeekTargetMs >= 0;
+                            if (holdingSeek && Math.abs(pos - pendingSeekTargetMs) <= 1500) {
+                                holdingSeek = false;
+                                holdSeekUiUntilMs = 0L;
+                                pendingSeekTargetMs = -1;
+                            }
+                            if (!isUserSeekingVideo && !holdingSeek) {
                                 videoSeek.setProgress(Math.min(dur, pos));
                                 tvVidPos.setText(formatClock(pos));
+                            } else if (!isUserSeekingVideo && pendingSeekTargetMs >= 0) {
+                                int clampedPending = Math.min(dur, Math.max(0, pendingSeekTargetMs));
+                                videoSeek.setProgress(clampedPending);
+                                tvVidPos.setText(formatClock(clampedPending));
                             }
                             tvVidDur.setText(formatClock(dur));
                         } else {
@@ -1834,15 +1859,20 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         updateMarqueeHeaderName(nextFile.getName());
         resetVideoZoom();
         knownVideoDurationMs = 0;
+        pendingSeekTargetMs = -1;
+        holdSeekUiUntilMs = 0L;
+        exoAudioDisabledRetry = false;
+        exoForcedTsRetry = false;
         speedModifiedFromDefault = false;
         videoUsedFdFallback = false;
         if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.GONE);
         if (videoTextureView != null) videoTextureView.setKeepScreenOn(true);
 
-        startVideoExoPlayer(nextFile, onReadyUi);
+        startVideoExoPlayer(nextFile, onReadyUi, false, false);
 
-        // קריאת משך זמן ומימדים מהמטא-דאטה ברקע (כולל תמיכה מלאה ב-.mts / .m2ts 192-byte)
+        // קריאת משך זמן ומימדים מהמטא-דאטה ברקע (כולל תמיכה מלאה ב-.mts / .m2ts 192-byte + חילוץ ישיר מ-PCR/PTS)
         executor.execute(() -> {
+            int resolvedDur = 0;
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             Closeable tsDs = null;
             try {
@@ -1850,9 +1880,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
                 if (durStr != null) {
                     int parsed = Integer.parseInt(durStr.trim());
-                    if (parsed > 0 && targetFile != null && targetFile.equals(nextFile)) {
-                        knownVideoDurationMs = parsed;
-                    }
+                    if (parsed > 0) resolvedDur = parsed;
                 }
             } catch (Throwable ignored) {
             } finally {
@@ -1861,19 +1889,55 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     try { tsDs.close(); } catch (Throwable ignored) {}
                 }
             }
+            if (resolvedDur <= 0 && MpegTsNormalizer.isLikelyMpegTsName(nextFile.getName())) {
+                long tsMs = MpegTsNormalizer.extractTsDurationMs(nextFile);
+                if (tsMs > 0L) {
+                    resolvedDur = (int) Math.min(Integer.MAX_VALUE, tsMs);
+                }
+            }
+            if (resolvedDur > 0 && targetFile != null && targetFile.equals(nextFile) && knownVideoDurationMs <= 0) {
+                knownVideoDurationMs = resolvedDur;
+            }
         });
     }
 
+    private boolean isAudioOrCodecError(PlaybackException error) {
+        if (error == null) return false;
+        int code = error.errorCode;
+        if (code == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+                || code == PlaybackException.ERROR_CODE_DECODING_FAILED
+                || code == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                || code == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED
+                || code == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED) {
+            return true;
+        }
+        String msg = error.getMessage();
+        if (msg != null) {
+            String low = msg.toLowerCase(Locale.ROOT);
+            if (low.contains("audio") || low.contains("ac3") || low.contains("eac3")
+                    || low.contains("mpeg-l2") || low.contains("dts") || low.contains("decoder")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @OptIn(markerClass = UnstableApi.class)
-    private void startVideoExoPlayer(File nextFile, Runnable onReadyUi) {
+    private void startVideoExoPlayer(File nextFile, Runnable onReadyUi, boolean disableAudioTrack, boolean forceTsExtractor) {
         releaseVideoPlayer();
         try {
-            DefaultExtractorsFactory extractorsFactory = new DefaultExtractorsFactory()
-                    .setConstantBitrateSeekingEnabled(true)
-                    .setConstantBitrateSeekingAlwaysEnabled(true)
-                    .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
-                            | DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
-                    .setTsExtractorTimestampSearchBytes(2 * 1024 * 1024);
+            boolean isMpegTs = forceTsExtractor
+                    || MpegTsNormalizer.isLikelyMpegTsName(nextFile.getName())
+                    || MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0;
+
+            ExtractorsFactory extractorsFactory = SeekableTsExtractor.createExtractorsFactory(isMpegTs, () -> {
+                if (knownVideoDurationMs > 0) return knownVideoDurationMs;
+                long tsDur = MpegTsNormalizer.extractTsDurationMs(nextFile);
+                if (tsDur > 0L) {
+                    knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, tsDur);
+                }
+                return tsDur;
+            });
 
             DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(
                     new NormalizedTsExoDataSource.Factory(this), extractorsFactory);
@@ -1884,6 +1948,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             exoPlayer = new ExoPlayer.Builder(this, renderersFactory)
                     .setMediaSourceFactory(mediaSourceFactory)
                     .build();
+
+            exoPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC);
+
+            if (disableAudioTrack) {
+                exoPlayer.setTrackSelectionParameters(
+                        exoPlayer.getTrackSelectionParameters()
+                                .buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                                .build());
+            }
 
             androidx.media3.common.AudioAttributes media3AudioAttrs = new androidx.media3.common.AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -1937,11 +2011,25 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                 @Override
                 public void onPlayerError(@NonNull PlaybackException error) {
+                    if (!exoForcedTsRetry && !isMpegTs && MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0) {
+                        exoForcedTsRetry = true;
+                        startVideoExoPlayer(nextFile, onReadyUi, disableAudioTrack, true);
+                        return;
+                    }
+                    if (!exoAudioDisabledRetry && (isAudioOrCodecError(error) || isMpegTs)) {
+                        exoAudioDisabledRetry = true;
+                        startVideoExoPlayer(nextFile, onReadyUi, true, isMpegTs);
+                        return;
+                    }
                     startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
                 }
             });
 
-            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(nextFile)));
+            MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.fromFile(nextFile));
+            if (isMpegTs) {
+                itemBuilder.setMimeType(MimeTypes.VIDEO_MP2T);
+            }
+            exoPlayer.setMediaItem(itemBuilder.build());
             exoPlayer.prepare();
             exoPlayer.play();
         } catch (Throwable t) {
@@ -2554,8 +2642,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
         try {
             int dur = getEffectiveVideoDurationMs();
-            int cur = getCurrentVideoPositionMs();
+            long now = System.currentTimeMillis();
+            int cur = (now < holdSeekUiUntilMs && pendingSeekTargetMs >= 0)
+                    ? pendingSeekTargetMs
+                    : getCurrentVideoPositionMs();
             int next = dur > 0 ? Math.max(0, Math.min(dur, cur + deltaMs)) : Math.max(0, cur + deltaMs);
+            pendingSeekTargetMs = next;
+            holdSeekUiUntilMs = now + 900L;
             seekVideoToMs(next);
         } catch (Exception ignored) {
         }

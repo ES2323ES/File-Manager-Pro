@@ -109,4 +109,43 @@ public class MpegTsNormalizerTest {
         assertEquals(0, mp4Info.packetStride);
         assertFalse(mp4Info.needsNormalization());
     }
+
+    @Test
+    public void detectsPaddedBdavMtsBeyond2KbAndExtractsPcrDuration() throws Exception {
+        int leadingGarbage = 4096 + 4;
+        int packetCount = 40;
+        byte[] raw = new byte[leadingGarbage + packetCount * 192];
+        for (int p = 0; p < packetCount; p++) {
+            int base = leadingGarbage + p * 192;
+            raw[base] = 0x47;
+            // PID = 0x0100
+            raw[base + 1] = 0x01;
+            raw[base + 2] = 0x00;
+            // adaptation_field_control = 0x02 (adaptation field only), af_len = 7, PCR flag = 0x10
+            raw[base + 3] = 0x20;
+            raw[base + 4] = 0x07;
+            raw[base + 5] = 0x10;
+            // Encode PCR base = p * 90_000 (1 second per packet -> 39 seconds total)
+            long pcr90k = p * 90_000L;
+            raw[base + 6] = (byte) ((pcr90k >> 25) & 0xFF);
+            raw[base + 7] = (byte) ((pcr90k >> 17) & 0xFF);
+            raw[base + 8] = (byte) ((pcr90k >> 9) & 0xFF);
+            raw[base + 9] = (byte) ((pcr90k >> 1) & 0xFF);
+            raw[base + 10] = (byte) ((pcr90k & 0x01) << 7);
+        }
+
+        File tmp = File.createTempFile("test_padded_pcr_", ".mts");
+        tmp.deleteOnExit();
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(raw);
+        }
+
+        MpegTsNormalizer.TsFormatInfo info = MpegTsNormalizer.detectTsLayout(tmp);
+        assertEquals(192, info.packetStride);
+        assertEquals(leadingGarbage, info.syncOffset);
+        assertTrue(info.needsNormalization());
+
+        long durationMs = MpegTsNormalizer.extractTsDurationMs(tmp);
+        assertEquals((packetCount - 1) * 1000L, durationMs);
+    }
 }

@@ -59,11 +59,11 @@ public final class NormalizedTsExoDataSource extends BaseDataSource {
         String scheme = uri.getScheme();
         if ((scheme == null || "file".equalsIgnoreCase(scheme)) && uri.getPath() != null) {
             File file = new File(uri.getPath());
-            MpegTsNormalizer.TsFormatInfo info = MpegTsNormalizer.detectTsLayout(file);
+            MpegTsNormalizer.TsFormatInfo info = MpegTsNormalizer.detectTsLayoutCached(file);
             if (info.needsNormalization()) {
                 transferInitializing(dataSpec);
                 long virtualLength = info.getVirtualLength();
-                if (dataSpec.position > virtualLength) {
+                if (dataSpec.position < 0L || dataSpec.position > virtualLength) {
                     throw new DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE);
                 }
                 this.tsReader = new MpegTsNormalizer.NormalizedTsStreamReader(file, info);

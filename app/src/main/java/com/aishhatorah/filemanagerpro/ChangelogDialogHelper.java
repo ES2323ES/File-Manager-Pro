@@ -79,6 +79,17 @@ public class ChangelogDialogHelper {
         headerRow.addView(headerText);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.0 רשמית =====================
+        SpannableStringBuilder v30 = new SpannableStringBuilder();
+        appendBullet(v30, "תיקון מלא לקבצי וידאו MTS / M2TS ולפס ההתקדמות: ", accent,
+                "זיהוי מורחב של זרמי 192-byte BDAV ו-204-byte, תיעדוף ישיר של מחלץ MPEG-TS למניעת שגיאות קריאה או בקשות למפענח חיצוני, חישוב אורך ודילוג חלק מיושר לפאקטים בפס ההתקדמות והתאוששות אוטומטית מקודק שמע לא נתמך.", textPrimary);
+        appendBullet(v30, "\n\nסרגל עליון נקי באייקונים בלבד: ", accent,
+                "כפתורי ההגדרות והאודות בצדדים מוצגים עם אייקון בלבד וללא טקסט מיותר.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.0 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+                accent, textPrimary, textSecondary, subtleBg, divider, v30);
+
         // ===================== גירסה 0.2.9 רשמית =====================
         SpannableStringBuilder v29 = new SpannableStringBuilder();
         appendBullet(v29, "מנוע וידאו Media3 ExoPlayer ותמיכה מלאה בקבצי MTS / M2TS (AVCHD): ", accent,
@@ -88,8 +99,8 @@ public class ChangelogDialogHelper {
         appendBullet(v29, "\n\nתיקון ניסוח הודעת 'האפליקציה מעודכנת': ", accent,
                 "טקסט ברור, מדויק ואחיד בהודעה שהאפליקציה מעודכנת לגרסה האחרונה וטיפול נקי בשגיאות תקשורת זמניות.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.2.9 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.2.9 רשמית", "נגן Media3, טעינה מהירה ותיקון בדיקת עדכונים",
                 accent, textPrimary, textSecondary, subtleBg, divider, v29);
 
         // ===================== גירסה 0.2.8 רשמית =====================
