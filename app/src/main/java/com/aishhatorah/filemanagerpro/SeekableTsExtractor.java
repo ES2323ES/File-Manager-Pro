@@ -52,11 +52,7 @@ public final class SeekableTsExtractor implements Extractor {
     ) {
         DefaultExtractorsFactory baseFactory = new DefaultExtractorsFactory()
                 .setConstantBitrateSeekingEnabled(true)
-                .setConstantBitrateSeekingAlwaysEnabled(true)
-                .setTsExtractorFlags(
-                        DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
-                                | DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
-                )
+                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES)
                 .setTsExtractorTimestampSearchBytes(TS_SEARCH_BYTES);
 
         if (!prioritizeTs) {
@@ -145,15 +141,20 @@ public final class SeekableTsExtractor implements Extractor {
 
             @Override
             public void seekMap(@NonNull SeekMap seekMap) {
-                if (seekMap.isSeekable() && seekMap.getDurationUs() > 0L && seekMap.getDurationUs() != C.TIME_UNSET) {
+                long rawDurUs = seekMap.getDurationUs();
+                long fallbackMs = durationProvider.getFallbackDurationMs();
+                long fallbackDurUs = fallbackMs > 0L ? fallbackMs * 1000L : C.TIME_UNSET;
+                boolean delegateLooksValid = seekMap.isSeekable()
+                        && rawDurUs > 0L
+                        && rawDurUs != C.TIME_UNSET
+                        && (fallbackDurUs == C.TIME_UNSET || rawDurUs * 2L >= fallbackDurUs);
+                if (delegateLooksValid) {
                     output.seekMap(seekMap);
                     return;
                 }
-                long rawDurUs = seekMap.getDurationUs();
-                long fallbackMs = durationProvider.getFallbackDurationMs();
-                long effectiveDurUs = (rawDurUs > 0L && rawDurUs != C.TIME_UNSET)
-                        ? rawDurUs
-                        : (fallbackMs > 0L ? fallbackMs * 1000L : C.TIME_UNSET);
+                long effectiveDurUs = (fallbackDurUs != C.TIME_UNSET)
+                        ? fallbackDurUs
+                        : ((rawDurUs > 0L && rawDurUs != C.TIME_UNSET) ? rawDurUs : C.TIME_UNSET);
 
                 if (streamLengthBytes >= TS_PACKET_BYTES * 2L && effectiveDurUs > 0L && effectiveDurUs != C.TIME_UNSET) {
                     output.seekMap(new PacketAlignedSeekMap(streamLengthBytes, effectiveDurUs));

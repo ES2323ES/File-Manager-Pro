@@ -25,7 +25,7 @@ public final class MpegTsNormalizer {
     public static final int BDAV_PACKET_SIZE = 192;
     public static final int TS_FEC_PACKET_SIZE = 204;
     private static final byte TS_SYNC_BYTE = 0x47;
-    private static final int PROBE_BUFFER_BYTES = 65536;
+    private static final int PROBE_BUFFER_BYTES = 262144;
     private static final int REQUIRED_CONSECUTIVE_SYNC = 6;
     private static final long MAX_PTS_PCR_SCAN_BYTES = 1024L * 1024L;
     private static final long PTS_WRAP_MODULO = 1L << 33;
@@ -219,20 +219,131 @@ public final class MpegTsNormalizer {
                 // ניסיון שני על כל PID שהוא אם PID ספציפי לא הופיע בזנב
                 lastTs90k = scanLastTimestamp90k(buf, tailRead, stride, -1, isPcrMode);
             }
-            if (lastTs90k < 0L) return 0L;
-
-            long diff90k = lastTs90k - firstTs90k;
-            if (diff90k < 0L && firstTs90k > (PTS_WRAP_MODULO * 3L) / 4L && lastTs90k < PTS_WRAP_MODULO / 4L) {
-                diff90k += PTS_WRAP_MODULO;
+            if (lastTs90k >= 0L) {
+                long diff90k = lastTs90k - firstTs90k;
+                if (diff90k < 0L && firstTs90k > (PTS_WRAP_MODULO * 3L) / 4L && lastTs90k < PTS_WRAP_MODULO / 4L) {
+                    diff90k += PTS_WRAP_MODULO;
+                }
+                if (diff90k > 0L) {
+                    long ms = diff90k / 90L;
+                    if (ms > 0L && ms <= 48L * 3600L * 1000L) {
+                        if (info.getVirtualLength() > 2L * 1024L * 1024L) {
+                            double impliedBps = (info.getVirtualLength() * 1000.0) / (double) ms;
+                            long sampledMs = estimateDurationByBitrateSamplingMs(raf, info);
+                            if (sampledMs > 0L && (impliedBps > 12_000_000.0 || impliedBps < 8_000.0
+                                    || Math.abs(sampledMs - ms) > Math.max(sampledMs, ms) * 0.65)) {
+                                return sampledMs;
+                            }
+                        }
+                        return ms;
+                    }
+                }
             }
-            if (diff90k <= 0L) return 0L;
-            long ms = diff90k / 90L;
-            // סינון ערכים חריגים מעל 48 שעות
-            if (ms > 48L * 3600L * 1000L) return 0L;
-            return ms;
+
+            // גיבוי עבור קבצים מאוחדים או קבצי מצלמה עם איפוס PCR/PTS באמצע הקובץ:
+            // מדידת קצב הנתונים הממוצע מחלונות רציפים וגזירת משך הזמן הכולל
+            return estimateDurationByBitrateSamplingMs(raf, info);
         } catch (Throwable ignored) {
             return 0L;
         }
+    }
+
+    private static long estimateDurationByBitrateSamplingMs(RandomAccessFile raf, TsFormatInfo info) throws IOException {
+        int stride = info.packetStride;
+        long totalPackets = info.packetCount;
+        if (stride <= 0 || totalPackets < 16L) return 0L;
+
+        int winPkts = (int) Math.min(totalPackets, (512L * 1024L) / stride);
+        if (winPkts < 8) return 0L;
+        byte[] winBuf = new byte[winPkts * stride];
+
+        double[] samplesBps = new double[5];
+        int sampleCount = 0;
+
+        for (int w = 0; w < 5; w++) {
+            long startPkt = (totalPackets > winPkts)
+                    ? ((totalPackets - winPkts) * w) / 4L
+                    : 0L;
+            raf.seek(info.syncOffset + startPkt * (long) stride);
+            int read = readFullyUpTo(raf, winBuf, winBuf.length);
+            if (read < stride * 4) continue;
+
+            double bps = measureMonotonicWindowBytesPerSec(winBuf, read, stride);
+            if (bps > 10_000.0 && bps < 25_000_000.0) {
+                samplesBps[sampleCount++] = bps;
+            }
+        }
+        if (sampleCount == 0) return 0L;
+
+        java.util.Arrays.sort(samplesBps, 0, sampleCount);
+        double medianBps = samplesBps[sampleCount / 2];
+        long ms = Math.round((info.getVirtualLength() * 1000.0) / medianBps);
+        if (ms <= 0L || ms > 48L * 3600L * 1000L) return 0L;
+        return ms;
+    }
+
+    private static double measureMonotonicWindowBytesPerSec(byte[] buf, int len, int stride) {
+        int bestPid = -1;
+        long firstTs = -1L;
+        int firstPkt = -1;
+        long lastTs = -1L;
+        int lastPkt = -1;
+        boolean usePcr = true;
+
+        int pktIdx = 0;
+        for (int pos = 0; pos + TS_PACKET_SIZE <= len; pos += stride, pktIdx++) {
+            if (buf[pos] != TS_SYNC_BYTE) continue;
+            int pid = ((buf[pos + 1] & 0x1F) << 8) | (buf[pos + 2] & 0xFF);
+            long pcr = parsePcr90k(buf, pos);
+            if (pcr >= 0L) {
+                if (firstTs < 0L) {
+                    firstTs = pcr;
+                    firstPkt = pktIdx;
+                    bestPid = pid;
+                    usePcr = true;
+                } else if (pid == bestPid && pcr > firstTs) {
+                    long delta = pcr - firstTs;
+                    if (delta < 90000L * 120L) {
+                        lastTs = pcr;
+                        lastPkt = pktIdx;
+                    }
+                }
+            }
+        }
+
+        if (firstTs < 0L || lastTs <= firstTs || lastPkt <= firstPkt) {
+            firstTs = -1L;
+            lastTs = -1L;
+            bestPid = -1;
+            usePcr = false;
+            pktIdx = 0;
+            for (int pos = 0; pos + TS_PACKET_SIZE <= len; pos += stride, pktIdx++) {
+                if (buf[pos] != TS_SYNC_BYTE) continue;
+                int pid = ((buf[pos + 1] & 0x1F) << 8) | (buf[pos + 2] & 0xFF);
+                long pts = parsePesPts90k(buf, pos);
+                if (pts >= 0L) {
+                    if (firstTs < 0L) {
+                        firstTs = pts;
+                        firstPkt = pktIdx;
+                        bestPid = pid;
+                    } else if (pid == bestPid && pts > firstTs) {
+                        long delta = pts - firstTs;
+                        if (delta < 90000L * 120L) {
+                            lastTs = pts;
+                            lastPkt = pktIdx;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (firstTs < 0L || lastTs <= firstTs || lastPkt <= firstPkt) {
+            return -1.0;
+        }
+        long deltaTicks = lastTs - firstTs;
+        if (deltaTicks < 9000L) return -1.0; // דרוש לפחות 0.1 שניה ליציבות
+        long deltaBytes = (long) (lastPkt - firstPkt) * TS_PACKET_SIZE;
+        return (deltaBytes * 90000.0) / (double) deltaTicks;
     }
 
     private static int readFullyUpTo(RandomAccessFile raf, byte[] dst, int maxLen) throws IOException {

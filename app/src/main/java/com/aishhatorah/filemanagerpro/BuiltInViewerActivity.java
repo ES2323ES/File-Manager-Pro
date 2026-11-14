@@ -161,6 +161,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private int pendingSeekTargetMs = -1;
     private boolean exoAudioDisabledRetry = false;
     private boolean exoForcedTsRetry = false;
+    private boolean exoRemuxFallbackAttempted = false;
+    private boolean isRemuxingMtsPlayback = false;
+    private int lastObservedVideoPosMs = 0;
+    private int unexpectedPosResetCount = 0;
+    private long firstPosResetObservedMs = 0L;
+    private File activeRemuxedCacheFile = null;
     private boolean videoUsedFdFallback = false;
     private boolean speedModifiedFromDefault = false;
     private LinearLayout videoFallbackBar = null;
@@ -1748,7 +1754,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
                 activeVideoSurface = new Surface(surface);
-                loadVideoTrackAtIndex(currentVideoIdx, syncVidButtons);
+                if (exoPlayer != null) {
+                    exoPlayer.setVideoSurface(activeVideoSurface);
+                    updateVideoAspectRatioMatrix();
+                } else if (videoPlayer != null) {
+                    videoPlayer.setSurface(activeVideoSurface);
+                    updateVideoAspectRatioMatrix();
+                } else if (!isRemuxingMtsPlayback) {
+                    loadVideoTrackAtIndex(currentVideoIdx, syncVidButtons);
+                }
             }
             @Override
             public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
@@ -1756,7 +1770,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
             @Override
             public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
-                releaseVideoPlayer();
+                if (exoPlayer != null) {
+                    try { exoPlayer.setVideoSurface(null); } catch (Exception ignored) {}
+                }
+                if (videoPlayer != null) {
+                    try { videoPlayer.setSurface(null); } catch (Exception ignored) {}
+                }
                 activeVideoSurface = null;
                 return true;
             }
@@ -1772,12 +1791,39 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     try {
                         int dur = getEffectiveVideoDurationMs();
                         int pos = getCurrentVideoPositionMs();
+                        long now = System.currentTimeMillis();
+
+                        // זיהוי אוטומטי אם זרם MTS גולמי חוזר להתחלה מעצמו בגלל איפוס PTS
+                        if (!isUserSeekingVideo && now >= holdSeekUiUntilMs && isVideoPlayingSafely()) {
+                            if (pos + 700 < lastObservedVideoPosMs
+                                    && lastObservedVideoPosMs < (dur > 2500 ? dur - 1000 : Integer.MAX_VALUE)
+                                    && videoRepeatMode == AudioPlayerManager.REPEAT_OFF
+                                    && targetFile != null
+                                    && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                                    && !exoRemuxFallbackAttempted) {
+                                if (firstPosResetObservedMs == 0L || now - firstPosResetObservedMs > 20_000L) {
+                                    unexpectedPosResetCount = 1;
+                                    firstPosResetObservedMs = now;
+                                } else {
+                                    unexpectedPosResetCount++;
+                                }
+                                if (unexpectedPosResetCount >= 2 || dur <= 0 || lastObservedVideoPosMs < 2500) {
+                                    startRemuxedMtsPlayback(targetFile, syncVidButtons);
+                                    uiHandler.postDelayed(this, 250);
+                                    return;
+                                }
+                            } else if (firstPosResetObservedMs > 0L && now - firstPosResetObservedMs > 20_000L) {
+                                unexpectedPosResetCount = 0;
+                                firstPosResetObservedMs = 0L;
+                            }
+                            lastObservedVideoPosMs = pos;
+                        }
+
                         if (dur > 0) {
                             videoSeek.setEnabled(true);
                             if (videoSeek.getMax() != dur) {
                                 videoSeek.setMax(dur);
                             }
-                            long now = System.currentTimeMillis();
                             boolean holdingSeek = now < holdSeekUiUntilMs && pendingSeekTargetMs >= 0;
                             if (holdingSeek && Math.abs(pos - pendingSeekTargetMs) <= 1500) {
                                 holdingSeek = false;
@@ -1854,6 +1900,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private void loadVideoTrackAtIndex(int idx, Runnable onReadyUi) {
         if (activeVideoSurface == null || videoPlaylist.isEmpty()) return;
         releaseVideoPlayer();
+        cleanupActiveRemuxedCache();
         File nextFile = videoPlaylist.get(Math.max(0, Math.min(videoPlaylist.size() - 1, idx)));
         targetFile = nextFile;
         updateMarqueeHeaderName(nextFile.getName());
@@ -1861,12 +1908,24 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         knownVideoDurationMs = 0;
         pendingSeekTargetMs = -1;
         holdSeekUiUntilMs = 0L;
+        lastObservedVideoPosMs = 0;
+        unexpectedPosResetCount = 0;
+        firstPosResetObservedMs = 0L;
         exoAudioDisabledRetry = false;
         exoForcedTsRetry = false;
+        exoRemuxFallbackAttempted = false;
+        isRemuxingMtsPlayback = false;
         speedModifiedFromDefault = false;
         videoUsedFdFallback = false;
         if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.GONE);
         if (videoTextureView != null) videoTextureView.setKeepScreenOn(true);
+
+        if (MpegTsNormalizer.isLikelyMpegTsName(nextFile.getName())) {
+            long fastTsDur = MpegTsNormalizer.extractTsDurationMs(nextFile);
+            if (fastTsDur > 0L) {
+                knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, fastTsDur);
+            }
+        }
 
         startVideoExoPlayer(nextFile, onReadyUi, false, false);
 
@@ -1896,7 +1955,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 }
             }
             if (resolvedDur > 0 && targetFile != null && targetFile.equals(nextFile) && knownVideoDurationMs <= 0) {
-                knownVideoDurationMs = resolvedDur;
+                final int finalResolved = resolvedDur;
+                uiHandler.post(() -> {
+                    if (targetFile != null && targetFile.equals(nextFile) && knownVideoDurationMs <= 0) {
+                        knownVideoDurationMs = finalResolved;
+                    }
+                });
             }
         });
     }
@@ -1986,6 +2050,139 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         videoPrepared = true;
                         long rawDur = exoPlayer.getDuration();
                         if (rawDur > 0L && rawDur != C.TIME_UNSET) {
+                            boolean suspectTinyTs = isMpegTs && knownVideoDurationMs > 3000 && rawDur < knownVideoDurationMs / 2L;
+                            if (!suspectTinyTs) {
+                                knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, rawDur);
+                            }
+                        }
+                        if (Math.abs(videoSpeed - 1.0f) >= 0.02f) {
+                            speedModifiedFromDefault = true;
+                            applyVideoSpeedInternal(exoPlayer.getPlayWhenReady());
+                        }
+                        if (onReadyUi != null) onReadyUi.run();
+                    } else if (playbackState == Player.STATE_ENDED) {
+                        int effDur = getEffectiveVideoDurationMs();
+                        int curPos = getCurrentVideoPositionMs();
+                        if (isMpegTs && !exoRemuxFallbackAttempted && effDur > 6000 && curPos < effDur / 2) {
+                            startRemuxedMtsPlayback(nextFile, onReadyUi);
+                            return;
+                        }
+                        if (videoRepeatMode == AudioPlayerManager.REPEAT_ONE) {
+                            exoPlayer.seekTo(0L);
+                            exoPlayer.play();
+                        } else if (videoRepeatMode == AudioPlayerManager.REPEAT_FOLDER && !videoPlaylist.isEmpty()) {
+                            currentVideoIdx = (currentVideoIdx + 1) % videoPlaylist.size();
+                            loadVideoTrackAtIndex(currentVideoIdx, onReadyUi);
+                        } else if (videoAutoNext && currentVideoIdx + 1 < videoPlaylist.size()) {
+                            currentVideoIdx++;
+                            loadVideoTrackAtIndex(currentVideoIdx, onReadyUi);
+                        } else if (onReadyUi != null) {
+                            onReadyUi.run();
+                        }
+                    }
+                }
+
+                @Override
+                public void onPlayerError(@NonNull PlaybackException error) {
+                    if (!exoForcedTsRetry && !isMpegTs && MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0) {
+                        exoForcedTsRetry = true;
+                        startVideoExoPlayer(nextFile, onReadyUi, disableAudioTrack, true);
+                        return;
+                    }
+                    if (!exoAudioDisabledRetry && isAudioOrCodecError(error)) {
+                        exoAudioDisabledRetry = true;
+                        startVideoExoPlayer(nextFile, onReadyUi, true, isMpegTs);
+                        return;
+                    }
+                    if (isMpegTs && !exoRemuxFallbackAttempted) {
+                        startRemuxedMtsPlayback(nextFile, onReadyUi);
+                        return;
+                    }
+                    startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+                }
+            });
+
+            MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.fromFile(nextFile));
+            if (isMpegTs) {
+                itemBuilder.setMimeType(MimeTypes.VIDEO_MP2T);
+            }
+            exoPlayer.setMediaItem(itemBuilder.build());
+            exoPlayer.prepare();
+            exoPlayer.play();
+        } catch (Throwable t) {
+            startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+        }
+    }
+
+    private void startRemuxedMtsPlayback(File originalMtsFile, Runnable onReadyUi) {
+        if (exoRemuxFallbackAttempted) {
+            startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
+            return;
+        }
+        exoRemuxFallbackAttempted = true;
+        isRemuxingMtsPlayback = true;
+        releaseVideoPlayer();
+        Toast.makeText(this, "מכין זרם MTS לצפייה חלקה...", Toast.LENGTH_SHORT).show();
+
+        executor.execute(() -> {
+            File cacheMp4 = new File(getCacheDir(), "mts_play_" + System.currentTimeMillis() + ".mp4");
+            try {
+                TsToMp4Remuxer.remuxToMp4(originalMtsFile, cacheMp4, 0L, Long.MAX_VALUE, null);
+                uiHandler.post(() -> {
+                    isRemuxingMtsPlayback = false;
+                    if (isFinishing() || isDestroyed() || targetFile == null || !targetFile.equals(originalMtsFile)) {
+                        if (cacheMp4.exists()) cacheMp4.delete();
+                        return;
+                    }
+                    cleanupActiveRemuxedCache();
+                    activeRemuxedCacheFile = cacheMp4;
+                    startPlayableMp4InExo(cacheMp4, onReadyUi, originalMtsFile);
+                });
+            } catch (Throwable t) {
+                if (cacheMp4.exists()) cacheMp4.delete();
+                uiHandler.post(() -> {
+                    isRemuxingMtsPlayback = false;
+                    if (!isFinishing() && !isDestroyed() && targetFile != null && targetFile.equals(originalMtsFile)) {
+                        startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
+                    }
+                });
+            }
+        });
+    }
+
+    @OptIn(markerClass = UnstableApi.class)
+    private void startPlayableMp4InExo(File mp4File, Runnable onReadyUi, File originalMtsFile) {
+        releaseVideoPlayer();
+        try {
+            DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+                    .setEnableDecoderFallback(true);
+            exoPlayer = new ExoPlayer.Builder(this, renderersFactory).build();
+            exoPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC);
+            androidx.media3.common.AudioAttributes media3AudioAttrs = new androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build();
+            exoPlayer.setAudioAttributes(media3AudioAttrs, true);
+            if (activeVideoSurface != null) exoPlayer.setVideoSurface(activeVideoSurface);
+            exoPlayer.setVolume(videoMuted ? 0f : 1f);
+            exoPlayer.addListener(new Player.Listener() {
+                @Override
+                public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        currentVideoWidth = videoSize.width;
+                        currentVideoHeight = videoSize.height;
+                        currentVideoPixelRatio = videoSize.pixelWidthHeightRatio > 0f ? videoSize.pixelWidthHeightRatio : 1.0f;
+                        updateVideoAspectRatioMatrix();
+                    }
+                }
+
+                @Override
+                public void onPlaybackStateChanged(int playbackState) {
+                    if (exoPlayer == null) return;
+                    if (playbackState == Player.STATE_READY) {
+                        videoPrepared = true;
+                        long rawDur = exoPlayer.getDuration();
+                        if (rawDur > 0L && rawDur != C.TIME_UNSET) {
                             knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, rawDur);
                         }
                         if (Math.abs(videoSpeed - 1.0f) >= 0.02f) {
@@ -2011,29 +2208,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                 @Override
                 public void onPlayerError(@NonNull PlaybackException error) {
-                    if (!exoForcedTsRetry && !isMpegTs && MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0) {
-                        exoForcedTsRetry = true;
-                        startVideoExoPlayer(nextFile, onReadyUi, disableAudioTrack, true);
-                        return;
-                    }
-                    if (!exoAudioDisabledRetry && (isAudioOrCodecError(error) || isMpegTs)) {
-                        exoAudioDisabledRetry = true;
-                        startVideoExoPlayer(nextFile, onReadyUi, true, isMpegTs);
-                        return;
-                    }
-                    startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+                    startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
                 }
             });
-
-            MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.fromFile(nextFile));
-            if (isMpegTs) {
-                itemBuilder.setMimeType(MimeTypes.VIDEO_MP2T);
-            }
-            exoPlayer.setMediaItem(itemBuilder.build());
+            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(mp4File)));
             exoPlayer.prepare();
             exoPlayer.play();
         } catch (Throwable t) {
-            startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+            startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
         }
     }
 
@@ -2581,10 +2763,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private int getEffectiveVideoDurationMs() {
+        boolean isTs = targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName());
         if (exoPlayer != null) {
             try {
                 long raw = exoPlayer.getDuration();
                 if (raw > 0L && raw != C.TIME_UNSET) {
+                    if (isTs && knownVideoDurationMs > 3000 && raw < knownVideoDurationMs / 2L) {
+                        return knownVideoDurationMs;
+                    }
                     knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, raw);
                     return knownVideoDurationMs;
                 }
@@ -2596,6 +2782,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         try {
             int raw = videoPlayer.getDuration();
             if (raw > 0) {
+                if (isTs && knownVideoDurationMs > 3000 && raw < knownVideoDurationMs / 2) {
+                    return knownVideoDurationMs;
+                }
                 knownVideoDurationMs = raw;
                 return raw;
             }
@@ -2619,6 +2808,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void seekVideoToMs(int targetMs) {
         int clamped = Math.max(0, targetMs);
+        unexpectedPosResetCount = 0;
+        firstPosResetObservedMs = 0L;
+        lastObservedVideoPosMs = clamped;
         if (exoPlayer != null) {
             try {
                 exoPlayer.seekTo(clamped);
@@ -2705,12 +2897,23 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
     }
 
+    private void cleanupActiveRemuxedCache() {
+        if (activeRemuxedCacheFile != null && activeRemuxedCacheFile.exists()) {
+            try {
+                activeRemuxedCacheFile.delete();
+            } catch (Throwable ignored) {
+            }
+            activeRemuxedCacheFile = null;
+        }
+    }
+
     private void releaseVideoPlayer() {
         videoPrepared = false;
         currentVideoWidth = 0;
         currentVideoHeight = 0;
         currentVideoPixelRatio = 1.0f;
-        knownVideoDurationMs = 0;
+        lastObservedVideoPosMs = 0;
+        unexpectedPosResetCount = 0;
         if (rewindPulseRunnable != null) uiHandler.removeCallbacks(rewindPulseRunnable);
         if (exoPlayer != null) {
             try { exoPlayer.stop(); } catch (Exception ignored) {}
@@ -3073,6 +3276,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         detachAudioCallbacksOnly();
         videoTickerActive = false;
         releaseVideoPlayer();
+        cleanupActiveRemuxedCache();
 
         if (pdfRenderer != null) {
             try { pdfRenderer.close(); } catch (Exception ignored) {}

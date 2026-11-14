@@ -1,7 +1,10 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaCodec;
@@ -12,22 +15,42 @@ import android.media.MediaMuxer;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.provider.OpenableColumns;
 import android.util.SparseIntArray;
 import android.view.Gravity;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.VideoView;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.common.VideoSize;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.SeekParameters;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.extractor.ExtractorsFactory;
 
+import java.io.Closeable;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -40,12 +63,24 @@ public class VideoCutterActivity extends AppCompatActivity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private Uri selectedVideoUri = null;
+    private File resolvedSourceFile = null;
+    private File tempCopiedCacheFile = null;
+    private String resolvedDisplayName = "";
+    private boolean isMtsOrTsSource = false;
+
     private File lastCutVideoFile = null;
     private long durationMs = 0;
     private long startMs = 0;
     private long endMs = 0;
 
-    private VideoView videoView;
+    private TextureView previewTextureView;
+    private Surface previewSurface;
+    private ExoPlayer previewPlayer;
+    private boolean previewAudioDisabled = false;
+    private int previewVideoWidth = 0;
+    private int previewVideoHeight = 0;
+    private float previewPixelRatio = 1.0f;
+
     private TextView tvSelectedVideo;
     private TextView tvVideoRange;
     private RangeWaveformTrimView rangeTrimView;
@@ -104,22 +139,59 @@ public class VideoCutterActivity extends AppCompatActivity {
         card.setBackground(shape);
 
         tvSelectedVideo = new TextView(this);
-        tvSelectedVideo.setText("בחר סרטון לחיתוך מהיר ללא קידוד מחדש");
+        tvSelectedVideo.setText("בחר סרטון לחיתוך מהיר (MP4 / MTS / M2TS / TS)");
         tvSelectedVideo.setTextColor(textPrimary);
         tvSelectedVideo.setTextSize(14.5f);
         tvSelectedVideo.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(tvSelectedVideo);
 
-        videoView = new VideoView(this);
+        FrameLayout previewBox = new FrameLayout(this);
+        previewBox.setBackgroundColor(Color.BLACK);
+        previewTextureView = new TextureView(this);
+        previewTextureView.setOpaque(true);
+        previewBox.addView(previewTextureView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+        previewTextureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
+                previewSurface = new Surface(surface);
+                if (previewPlayer != null) {
+                    previewPlayer.setVideoSurface(previewSurface);
+                } else if (selectedVideoUri != null) {
+                    startPreviewExoPlayer(false);
+                }
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                updatePreviewTransform();
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                if (previewPlayer != null) {
+                    previewPlayer.setVideoSurface(null);
+                }
+                previewSurface = null;
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
+            }
+        });
         LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 460);
         vLp.topMargin = 16;
-        card.addView(videoView, vLp);
+        card.addView(previewBox, vLp);
 
-        Button btnPick = createButton("בחירת סרטון מהמכשיר (MP4)", accent, v -> {
+        Button btnPick = createButton("בחירת סרטון מהמכשיר (MP4 / MTS / TS)", accent, v -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             pick.addCategory(Intent.CATEGORY_OPENABLE);
-            pick.setType("video/*");
+            pick.setType("*/*");
+            pick.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                    "video/*", "video/mp2ts", "video/mp2t", "application/octet-stream"
+            });
             startActivityForResult(pick, REQ_PICK_VIDEO);
         });
         card.addView(btnPick);
@@ -130,15 +202,17 @@ public class VideoCutterActivity extends AppCompatActivity {
         tvVideoRange.setPadding(0, 22, 0, 10);
         card.addView(tvVideoRange);
 
-        // סעיף 36: פס חיתוך משולב ונוח
         rangeTrimView = new RangeWaveformTrimView(this);
         rangeTrimView.setAccentColor(accent);
         rangeTrimView.setEnabled(false);
         rangeTrimView.setOnRangeChangedListener((s, e, movingStart) -> {
             startMs = s;
             endMs = e;
-            if (movingStart) {
-                try { videoView.seekTo((int) startMs); } catch (Exception ignored) {}
+            if (movingStart && previewPlayer != null) {
+                try {
+                    previewPlayer.seekTo(startMs);
+                } catch (Exception ignored) {
+                }
             }
             tvVideoRange.setText(String.format(Locale.US, "התחלה: %02d:%02d  •  סיום: %02d:%02d",
                     (startMs / 1000) / 60, (startMs / 1000) % 60,
@@ -172,7 +246,7 @@ public class VideoCutterActivity extends AppCompatActivity {
             File initialFile = new File(initialPath);
             if (initialFile.exists()) {
                 selectedVideoUri = Uri.fromFile(initialFile);
-                loadSelectedVideo(selectedVideoUri, initialFile.getName());
+                loadSelectedVideo(selectedVideoUri, initialFile.getName(), initialFile);
             }
         }
     }
@@ -201,52 +275,315 @@ public class VideoCutterActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_PICK_VIDEO && resultCode == RESULT_OK && data != null && data.getData() != null) {
             selectedVideoUri = data.getData();
-            loadSelectedVideo(selectedVideoUri, selectedVideoUri.getLastPathSegment());
+            String name = queryDisplayName(selectedVideoUri);
+            File directFile = "file".equalsIgnoreCase(selectedVideoUri.getScheme()) && selectedVideoUri.getPath() != null
+                    ? new File(selectedVideoUri.getPath()) : null;
+            loadSelectedVideo(selectedVideoUri, name, directFile);
         }
     }
 
-    private void loadSelectedVideo(Uri uri, String displayName) {
-        try {
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            mmr.setDataSource(this, uri);
-            String dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            durationMs = dur != null ? Long.parseLong(dur) : 0;
-            mmr.release();
+    private String queryDisplayName(Uri uri) {
+        if (uri == null) return "";
+        if ("file".equalsIgnoreCase(uri.getScheme()) && uri.getPath() != null) {
+            return new File(uri.getPath()).getName();
+        }
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) {
+                    String n = cursor.getString(idx);
+                    if (n != null && !n.isEmpty()) return n;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        String last = uri.getLastPathSegment();
+        return last != null ? last : "video";
+    }
 
-            startMs = 0;
+    private void loadSelectedVideo(Uri uri, String displayName, @Nullable File directFile) {
+        releasePreviewPlayer();
+        cleanupTempCacheCopy();
+        resolvedDisplayName = displayName != null ? displayName : "";
+        resolvedSourceFile = directFile;
+        durationMs = 0L;
+        startMs = 0L;
+        endMs = 0L;
+        previewAudioDisabled = false;
+        isMtsOrTsSource = MpegTsNormalizer.isLikelyMpegTsName(resolvedDisplayName)
+                || (directFile != null && MpegTsNormalizer.detectTsLayoutCached(directFile).packetStride > 0);
+
+        tvSelectedVideo.setText("טוען סרטון: " + resolvedDisplayName);
+        btnCutVideo.setEnabled(false);
+        rangeTrimView.setEnabled(false);
+
+        executor.execute(() -> {
+            try {
+                File usableFile = directFile;
+                if (usableFile == null && "content".equalsIgnoreCase(uri.getScheme())) {
+                    // אם מדובר ב-content:// של קובץ MTS/TS (או שהמערכת אינה חושפת נתיב ישיר), מעתיקים למטמון זמני לגישה ישירה
+                    if (MpegTsNormalizer.isLikelyMpegTsName(resolvedDisplayName) || looksLikeMtsHeader(uri)) {
+                        String ext = resolvedDisplayName.contains(".")
+                                ? resolvedDisplayName.substring(resolvedDisplayName.lastIndexOf('.'))
+                                : ".mts";
+                        File cached = new File(getCacheDir(), "ts_cut_src_" + System.currentTimeMillis() + ext);
+                        try (InputStream in = getContentResolver().openInputStream(uri);
+                             FileOutputStream out = new FileOutputStream(cached)) {
+                            if (in != null) {
+                                byte[] buf = new byte[65536];
+                                int r;
+                                while ((r = in.read(buf)) > 0) {
+                                    out.write(buf, 0, r);
+                                }
+                            }
+                        }
+                        if (cached.exists() && cached.length() > 0L) {
+                            tempCopiedCacheFile = cached;
+                            usableFile = cached;
+                        }
+                    }
+                }
+
+                resolvedSourceFile = usableFile;
+                if (usableFile != null) {
+                    isMtsOrTsSource = MpegTsNormalizer.isLikelyMpegTsName(resolvedDisplayName)
+                            || MpegTsNormalizer.detectTsLayoutCached(usableFile).packetStride > 0;
+                }
+
+                long resolvedDur = 0L;
+                if (usableFile != null) {
+                    MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+                    Closeable tsDs = null;
+                    try {
+                        tsDs = MpegTsNormalizer.setMediaMetadataRetrieverSource(mmr, usableFile);
+                        String dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                        if (dur != null) resolvedDur = Long.parseLong(dur.trim());
+                    } catch (Throwable ignored) {
+                    } finally {
+                        try { mmr.release(); } catch (Throwable ignored) {}
+                        if (tsDs != null) try { tsDs.close(); } catch (Throwable ignored) {}
+                    }
+                    if (resolvedDur <= 0L && isMtsOrTsSource) {
+                        resolvedDur = MpegTsNormalizer.extractTsDurationMs(usableFile);
+                    }
+                } else {
+                    MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+                    try {
+                        mmr.setDataSource(this, uri);
+                        String dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                        if (dur != null) resolvedDur = Long.parseLong(dur.trim());
+                    } catch (Throwable ignored) {
+                    } finally {
+                        try { mmr.release(); } catch (Throwable ignored) {}
+                    }
+                }
+
+                final long finalDur = resolvedDur;
+                final File finalUsable = usableFile;
+                runOnUiThread(() -> {
+                    if (finalUsable != null) {
+                        selectedVideoUri = Uri.fromFile(finalUsable);
+                    }
+                    applyLoadedDuration(finalDur);
+                    startPreviewExoPlayer(false);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "שגיאה בטעינת הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    private boolean looksLikeMtsHeader(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return false;
+            byte[] probe = new byte[16384];
+            int total = 0;
+            while (total < probe.length) {
+                int r = in.read(probe, total, probe.length - total);
+                if (r <= 0) break;
+                total += r;
+            }
+            if (total < MpegTsNormalizer.TS_PACKET_SIZE * 3) return false;
+            byte[] slice = total == probe.length ? probe : java.util.Arrays.copyOf(probe, total);
+            return MpegTsNormalizer.detectTsLayoutFromBytes(slice, total).packetStride > 0;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private void applyLoadedDuration(long durMs) {
+        if (durMs > 0L) {
+            durationMs = durMs;
+            startMs = 0L;
             endMs = Math.max(500L, durationMs);
             rangeTrimView.setEnabled(true);
             rangeTrimView.setDurationAndRange(durationMs, startMs, endMs);
             btnCutVideo.setEnabled(true);
-
-            tvSelectedVideo.setText("סרטון נבחר: " + (displayName != null ? displayName : uri.toString()));
             tvVideoRange.setText(String.format(Locale.US, "התחלה: 00:00  •  סיום: %02d:%02d",
                     (endMs / 1000) / 60, (endMs / 1000) % 60));
-            videoView.setVideoURI(uri);
-            videoView.start();
-        } catch (Exception e) {
-            Toast.makeText(this, "שגיאה בטעינת הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+        tvSelectedVideo.setText("סרטון נבחר: " + resolvedDisplayName + (isMtsOrTsSource ? " (MTS/TS)" : ""));
+    }
+
+    @OptIn(markerClass = UnstableApi.class)
+    private void startPreviewExoPlayer(boolean disableAudioTrack) {
+        releasePreviewPlayer();
+        if (selectedVideoUri == null) return;
+        try {
+            ExtractorsFactory extractorsFactory = SeekableTsExtractor.createExtractorsFactory(isMtsOrTsSource, () -> {
+                if (durationMs > 0L) return durationMs;
+                if (resolvedSourceFile != null) {
+                    long tsDur = MpegTsNormalizer.extractTsDurationMs(resolvedSourceFile);
+                    if (tsDur > 0L) return tsDur;
+                }
+                return 0L;
+            });
+
+            DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(
+                    new NormalizedTsExoDataSource.Factory(this), extractorsFactory);
+
+            DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+                    .setEnableDecoderFallback(true);
+
+            previewPlayer = new ExoPlayer.Builder(this, renderersFactory)
+                    .setMediaSourceFactory(mediaSourceFactory)
+                    .build();
+            previewPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC);
+            if (disableAudioTrack) {
+                previewPlayer.setTrackSelectionParameters(
+                        previewPlayer.getTrackSelectionParameters()
+                                .buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                                .build());
+            }
+            if (previewSurface != null) {
+                previewPlayer.setVideoSurface(previewSurface);
+            }
+            previewPlayer.addListener(new Player.Listener() {
+                @Override
+                public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        previewVideoWidth = videoSize.width;
+                        previewVideoHeight = videoSize.height;
+                        previewPixelRatio = videoSize.pixelWidthHeightRatio > 0f ? videoSize.pixelWidthHeightRatio : 1.0f;
+                        updatePreviewTransform();
+                    }
+                }
+
+                @Override
+                public void onPlaybackStateChanged(int playbackState) {
+                    if (previewPlayer == null) return;
+                    if (playbackState == Player.STATE_READY) {
+                        long d = previewPlayer.getDuration();
+                        if (d > 0L && d != C.TIME_UNSET && durationMs <= 0L) {
+                            applyLoadedDuration(d);
+                        }
+                    }
+                }
+
+                @Override
+                public void onPlayerError(@NonNull PlaybackException error) {
+                    if (!previewAudioDisabled && isMtsOrTsSource) {
+                        previewAudioDisabled = true;
+                        startPreviewExoPlayer(true);
+                    }
+                }
+            });
+
+            MediaItem.Builder item = new MediaItem.Builder().setUri(selectedVideoUri);
+            if (isMtsOrTsSource) {
+                item.setMimeType(MimeTypes.VIDEO_MP2T);
+            }
+            previewPlayer.setMediaItem(item.build());
+            previewPlayer.prepare();
+            previewPlayer.play();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void updatePreviewTransform() {
+        if (previewTextureView == null) return;
+        int vw = previewTextureView.getWidth();
+        int vh = previewTextureView.getHeight();
+        if (vw <= 0 || vh <= 0 || previewVideoWidth <= 0 || previewVideoHeight <= 0) return;
+        float viewRatio = (float) vw / (float) vh;
+        float videoRatio = (previewVideoWidth * previewPixelRatio) / (float) previewVideoHeight;
+        float sx = videoRatio > viewRatio ? 1.0f : videoRatio / viewRatio;
+        float sy = videoRatio > viewRatio ? viewRatio / videoRatio : 1.0f;
+        Matrix m = new Matrix();
+        m.setScale(sx, sy, vw * 0.5f, vh * 0.5f);
+        previewTextureView.setTransform(m);
+    }
+
+    private void releasePreviewPlayer() {
+        if (previewPlayer != null) {
+            try {
+                previewPlayer.release();
+            } catch (Throwable ignored) {
+            }
+            previewPlayer = null;
         }
     }
 
     private void executeVideoCut() {
         if (selectedVideoUri == null || endMs <= startMs) return;
         btnCutVideo.setEnabled(false);
-        Toast.makeText(this, "חותך סרטון...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, isMtsOrTsSource ? "חותך וממיר קטע MTS ל-MP4..." : "חותך סרטון...", Toast.LENGTH_SHORT).show();
 
         final long startUs = startMs * 1000L;
-        final long endUs = endMs * 1000L;
+        final long endUs = (durationMs > 0L && endMs >= durationMs - 250L) ? Long.MAX_VALUE : (endMs * 1000L);
 
         executor.execute(() -> {
+            File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
+            if (!moviesDir.exists()) moviesDir.mkdirs();
+            File outFile = new File(moviesDir, "VideoCut_" + System.currentTimeMillis() + ".mp4");
+
+            if (isMtsOrTsSource && resolvedSourceFile != null && resolvedSourceFile.isFile()) {
+                try {
+                    TsToMp4Remuxer.RemuxResult res = TsToMp4Remuxer.remuxToMp4(
+                            resolvedSourceFile,
+                            outFile,
+                            startUs,
+                            endUs,
+                            pct -> runOnUiThread(() -> btnCutVideo.setText("חותך סרטון MTS... " + pct + "%"))
+                    );
+                    runOnUiThread(() -> {
+                        btnCutVideo.setText("חתוך סרטון ושמור לתיקיית הסרטונים");
+                        lastCutVideoFile = outFile;
+                        btnCutVideo.setEnabled(true);
+                        btnShareCutVideo.setEnabled(true);
+                        btnShareCutVideo.setAlpha(1.0f);
+                        String extraNote = res.droppedUnsupportedAudio
+                                ? "\n(הערה: ערוץ שמע AC-3 שלא נתמך במכשיר דולג כדי לשמור וידאו תקין)"
+                                : "";
+                        ThemedDialogHelper.showCustomDialog(
+                                this,
+                                "הסרטון נחתך ונשמר בהצלחה",
+                                "הסרטון החתוך נשמר כ-MP4 בתיקיית הסרטונים:\n" + outFile.getName() + extraNote,
+                                null,
+                                "שיתוף הסרטון שנחתך",
+                                () -> shareVideoFile(outFile),
+                                "סגור",
+                                null,
+                                false
+                        );
+                    });
+                } catch (Exception e) {
+                    if (outFile.exists()) outFile.delete();
+                    runOnUiThread(() -> {
+                        btnCutVideo.setText("חתוך סרטון ושמור לתיקיית הסרטונים");
+                        btnCutVideo.setEnabled(true);
+                        Toast.makeText(this, "שגיאה בחיתוך MTS: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    });
+                }
+                return;
+            }
+
             MediaExtractor extractor = new MediaExtractor();
             MediaMuxer muxer = null;
             try {
                 extractor.setDataSource(this, selectedVideoUri, null);
                 int trackCount = extractor.getTrackCount();
-
-                File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
-                if (!moviesDir.exists()) moviesDir.mkdirs();
-                File outFile = new File(moviesDir, "VideoCut_" + System.currentTimeMillis() + ".mp4");
 
                 muxer = new MediaMuxer(outFile.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
                 SparseIntArray indexMap = new SparseIntArray(trackCount);
@@ -256,11 +593,15 @@ public class VideoCutterActivity extends AppCompatActivity {
                     MediaFormat format = extractor.getTrackFormat(i);
                     String mime = format.getString(MediaFormat.KEY_MIME);
                     if (mime != null && (mime.startsWith("video/") || mime.startsWith("audio/"))) {
-                        extractor.selectTrack(i);
-                        int dstIndex = muxer.addTrack(format);
-                        indexMap.put(i, dstIndex);
-                        if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                            maxBufferSize = Math.max(maxBufferSize, format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE));
+                        try {
+                            extractor.selectTrack(i);
+                            int dstIndex = muxer.addTrack(format);
+                            indexMap.put(i, dstIndex);
+                            if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                                maxBufferSize = Math.max(maxBufferSize, format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE));
+                            }
+                        } catch (Throwable ignored) {
+                            extractor.unselectTrack(i);
                         }
                     }
                 }
@@ -310,6 +651,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                     );
                 });
             } catch (Exception e) {
+                if (outFile.exists()) outFile.delete();
                 runOnUiThread(() -> {
                     btnCutVideo.setEnabled(true);
                     Toast.makeText(this, "שגיאה בחיתוך וידאו: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -332,5 +674,31 @@ public class VideoCutterActivity extends AppCompatActivity {
         } catch (Exception e) {
             Toast.makeText(this, "שגיאה בשיתוף הסרטון: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void cleanupTempCacheCopy() {
+        if (tempCopiedCacheFile != null && tempCopiedCacheFile.exists()) {
+            try {
+                tempCopiedCacheFile.delete();
+            } catch (Throwable ignored) {
+            }
+            tempCopiedCacheFile = null;
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (previewPlayer != null) {
+            try { previewPlayer.pause(); } catch (Throwable ignored) {}
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        releasePreviewPlayer();
+        cleanupTempCacheCopy();
+        executor.shutdownNow();
     }
 }

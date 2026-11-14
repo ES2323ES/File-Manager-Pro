@@ -148,4 +148,39 @@ public class MpegTsNormalizerTest {
         long durationMs = MpegTsNormalizer.extractTsDurationMs(tmp);
         assertEquals((packetCount - 1) * 1000L, durationMs);
     }
+
+    @Test
+    public void extractsBitrateDurationWhenPcrResetsMidStream() throws Exception {
+        // מדמה קובץ MTS מאוחד שבו השעון מתאפס באמצע הקובץ (0..2s ואז שוב 0..2s)
+        // כך ש-lastPcr - firstPcr == 0, והמערכת חייבת לעבור לאמידת קצב נתונים מונוטוני
+        int packetCount = 400;
+        byte[] raw = new byte[packetCount * 192];
+        for (int p = 0; p < packetCount; p++) {
+            int base = p * 192;
+            raw[base + 4] = 0x47;
+            raw[base + 5] = 0x01;
+            raw[base + 6] = 0x00;
+            raw[base + 7] = 0x20;
+            raw[base + 8] = 0x07;
+            raw[base + 9] = 0x10;
+            int localPkt = (p < 200) ? p : (p - 200);
+            // 10ms (900 ticks) per packet -> 400 packets = 4000ms (~4 seconds)
+            long pcr90k = localPkt * 900L;
+            raw[base + 10] = (byte) ((pcr90k >> 25) & 0xFF);
+            raw[base + 11] = (byte) ((pcr90k >> 17) & 0xFF);
+            raw[base + 12] = (byte) ((pcr90k >> 9) & 0xFF);
+            raw[base + 13] = (byte) ((pcr90k >> 1) & 0xFF);
+            raw[base + 14] = (byte) ((pcr90k & 0x01) << 7);
+        }
+
+        File tmp = File.createTempFile("test_pcr_reset_", ".mts");
+        tmp.deleteOnExit();
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(raw);
+        }
+
+        long durationMs = MpegTsNormalizer.extractTsDurationMs(tmp);
+        assertTrue("Expected ~4000ms bitrate duration, got " + durationMs,
+                durationMs >= 3500L && durationMs <= 4500L);
+    }
 }
