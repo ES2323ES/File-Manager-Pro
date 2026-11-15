@@ -79,6 +79,19 @@ public class ChangelogDialogHelper {
         headerRow.addView(headerText);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.2 רשמית =====================
+        SpannableStringBuilder v32 = new SpannableStringBuilder();
+        appendBullet(v32, "תמונה צלולה, חלקה וללא ריצודים בכל פורמט כולל MTS: ", accent,
+                "שדרוג תצוגת החומרה (RGBA_8888 + מטריצת GPU אחידה), מאגרי טעינה יציבים ב-ExoPlayer, קריאה מהירה מוגדלת מזרם ה-MTS (384KB), ניטור אוטומטי של דילוג פריימים, וביטול ריענון מיותר של סרגלי הווידאו למניעת הבהובים וריצודים.", textPrimary);
+        appendBullet(v32, "\n\nזום חד מכל נקודה במסך (עד פי 20): ", accent,
+                "צביטה והגדלה חדה מכל פינה וצד בסרטון (ולא רק מהמרכז) תוך שמירה על חדות מקסימלית וללא פגיעה באיכות התמונה.", textPrimary);
+        appendBullet(v32, "\n\nממשק מסך וידאו משודרג ונקי: ", accent,
+                "הסתרת פקדים אוטומטית עם פתיחת הווידאו והחזרה בהקשה; כותרת יציבה ומלאה למעלה ללא ריצוד; עיגול הפעלה תכלת יחיד במרכז; כפתור נעילה מעל פס ההתקדמות ושחרור בתחתית המסך; אייקונים נקיים ללא טקסט ומסגרות (כולל חזרה, אפשרויות ומהירות), וסידור כפתורי ניווט, סיבוב מסך, השמעה אקראית, מתיחה והתאמה למסך, קפיצות 10 שניות וחזרה.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.2 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+                accent, textPrimary, textSecondary, subtleBg, divider, v32);
+
         // ===================== גירסה 0.3.1 רשמית =====================
         SpannableStringBuilder v31 = new SpannableStringBuilder();
         appendBullet(v31, "חותך הווידאו תומך כעת במלואו בקבצי MTS / M2TS / TS: ", accent,
@@ -86,8 +99,8 @@ public class ChangelogDialogHelper {
         appendBullet(v31, "\n\nתיקון יסודי של פס ההתקדמות וקפיצות חוזרות להתחלה ב-MTS: ", accent,
                 "שמירת משך הסרטון ואמידת אורך עמידה גם כשחותמות PCR מתאפסות באמצע הקובץ, הסרת פיצול שדות שפגע בפריימים שזורים, ומנגנון נרמול אוטומטי ל-MP4 זמני חלק בכל מקרה של זרם עם איפוסי PTS חוזרים.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.3.1 רשמית", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.3.1 רשמית", "חותך וידאו MTS ותיקון פס ההתקדמות",
                 accent, textPrimary, textSecondary, subtleBg, divider, v31);
 
         // ===================== גירסה 0.3.0 רשמית =====================

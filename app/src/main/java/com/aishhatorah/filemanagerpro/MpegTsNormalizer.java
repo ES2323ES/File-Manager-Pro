@@ -450,13 +450,14 @@ public final class MpegTsNormalizer {
      * קורא חוצץ מהיר הממפה היסטים וירטואליים של 188 בתים לקבצי .mts / .m2ts של 192 בתים.
      */
     public static final class NormalizedTsStreamReader implements Closeable {
-        private static final int CACHE_PACKETS = 256;
+        private static final int CACHE_PACKETS = 2048;
 
         private final RandomAccessFile raf;
         private final TsFormatInfo info;
         private final byte[] cacheBuf;
         private long cachedStartPacket = -1L;
         private int cachedPacketCount = 0;
+        private long lastRafPhysPos = -1L;
         private boolean closed = false;
 
         public NormalizedTsStreamReader(File file, TsFormatInfo info) throws IOException {
@@ -521,13 +522,16 @@ public final class MpegTsNormalizer {
             int bytesToRead = (pktsToRead - 1) * info.packetStride + TS_PACKET_SIZE;
             long physOffset = info.syncOffset + startPkt * (long) info.packetStride;
 
-            raf.seek(physOffset);
+            if (lastRafPhysPos != physOffset) {
+                raf.seek(physOffset);
+            }
             int readSoFar = 0;
             while (readSoFar < bytesToRead) {
                 int r = raf.read(cacheBuf, readSoFar, bytesToRead - readSoFar);
                 if (r <= 0) break;
                 readSoFar += r;
             }
+            lastRafPhysPos = physOffset + readSoFar;
             if (readSoFar < TS_PACKET_SIZE) {
                 cachedStartPacket = -1L;
                 cachedPacketCount = 0;

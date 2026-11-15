@@ -53,10 +53,10 @@ jobs:
           mkdir -p dist-artifacts
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           cp "$APK_PATH" dist-artifacts/File-Manager-Pro.apk
-          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.1.apk
-          zip -r dist-artifacts/File-Manager-Pro-v0.3.1-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
+          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.2.apk
+          zip -r dist-artifacts/File-Manager-Pro-v0.3.2-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
 
-      - name: Determine Release Tag (V1..V11...)
+      - name: Determine Release Tag (V1..V12...)
         id: calc_tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +67,7 @@ jobs:
           else
             LATEST_TITLE=$(gh release list --limit 1 --json name --jq '.[0].name' 2>/dev/null || true)
             LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.1"; then
+            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.2"; then
               NEXT_TAG="$LATEST_TAG"
             else
               HIGHEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^V[0-9]+$' | sed 's/V//' | sort -nr | head -n 1 || true)
@@ -87,14 +87,15 @@ jobs:
           TAG: ${{ steps.calc_tag.outputs.tag }}
         run: |
           cat <<EOF > release-notes.md
-          ### חידושים ושיפורים בגירסה 0.3.1 רשמית (${TAG})
-          • **חותך הווידאו תומך כעת בחיתוך מלא של קבצי MTS / M2TS / TS:** מנוע חיתוך והמרה ישירה (Pure Java ללא תלויות חיצוניות) המאפשר בחירה, תצוגה מקדימה וגזירת טווח זמן מתוך קבצי MTS/TS לשמירה כקובץ MP4 תקני ונקי
-          • **תיקון מלא לפס ההתקדמות וקפיצות חוזרות להתחלה בניגון MTS:** שמירת משך הסרטון במהלך טעינה וגיבוי, אמידת אורך מבוססת קצב נתונים כש-PCR/PTS מתאפסים באמצע הקובץ, מניעת פיצול שדות שגויים בקבצי AVCHD שזורים, והמרה אוטומטית מהירה ברקע ל-MP4 תקני בכל מקרה של זרם עם איפוסי PTS חוזרים
+          ### חידושים ושיפורים בגירסה 0.3.2 רשמית (${TAG})
+          • **וידאו צלול, חלק וללא ריצודים בכל הפורמטים (כולל MTS):** תצוגת חומרה משופרת (RGBA_8888 ומטריצת GPU אחידה), מאגרי טעינה יציבים, קריאת MTS מוגדלת ונטולת ריצודים
+          • **זום חד ועמוק (עד פי 20) מכל נקודה במסך:** הגדלה חדה בצביטה מכל פינה וצד בסרטון ללא אובדן חדות
+          • **ממשק מסך וידאו מחודש ונקי:** הסתרה אוטומטית של האפשרויות בפתיחה והחזרה בהקשה, כותרת עליונה יציבה ומלאה, עיגול הפעלה תכלת יחיד במרכז, כפתור נעילה מעל פס ההתקדמות ושחרור בתחתית המסך, ואייקונים נקיים ללא טקסט או מסגרות
 
           ### הורדה ישירה
           - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
-          - **קובץ התקנה מתויג גירסה 0.3.1 רשמית:** \`File-Manager-Pro-v0.3.1.apk\`
-          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.1-Source.zip\`
+          - **קובץ התקנה מתויג גירסה 0.3.2 רשמית:** \`File-Manager-Pro-v0.3.2.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.2-Source.zip\`
 
           ### פיתוח והנדסה
           - **פיתוח והנדסה:** @אש התורה — [במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [בעוגן פליי](https://ogenplay.com/users/724ec656-a4a7-4d31-8ece-fa9938851704)
@@ -103,21 +104,21 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
             gh release edit "$TAG" \
-              --title "${TAG} — File Manager Pro v0.3.1 רשמית" \
+              --title "${TAG} — File Manager Pro v0.3.2 רשמית" \
               --notes-file release-notes.md \
               --draft=false \
               --prerelease=false
             gh release upload "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.1.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.1-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.3.2.apk \
+              dist-artifacts/File-Manager-Pro-v0.3.2-Source.zip \
               --clobber
           else
             gh release create "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.1.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.1-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.3.2.apk \
+              dist-artifacts/File-Manager-Pro-v0.3.2-Source.zip \
               --target "$GITHUB_SHA" \
-              --title "${TAG} — File Manager Pro v0.3.1 רשמית" \
+              --title "${TAG} — File Manager Pro v0.3.2 רשמית" \
               --notes-file release-notes.md
           fi
