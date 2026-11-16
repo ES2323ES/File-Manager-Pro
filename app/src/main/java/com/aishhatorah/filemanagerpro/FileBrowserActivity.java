@@ -1,13 +1,18 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -22,6 +27,7 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -65,6 +71,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * סעיפים 2, 3, 4, 5, 7, 14, 15, 16, 18, 26, 28, 31, 32, 34, 38, 40, 43:
@@ -95,6 +102,8 @@ public class FileBrowserActivity extends AppCompatActivity {
     private static boolean clipboardIsMove = false;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService searchExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicInteger searchGeneration = new AtomicInteger(0);
     private final List<File> allLoadedFiles = new ArrayList<>();
     private final List<File> displayedFiles = new ArrayList<>();
     private final Set<String> selectedPaths = new HashSet<>();
@@ -134,6 +143,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     private HorizontalScrollView breadcrumbScroll;
     private LinearLayout breadcrumbContainer;
     private LinearLayout searchContainer;
+    private LinearLayout recentSearchContainer;
     private EditText etSearch;
     private LinearLayout appsTabBar;
     private Button btnTabApkFiles;
@@ -221,7 +231,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         ImageButton btnQuickSearch = new ImageButton(this);
         btnQuickSearch.setImageResource(R.drawable.ic_search);
-        btnQuickSearch.setColorFilter(textSecondary);
+        btnQuickSearch.setColorFilter(accent);
         btnQuickSearch.setBackgroundColor(Color.TRANSPARENT);
         btnQuickSearch.setContentDescription("חיפוש");
         btnQuickSearch.setPadding(dp(8), dp(8), dp(8), dp(8));
@@ -254,17 +264,21 @@ public class FileBrowserActivity extends AppCompatActivity {
         breadcrumbScroll.addView(breadcrumbContainer);
         root.addView(breadcrumbScroll);
 
-        // תיבת חיפוש נפתחת לפי בקשה מהמבורגר או מאייקון חיפוש (סעיף 4, 7)
+        // תיבת חיפוש נפתחת עם שמירת חיפושים אחרונים (סעיפים י, יא)
         searchContainer = new LinearLayout(this);
-        searchContainer.setOrientation(LinearLayout.HORIZONTAL);
-        searchContainer.setGravity(Gravity.CENTER_VERTICAL);
+        searchContainer.setOrientation(LinearLayout.VERTICAL);
         searchContainer.setPadding(dp(10), dp(4), dp(10), dp(6));
         searchContainer.setVisibility(View.GONE);
 
+        LinearLayout searchInputRow = new LinearLayout(this);
+        searchInputRow.setOrientation(LinearLayout.HORIZONTAL);
+        searchInputRow.setGravity(Gravity.CENTER_VERTICAL);
+
         etSearch = new EditText(this);
-        etSearch.setHint("חפש קובץ, תיקייה או אפליקציה...");
+        etSearch.setHint("");
+        etSearch.setSingleLine(true);
+        etSearch.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         etSearch.setTextColor(textPrimary);
-        etSearch.setHintTextColor(textSecondary);
         etSearch.setTextSize(ThemeHelper.spScaled(this, 13.5f));
         GradientDrawable searchBg = new GradientDrawable();
         searchBg.setCornerRadius(dp(10));
@@ -279,7 +293,35 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
             @Override public void afterTextChanged(Editable s) {}
         });
-        searchContainer.addView(etSearch, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        etSearch.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE) {
+                String q = etSearch.getText().toString().trim();
+                if (!q.isEmpty()) {
+                    PrefsManager.addRecentSearch(this, q);
+                    renderRecentSearches();
+                }
+                filterCurrentList(q);
+                return true;
+            }
+            return false;
+        });
+        searchInputRow.addView(etSearch, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageButton btnRunSearch = new ImageButton(this);
+        btnRunSearch.setImageResource(R.drawable.ic_search);
+        btnRunSearch.setColorFilter(accent);
+        btnRunSearch.setBackgroundColor(Color.TRANSPARENT);
+        btnRunSearch.setPadding(dp(8), dp(8), dp(8), dp(8));
+        btnRunSearch.setContentDescription("חיפוש");
+        btnRunSearch.setOnClickListener(v -> {
+            String q = etSearch.getText().toString().trim();
+            if (!q.isEmpty()) {
+                PrefsManager.addRecentSearch(this, q);
+                renderRecentSearches();
+            }
+            filterCurrentList(q);
+        });
+        searchInputRow.addView(btnRunSearch, new LinearLayout.LayoutParams(dp(38), dp(38)));
 
         Button btnCloseSearch = new Button(this);
         btnCloseSearch.setText("✕");
@@ -291,7 +333,18 @@ public class FileBrowserActivity extends AppCompatActivity {
             etSearch.setText("");
             toggleSearchBar(false);
         });
-        searchContainer.addView(btnCloseSearch);
+        searchInputRow.addView(btnCloseSearch);
+        searchContainer.addView(searchInputRow);
+
+        HorizontalScrollView recentScroll = new HorizontalScrollView(this);
+        recentScroll.setHorizontalScrollBarEnabled(false);
+        recentSearchContainer = new LinearLayout(this);
+        recentSearchContainer.setOrientation(LinearLayout.HORIZONTAL);
+        recentSearchContainer.setGravity(Gravity.CENTER_VERTICAL);
+        recentSearchContainer.setPadding(dp(2), dp(6), dp(2), dp(2));
+        recentScroll.addView(recentSearchContainer);
+        searchContainer.addView(recentScroll);
+
         root.addView(searchContainer);
 
         // לשוניות אפליקציות (סעיף 15) — מוצג רק ב-MODE_APPS
@@ -398,10 +451,33 @@ public class FileBrowserActivity extends AppCompatActivity {
                 dp(36), dp(36), Gravity.CENTER));
 
         recyclerView = new RecyclerView(this);
-        recyclerView.setHasFixedSize(true);
+        recyclerView.setHasFixedSize(false);
+        recyclerView.setItemAnimator(null);
         recyclerView.setItemViewCacheSize(24);
         recyclerView.setClipToPadding(false);
-        recyclerView.setPadding(dp(5), dp(3), dp(20), dp(12));
+        recyclerView.setPadding(dp(2), dp(2), dp(20), dp(12));
+        recyclerView.addItemDecoration(new RecyclerView.ItemDecoration() {
+            private final Paint divPaint = new Paint();
+
+            @Override
+            public void onDrawOver(@NonNull Canvas c, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+                divPaint.setColor(divider);
+                divPaint.setStrokeWidth(Math.max(1f, dp(1)));
+                int count = parent.getChildCount();
+                boolean grid = Boolean.TRUE.equals(appliedGridLayout) && !showingInstalledAppsTab;
+                int leftEdge = parent.getPaddingLeft();
+                int rightEdge = parent.getWidth() - parent.getPaddingRight();
+                for (int i = 0; i < count; i++) {
+                    View child = parent.getChildAt(i);
+                    float bottom = child.getBottom();
+                    c.drawLine(grid ? child.getLeft() : leftEdge, bottom, grid ? child.getRight() : rightEdge, bottom, divPaint);
+                    if (grid && child.getRight() < rightEdge - dp(2)) {
+                        float rx = child.getRight();
+                        c.drawLine(rx, child.getTop(), rx, child.getBottom(), divPaint);
+                    }
+                }
+            }
+        });
         applyFolderLayoutMode();
         adapter = new FileAdapter();
         installedAdapter = new InstalledAppsAdapter();
@@ -486,7 +562,52 @@ public class FileBrowserActivity extends AppCompatActivity {
         searchBarOpen = open;
         searchContainer.setVisibility(open ? View.VISIBLE : View.GONE);
         if (open) {
+            renderRecentSearches();
             etSearch.requestFocus();
+        } else {
+            searchGeneration.incrementAndGet();
+        }
+    }
+
+    private void renderRecentSearches() {
+        if (recentSearchContainer == null) return;
+        recentSearchContainer.removeAllViews();
+        List<String> recent = PrefsManager.getRecentSearches(this);
+        if (recent.isEmpty()) {
+            recentSearchContainer.setVisibility(View.GONE);
+            return;
+        }
+        recentSearchContainer.setVisibility(View.VISIBLE);
+        for (String q : recent) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(4), dp(4), dp(10), dp(4));
+
+            ImageView ivIcon = new ImageView(this);
+            ivIcon.setImageResource(R.drawable.ic_recent);
+            ivIcon.setColorFilter(accent);
+            row.addView(ivIcon, new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+            TextView tvQ = new TextView(this);
+            tvQ.setText(q);
+            tvQ.setTextColor(textPrimary);
+            tvQ.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+            tvQ.setPadding(dp(5), 0, dp(4), 0);
+            row.addView(tvQ);
+
+            row.setOnClickListener(v -> {
+                etSearch.setText(q);
+                etSearch.setSelection(q.length());
+                PrefsManager.addRecentSearch(this, q);
+                renderRecentSearches();
+            });
+            row.setOnLongClickListener(v -> {
+                PrefsManager.removeRecentSearch(this, q);
+                renderRecentSearches();
+                return true;
+            });
+            recentSearchContainer.addView(row);
         }
     }
 
@@ -557,6 +678,10 @@ public class FileBrowserActivity extends AppCompatActivity {
         b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setTextColor(textPrimary);
         b.setCompoundDrawablesRelativeWithIntrinsicBounds(iconRes, 0, 0, 0);
+        Drawable[] ds = b.getCompoundDrawablesRelative();
+        if (ds[0] != null) {
+            ds[0].mutate().setTint(accent);
+        }
         b.setCompoundDrawablePadding(dp(4));
         GradientDrawable gd = new GradientDrawable();
         gd.setCornerRadius(dp(9));
@@ -1303,14 +1428,24 @@ public class FileBrowserActivity extends AppCompatActivity {
         return i > 0 ? name.substring(i + 1) : "";
     }
 
+    private String normalizeSearchText(String raw) {
+        if (raw == null) return "";
+        return raw.replaceAll("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]", "")
+                .trim()
+                .toLowerCase(Locale.ROOT);
+    }
+
     private void filterCurrentList(String query) {
-        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        final String nq = normalizeSearchText(query);
+        final int gen = searchGeneration.incrementAndGet();
+
         if (showingInstalledAppsTab) {
             displayedInstalledApps.clear();
             for (InstalledAppEntry e : allInstalledApps) {
                 if (!includeSystemApps && e.isSystem) continue;
-                if (q.isEmpty() || e.appName.toLowerCase(Locale.ROOT).contains(q)
-                        || e.packageName.toLowerCase(Locale.ROOT).contains(q)) {
+                if (nq.isEmpty()
+                        || normalizeSearchText(e.appName).contains(nq)
+                        || normalizeSearchText(e.packageName).contains(nq)) {
                     displayedInstalledApps.add(e);
                 }
             }
@@ -1318,15 +1453,53 @@ public class FileBrowserActivity extends AppCompatActivity {
             installedAdapter.notifyDataSetChanged();
         } else {
             displayedFiles.clear();
+            final Set<String> seen = new HashSet<>();
             for (File f : allLoadedFiles) {
-                if (q.isEmpty() || f.getName().toLowerCase(Locale.ROOT).contains(q)) {
+                if (nq.isEmpty() || normalizeSearchText(f.getName()).contains(nq)) {
                     displayedFiles.add(f);
+                    seen.add(f.getAbsolutePath());
                 }
             }
             tvEmptyState.setVisibility(displayedFiles.isEmpty() ? View.VISIBLE : View.GONE);
             adapter.notifyDataSetChanged();
+
+            if (!nq.isEmpty() && isDirectoryMode() && currentDir != null) {
+                final File scanRoot = currentDir;
+                final boolean showHidden = PrefsManager.isShowHidden(this);
+                searchExecutor.execute(() -> {
+                    List<File> deepMatches = new ArrayList<>();
+                    searchRecursiveFiles(scanRoot, nq, showHidden, deepMatches, seen, 0);
+                    if (gen != searchGeneration.get() || deepMatches.isEmpty()) return;
+                    sortFileList(deepMatches);
+                    runOnUiThread(() -> {
+                        if (gen != searchGeneration.get()) return;
+                        displayedFiles.addAll(deepMatches);
+                        tvEmptyState.setVisibility(displayedFiles.isEmpty() ? View.VISIBLE : View.GONE);
+                        adapter.notifyDataSetChanged();
+                        if (recyclerView != null) recyclerView.post(this::syncRightFastScrollerFromRecycler);
+                    });
+                });
+            }
         }
         if (recyclerView != null) recyclerView.post(this::syncRightFastScrollerFromRecycler);
+    }
+
+    private void searchRecursiveFiles(File dir, String nq, boolean showHidden, List<File> out, Set<String> seen, int depth) {
+        if (dir == null || !dir.exists() || depth > 6 || out.size() >= 400) return;
+        File[] children = dir.listFiles();
+        if (children == null) return;
+        for (File f : children) {
+            if (out.size() >= 400) return;
+            String name = f.getName();
+            if (!showHidden && name.startsWith(".")) continue;
+            if (".FileManagerPro_Trash".equals(name) || "Android".equals(name)) continue;
+            if (normalizeSearchText(name).contains(nq) && seen.add(f.getAbsolutePath())) {
+                out.add(f);
+            }
+            if (f.isDirectory()) {
+                searchRecursiveFiles(f, nq, showHidden, out, seen, depth + 1);
+            }
+        }
     }
 
     private EditText createStyledInput(String hint, String initialValue) {
@@ -1487,36 +1660,129 @@ public class FileBrowserActivity extends AppCompatActivity {
         final boolean isMove = clipboardIsMove;
         final File dst = currentDir;
         final int opId = (int) (System.currentTimeMillis() % 10000);
+        final String actionVerb = isMove ? "הועברו" : "הועתקו";
+        final String dialogTitle = isMove ? "העברת קבצים" : "העתקת קבצים";
 
-        Toast.makeText(this, (isMove ? "מעביר " : "מעתיק ") + items.size() + " פריטים...", Toast.LENGTH_SHORT).show();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        box.setPadding(dp(20), dp(18), dp(20), dp(18));
+        box.setBackground(ThemedDialogHelper.createDialogBackground(this, theme));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText(dialogTitle);
+        tvTitle.setTextColor(textPrimary);
+        tvTitle.setTextSize(ThemeHelper.spScaled(this, 16f));
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(tvTitle);
+
+        TextView tvFileName = new TextView(this);
+        tvFileName.setText(items.get(0).getName());
+        tvFileName.setTextColor(textSecondary);
+        tvFileName.setTextSize(ThemeHelper.spScaled(this, 13f));
+        tvFileName.setSingleLine(true);
+        tvFileName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        tvFileName.setPadding(0, dp(8), 0, dp(10));
+        box.addView(tvFileName);
+
+        ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        pb.setMax(1000);
+        pb.setProgress(0);
+        pb.setProgressTintList(ColorStateList.valueOf(accent));
+        pb.setProgressBackgroundTintList(ColorStateList.valueOf(divider));
+        box.addView(pb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout statsRow = new LinearLayout(this);
+        statsRow.setOrientation(LinearLayout.HORIZONTAL);
+        statsRow.setPadding(0, dp(8), 0, 0);
+
+        TextView tvCounts = new TextView(this);
+        tvCounts.setText(actionVerb + ": 0  •  נותרו: " + items.size());
+        tvCounts.setTextColor(textPrimary);
+        tvCounts.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        statsRow.addView(tvCounts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView tvWeight = new TextView(this);
+        tvWeight.setText("");
+        tvWeight.setTextColor(accent);
+        tvWeight.setTypeface(Typeface.DEFAULT_BOLD);
+        tvWeight.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        statsRow.addView(tvWeight);
+
+        box.addView(statsRow);
+
+        AlertDialog progressDialog = new AlertDialog.Builder(this)
+                .setView(box)
+                .setCancelable(false)
+                .create();
+        progressDialog.show();
+        if (progressDialog.getWindow() != null) {
+            progressDialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        }
+        ThemedDialogHelper.applyResponsiveDialogWindow(this, progressDialog);
+
         executor.execute(() -> {
-            int okCount = 0;
-            int total = items.size();
-            try {
-                for (int i = 0; i < total; i++) {
-                    File src = items.get(i);
-                    FileOperationNotificationHelper.updateProgress(this, opId,
-                            isMove ? "העברת קבצים" : "העתקת קבצים", src.getName(), i, total);
-                    boolean ok = isMove
-                            ? StorageUtils.moveFileOrDir(src, dst)
-                            : StorageUtils.copyFileOrDir(src, dst);
-                    if (ok) okCount++;
+            int totalEntries = 0;
+            for (File f : items) {
+                totalEntries += StorageUtils.countTotalFileEntries(f);
+            }
+            final int totalFiles = Math.max(1, totalEntries);
+            final int[] completedCounter = new int[]{0};
+            final long[] lastNotifyMs = new long[]{0L};
+
+            StorageUtils.CopyProgressCallback cb = (curName, bytesDone, bytesTotal, doneFiles, totalF) -> {
+                int remaining = Math.max(0, totalF - doneFiles);
+                String countsLine = actionVerb + ": " + doneFiles + "  •  נותרו: " + remaining;
+                String weightLine = bytesTotal > 0
+                        ? (StorageUtils.formatSize(bytesDone) + " / " + StorageUtils.formatSize(bytesTotal))
+                        : "";
+                double fileFrac = bytesTotal > 0 ? Math.min(1.0, (double) bytesDone / (double) bytesTotal) : 0.0;
+                int permille = (int) Math.max(0, Math.min(1000, Math.round(((doneFiles + fileFrac) / totalF) * 1000.0)));
+
+                runOnUiThread(() -> {
+                    if (!isFinishing()) {
+                        tvFileName.setText(curName);
+                        tvCounts.setText(countsLine);
+                        tvWeight.setText(weightLine);
+                        pb.setProgress(permille);
+                    }
+                });
+
+                long now = System.currentTimeMillis();
+                if (now - lastNotifyMs[0] >= 250L || doneFiles >= totalF) {
+                    lastNotifyMs[0] = now;
+                    String notifDetail = curName + " • " + countsLine + (weightLine.isEmpty() ? "" : (" • " + weightLine));
+                    FileOperationNotificationHelper.updateProgress(this, opId, dialogTitle, notifDetail, permille, 1000);
                 }
+            };
+
+            try {
+                for (File src : items) {
+                    if (isMove) {
+                        StorageUtils.moveFileOrDir(src, dst, cb, completedCounter, totalFiles);
+                    } else {
+                        StorageUtils.copyFileOrDir(src, dst, cb, completedCounter, totalFiles);
+                    }
+                }
+                final int finalDone = completedCounter[0];
                 FileOperationNotificationHelper.finish(this, opId,
                         isMove ? "ההעברה הושלמה" : "ההעתקה הושלמה",
-                        "הושלמו " + okCount + " מתוך " + total + " פריטים");
-                final int fOk = okCount;
+                        actionVerb + " " + finalDone + " קבצים בהצלחה");
                 FileScanCache.invalidate();
                 runOnUiThread(() -> {
+                    if (progressDialog.isShowing()) progressDialog.dismiss();
                     clipboardFiles.clear();
                     updateClipboardBar();
                     loadFilesForCurrentMode();
-                    Toast.makeText(this, (isMove ? "הועברו " : "הועתקו ") + fOk + " פריטים", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, actionVerb + " " + finalDone + " קבצים", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
                 FileOperationNotificationHelper.finish(this, opId, "שגיאה בפעולת קבצים", e.getMessage());
                 AppLogger.error(this, "FileOps", "Paste failed", e);
-                runOnUiThread(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                runOnUiThread(() -> {
+                    if (progressDialog.isShowing()) progressDialog.dismiss();
+                    Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
             }
         });
     }
@@ -1707,6 +1973,13 @@ public class FileBrowserActivity extends AppCompatActivity {
             else selectedPaths.add(p);
             updateMultiSelectUi();
             return;
+        }
+        if (searchBarOpen && etSearch != null) {
+            String activeQuery = etSearch.getText().toString().trim();
+            if (!activeQuery.isEmpty()) {
+                PrefsManager.addRecentSearch(this, activeQuery);
+                renderRecentSearches();
+            }
         }
         if (MODE_RECYCLE_BIN.equals(currentMode)) {
             showFileOperationsMenu(file);
@@ -2068,15 +2341,22 @@ public class FileBrowserActivity extends AppCompatActivity {
             boolean isGrid = getItemViewType(position) == 1;
             boolean isSelected = multiSelectMode && selectedPaths.contains(f.getAbsolutePath());
             h.rowCard.setCardBackgroundColor(isSelected
-                    ? Color.argb(46, Color.red(accent), Color.green(accent), Color.blue(accent))
-                    : cardColor);
+                    ? Color.argb(42, Color.red(accent), Color.green(accent), Color.blue(accent))
+                    : Color.TRANSPARENT);
 
             h.tvName.setText(f.getName());
             h.tvName.setTextSize(ThemeHelper.spScaled(FileBrowserActivity.this, isGrid ? 12f : 13.5f));
             h.tvName.setTextColor(textPrimary);
             h.tvHint.setTextColor(accent);
 
-            FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
+            if (f.isDirectory() && isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
+                h.ivIcon.setTag(null);
+                h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                h.ivIcon.setImageResource(MODE_VIDEOS.equals(currentMode) ? R.drawable.ic_video : R.drawable.ic_images);
+                h.ivIcon.setColorFilter(accent);
+            } else {
+                FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
+            }
 
             if (f.isDirectory()) {
                 String path = f.getAbsolutePath();
@@ -2173,11 +2453,12 @@ public class FileBrowserActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             InstalledAppEntry app = displayedInstalledApps.get(position);
-            h.rowCard.setCardBackgroundColor(cardColor);
+            h.rowCard.setCardBackgroundColor(Color.TRANSPARENT);
             h.tvName.setText(app.appName);
             h.tvName.setTextColor(textPrimary);
             h.tvMeta.setText(app.packageName + " • " + app.versionName + " • " + StorageUtils.formatSize(app.sizeBytes));
             h.tvMeta.setTextColor(textSecondary);
+            h.ivIcon.clearColorFilter();
             try {
                 h.ivIcon.setImageDrawable(getPackageManager().getApplicationIcon(app.packageName));
             } catch (Throwable t) {
@@ -2215,5 +2496,6 @@ public class FileBrowserActivity extends AppCompatActivity {
             AudioPlayerManager.getInstance().removeListener(miniAudioListener);
         }
         executor.shutdownNow();
+        searchExecutor.shutdownNow();
     }
 }

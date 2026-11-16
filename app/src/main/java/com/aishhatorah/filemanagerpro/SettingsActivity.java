@@ -119,32 +119,36 @@ public class SettingsActivity extends AppCompatActivity {
 
         int[] themeIds = {
                 PrefsManager.THEME_LIGHT,
+                PrefsManager.THEME_SLATE,
                 PrefsManager.THEME_DARK,
                 PrefsManager.THEME_AMOLED,
                 PrefsManager.THEME_OCEAN,
                 PrefsManager.THEME_FOREST,
                 PrefsManager.THEME_NEON,
+                PrefsManager.THEME_ROSE,
+                PrefsManager.THEME_PURPLE,
+                PrefsManager.THEME_AMBER,
+                PrefsManager.THEME_TEAL,
                 PrefsManager.THEME_SYSTEM
         };
-        LinearLayout row1 = new LinearLayout(this);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        for (int i = 0; i < themeIds.length; i++) {
-            final int tId = themeIds[i];
-            Button b = createOptionButton(ThemeHelper.getThemeNameHe(tId).replace(" (AMOLED)", "").replace(" (דינאמי)", ""),
-                    theme == tId, accent, divider, () -> {
-                        PrefsManager.setThemeMode(this, tId);
-                        renderSettingsUi();
-                    });
-            if (i < 4) row1.addView(b);
-            else row2.addView(b);
+        for (int rowStart = 0; rowStart < themeIds.length; rowStart += 4) {
+            LinearLayout tRow = new LinearLayout(this);
+            tRow.setOrientation(LinearLayout.HORIZONTAL);
+            int end = Math.min(themeIds.length, rowStart + 4);
+            for (int i = rowStart; i < end; i++) {
+                final int tId = themeIds[i];
+                Button b = createOptionButton(ThemeHelper.getThemeNameHe(tId).replace(" (AMOLED)", "").replace(" (דינאמי)", ""),
+                        theme == tId, accent, divider, () -> {
+                            PrefsManager.setThemeMode(this, tId);
+                            renderSettingsUi();
+                        });
+                tRow.addView(b);
+            }
+            LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (rowStart > 0) trLp.topMargin = dp(6);
+            themeCard.addView(tRow, trLp);
         }
-        themeCard.addView(row1);
-        LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        r2Lp.topMargin = dp(6);
-        themeCard.addView(row2, r2Lp);
 
         // צבע מרכזי מותאם
         TextView tvAccentLabel = new TextView(this);
@@ -155,39 +159,55 @@ public class SettingsActivity extends AppCompatActivity {
         tvAccentLabel.setPadding(0, dp(14), 0, dp(8));
         themeCard.addView(tvAccentLabel);
 
-        LinearLayout swatchRow = new LinearLayout(this);
-        swatchRow.setOrientation(LinearLayout.HORIZONTAL);
-        swatchRow.setGravity(Gravity.CENTER_VERTICAL);
         int currentCustomAccent = PrefsManager.getCustomAccentColor(this);
         int[] swatches = {
                 0,
                 Color.parseColor("#1D4ED8"),
                 Color.parseColor("#0284C7"),
+                Color.parseColor("#0891B2"),
+                Color.parseColor("#0D9488"),
                 Color.parseColor("#059669"),
-                Color.parseColor("#7C3AED"),
+                Color.parseColor("#16A34A"),
+                Color.parseColor("#65A30D"),
+                Color.parseColor("#D97706"),
+                Color.parseColor("#EA580C"),
+                Color.parseColor("#DC2626"),
                 Color.parseColor("#E11D48"),
-                Color.parseColor("#D97706")
+                Color.parseColor("#DB2777"),
+                Color.parseColor("#9333EA"),
+                Color.parseColor("#7C3AED"),
+                Color.parseColor("#4F46E5")
         };
-        for (int swColor : swatches) {
-            View dot = new View(this);
-            int sz = dp(28);
-            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(sz, sz);
-            dlp.setMarginEnd(dp(8));
-            dot.setLayoutParams(dlp);
-            GradientDrawable gd = new GradientDrawable();
-            gd.setShape(GradientDrawable.OVAL);
-            gd.setColor(swColor == 0 ? ThemeHelper.getAccentColor(theme) : swColor);
-            boolean sel = currentCustomAccent == swColor;
-            gd.setStroke(sel ? dp(3) : dp(1), sel ? textPrimary : divider);
-            dot.setBackground(gd);
-            dot.setOnClickListener(v -> {
-                PrefsManager.setCustomAccentColor(this, swColor);
-                Toast.makeText(this, swColor == 0 ? "חזר לצבע ברירת המחדל של הערכה" : "צבע הדגש עודכן", Toast.LENGTH_SHORT).show();
-                renderSettingsUi();
-            });
-            swatchRow.addView(dot);
+        for (int rowStart = 0; rowStart < swatches.length; rowStart += 8) {
+            LinearLayout swatchRow = new LinearLayout(this);
+            swatchRow.setOrientation(LinearLayout.HORIZONTAL);
+            swatchRow.setGravity(Gravity.CENTER_VERTICAL);
+            int end = Math.min(swatches.length, rowStart + 8);
+            for (int i = rowStart; i < end; i++) {
+                final int swColor = swatches[i];
+                View dot = new View(this);
+                int sz = dp(26);
+                LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(sz, sz);
+                dlp.setMarginEnd(dp(8));
+                dot.setLayoutParams(dlp);
+                GradientDrawable gd = new GradientDrawable();
+                gd.setShape(GradientDrawable.OVAL);
+                gd.setColor(swColor == 0 ? ThemeHelper.getAccentColor(theme) : swColor);
+                boolean sel = currentCustomAccent == swColor;
+                gd.setStroke(sel ? dp(3) : dp(1), sel ? textPrimary : divider);
+                dot.setBackground(gd);
+                dot.setOnClickListener(v -> {
+                    PrefsManager.setCustomAccentColor(this, swColor);
+                    Toast.makeText(this, swColor == 0 ? "חזר לצבע ברירת המחדל של הערכה" : "צבע הדגש עודכן", Toast.LENGTH_SHORT).show();
+                    renderSettingsUi();
+                });
+                swatchRow.addView(dot);
+            }
+            LinearLayout.LayoutParams srLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (rowStart > 0) srLp.topMargin = dp(8);
+            themeCard.addView(swatchRow, srLp);
         }
-        themeCard.addView(swatchRow);
 
         // סקאלת גודל תצוגה (סעיף 6)
         float currentScale = PrefsManager.getUiScale(this);
@@ -200,6 +220,7 @@ public class SettingsActivity extends AppCompatActivity {
         themeCard.addView(tvScaleLabel);
 
         SeekBar sbScale = new SeekBar(this);
+        ThemeHelper.applySeekBarTint(sbScale, accent);
         sbScale.setMax(40); // 0.85 .. 1.25
         sbScale.setProgress(Math.max(0, Math.min(40, Math.round((currentScale - 0.85f) * 100f))));
         sbScale.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -623,6 +644,7 @@ public class SettingsActivity extends AppCompatActivity {
 
         Switch sw = new Switch(this);
         sw.setChecked(initial);
+        ThemeHelper.applySwitchTint(this, sw, PrefsManager.getThemeMode(this));
         sw.setOnCheckedChangeListener((buttonView, isChecked) -> cb.onChanged(isChecked));
         row.addView(sw);
 

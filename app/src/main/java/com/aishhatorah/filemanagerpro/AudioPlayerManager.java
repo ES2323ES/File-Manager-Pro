@@ -528,6 +528,12 @@ public class AudioPlayerManager {
         loadAndStartTrack(context.getApplicationContext(), playlist.get(currentIndex));
     }
 
+    public void playPreviousTrackImmediate(Context context) {
+        if (playlist.isEmpty() || currentFile == null) return;
+        currentIndex = (currentIndex - 1 + playlist.size()) % playlist.size();
+        loadAndStartTrack(context.getApplicationContext(), playlist.get(currentIndex));
+    }
+
     public void stopAndDismiss(Context context) {
         mainHandler.removeCallbacks(sleepCheckRunnable);
         sleepEndEpochMs = 0L;

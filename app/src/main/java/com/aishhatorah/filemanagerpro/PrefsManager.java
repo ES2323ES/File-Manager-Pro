@@ -24,6 +24,11 @@ public class PrefsManager {
     public static final int THEME_OCEAN = 4;
     public static final int THEME_FOREST = 5;
     public static final int THEME_SYSTEM = 6;
+    public static final int THEME_ROSE = 7;
+    public static final int THEME_PURPLE = 8;
+    public static final int THEME_AMBER = 9;
+    public static final int THEME_TEAL = 10;
+    public static final int THEME_SLATE = 11;
 
     // סעיף 5: אפשרויות מיון כולל לפי יצירה
     public static final int SORT_NAME = 0;
@@ -390,6 +395,45 @@ public class PrefsManager {
 
     public static void setPendingUpdateSuccessBanner(Context context, boolean pending) {
         prefs(context).edit().putBoolean("pending_update_success_banner", pending).apply();
+    }
+
+    public static List<String> getRecentSearches(Context context) {
+        String raw = prefs(context).getString("recent_searches_list", "");
+        List<String> list = new ArrayList<>();
+        if (!raw.isEmpty()) {
+            for (String item : raw.split("\n")) {
+                String t = item.trim();
+                if (!t.isEmpty() && !list.contains(t)) {
+                    list.add(t);
+                }
+            }
+        }
+        return list;
+    }
+
+    public static void addRecentSearch(Context context, String query) {
+        if (query == null) return;
+        String clean = query.trim().replace("\n", " ");
+        if (clean.isEmpty()) return;
+        List<String> list = getRecentSearches(context);
+        list.remove(clean);
+        list.add(0, clean);
+        while (list.size() > 10) {
+            list.remove(list.size() - 1);
+        }
+        prefs(context).edit().putString("recent_searches_list", TextUtils.join("\n", list)).apply();
+    }
+
+    public static void removeRecentSearch(Context context, String query) {
+        if (query == null) return;
+        List<String> list = getRecentSearches(context);
+        if (list.remove(query.trim())) {
+            prefs(context).edit().putString("recent_searches_list", TextUtils.join("\n", list)).apply();
+        }
+    }
+
+    public static void clearRecentSearches(Context context) {
+        prefs(context).edit().remove("recent_searches_list").apply();
     }
 
     public static void resetAll(Context context) {

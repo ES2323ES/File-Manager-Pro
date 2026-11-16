@@ -13,8 +13,7 @@ import android.view.ViewParent;
 import androidx.annotation.NonNull;
 
 /**
- * סרגל התקדמות בצורת גלים (Sinusoidal Wave SeekBar) לנגן האודיו והווידאו.
- * מתוכנן לציור מהיר ללא הקצאות בזמן גרירה ומניעת ריצודים (כיוון התקדמות תמיד משמאל לימין).
+ * סרגל התקדמות בצורת גלים עדינים בעת ניגון, ובצורת פס רציף בעת עצירה.
  */
 public class WavySeekBar extends View {
 
@@ -31,14 +30,16 @@ public class WavySeekBar extends View {
 
     private int max = 100;
     private int progress = 0;
+    private boolean playing = true;
     private boolean userDragging = false;
     private float startX = 0f;
     private float endX = 0f;
     private float centerY = 0f;
-    private final float thumbRadius;
-    private final float thumbActiveRadius;
-    private final float amplitudePx;
-    private final float wavelengthPx;
+    private float thumbRadius;
+    private float thumbActiveRadius;
+    private float amplitudePx;
+    private float wavelengthPx;
+    private float desiredHeightPx;
 
     private OnSeekBarChangeListener listener;
 
@@ -46,19 +47,20 @@ public class WavySeekBar extends View {
         super(context);
         setLayoutDirection(LAYOUT_DIRECTION_LTR);
 
-        thumbRadius = dp(6.0f);
-        thumbActiveRadius = dp(8.0f);
-        amplitudePx = dp(3.4f);
-        wavelengthPx = dp(20.0f);
+        thumbRadius = dp(5.5f);
+        thumbActiveRadius = dp(7.5f);
+        amplitudePx = dp(2.0f);
+        wavelengthPx = dp(24.0f);
+        desiredHeightPx = dp(32f);
 
         wavePaint.setStyle(Paint.Style.STROKE);
-        wavePaint.setStrokeWidth(dp(2.8f));
+        wavePaint.setStrokeWidth(dp(2.5f));
         wavePaint.setStrokeCap(Paint.Cap.ROUND);
         wavePaint.setStrokeJoin(Paint.Join.ROUND);
         wavePaint.setColor(Color.parseColor("#3B82F6"));
 
         trackPaint.setStyle(Paint.Style.STROKE);
-        trackPaint.setStrokeWidth(dp(2.4f));
+        trackPaint.setStrokeWidth(dp(2.2f));
         trackPaint.setStrokeCap(Paint.Cap.ROUND);
         trackPaint.setColor(Color.argb(80, 203, 213, 225));
 
@@ -68,6 +70,36 @@ public class WavySeekBar extends View {
 
     private float dp(float val) {
         return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, val, getResources().getDisplayMetrics());
+    }
+
+    public void setCompactStyle(boolean compact) {
+        if (compact) {
+            thumbRadius = dp(3.8f);
+            thumbActiveRadius = dp(5.2f);
+            amplitudePx = dp(1.5f);
+            wavelengthPx = dp(18.0f);
+            desiredHeightPx = dp(18f);
+            wavePaint.setStrokeWidth(dp(2.0f));
+            trackPaint.setStrokeWidth(dp(1.8f));
+        } else {
+            thumbRadius = dp(5.5f);
+            thumbActiveRadius = dp(7.5f);
+            amplitudePx = dp(2.0f);
+            wavelengthPx = dp(24.0f);
+            desiredHeightPx = dp(32f);
+            wavePaint.setStrokeWidth(dp(2.5f));
+            trackPaint.setStrokeWidth(dp(2.2f));
+        }
+        rebuildWavePath(getWidth(), getHeight());
+        requestLayout();
+        invalidate();
+    }
+
+    public void setPlaying(boolean isPlaying) {
+        if (this.playing != isPlaying) {
+            this.playing = isPlaying;
+            invalidate();
+        }
     }
 
     public void setColors(int waveColor, int trackColor, int thumbColor) {
@@ -111,7 +143,7 @@ public class WavySeekBar extends View {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int desiredH = Math.round(dp(34f));
+        int desiredH = Math.round(desiredHeightPx);
         int w = MeasureSpec.getSize(widthMeasureSpec);
         int hMode = MeasureSpec.getMode(heightMeasureSpec);
         int hSize = MeasureSpec.getSize(heightMeasureSpec);
@@ -134,7 +166,12 @@ public class WavySeekBar extends View {
 
     private void rebuildWavePath(int w, int h) {
         wavePath.reset();
-        float padH = Math.max(thumbActiveRadius + dp(2f), dp(10f));
+        if (w <= 0 || h <= 0) {
+            startX = 0f;
+            endX = 0f;
+            return;
+        }
+        float padH = Math.max(thumbActiveRadius + dp(2f), dp(6f));
         startX = padH;
         endX = Math.max(startX + 1f, w - padH);
         centerY = h / 2f;
@@ -168,10 +205,14 @@ public class WavySeekBar extends View {
         }
 
         if (thumbX > startX) {
-            canvas.save();
-            canvas.clipRect(0, 0, thumbX, getHeight());
-            canvas.drawPath(wavePath, wavePaint);
-            canvas.restore();
+            if (playing) {
+                canvas.save();
+                canvas.clipRect(0, 0, thumbX, getHeight());
+                canvas.drawPath(wavePath, wavePaint);
+                canvas.restore();
+            } else {
+                canvas.drawLine(startX, centerY, thumbX, centerY, wavePaint);
+            }
         }
 
         float r = userDragging ? thumbActiveRadius : thumbRadius;

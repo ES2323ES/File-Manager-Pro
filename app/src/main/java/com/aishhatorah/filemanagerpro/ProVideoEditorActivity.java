@@ -211,6 +211,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         Switch swMute = new Switch(this);
         swMute.setChecked(false);
+        ThemeHelper.applySwitchTint(this, swMute, theme);
         swMute.setOnCheckedChangeListener((btn, checked) -> {
             muteAudio = checked;
             if (previewPlayer != null) {

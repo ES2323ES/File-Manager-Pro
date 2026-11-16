@@ -2,7 +2,6 @@ package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -18,19 +17,19 @@ import android.view.ViewGroup;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.widget.AppCompatTextView;
+import androidx.core.graphics.ColorUtils;
 
 import java.io.File;
 
 /**
- * סעיף ז: שורת המיני-נגן החכמה למטה ביציאה מהשיר:
- * - הוסר הכיתוב "החלק על השורה לעצירת השיר • לחץ לפתיחת הנגן"
- * - במקומו מוצג פס התקדמות של השיר משמאל לימין המתעדכן בזמן אמת!
- * - החלקה אופקית לעצירת השיר ולחיצה לפתיחת הנגן נשמרות במלואן.
+ * השורה החכמה של האודיו:
+ * - מתאימה את צבעיה דינאמית לעטיפת האודיו (כאשר קיימת)
+ * - פס התקדמות בצורת גלים עדינים בזמן ניגון, ופס רציף בעצירה
+ * - החלקה אופקית על השורה לעצירה ולחיצה לפתיחת מסך האודיו
  */
 public class MiniAudioBarHelper {
 
@@ -46,7 +45,7 @@ public class MiniAudioBarHelper {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(24, 18, 24, 18);
+        bar.setPadding(24, 14, 24, 14);
 
         final ImageView ivArt = new ImageView(activity);
         ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -73,16 +72,39 @@ public class MiniAudioBarHelper {
         textCol.addView(tvTitle, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // סעיף ז: פס התקדמות של השיר משמאל לימין במקום כיתוב ההסבר
-        final ProgressBar songProgressBar = new ProgressBar(
-                activity, null, android.R.attr.progressBarStyleHorizontal);
-        songProgressBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        songProgressBar.setMax(1000);
-        songProgressBar.setProgress(0);
+        final WavySeekBar songWavyBar = new WavySeekBar(activity);
+        songWavyBar.setCompactStyle(true);
+        songWavyBar.setMax(1000);
+        songWavyBar.setProgress(0);
+        songWavyBar.setPlaying(false);
         LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(activity, 6));
-        pbLp.topMargin = dpToPx(activity, 8);
-        textCol.addView(songProgressBar, pbLp);
+                ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(activity, 18));
+        pbLp.topMargin = dpToPx(activity, 4);
+        textCol.addView(songWavyBar, pbLp);
+
+        final boolean[] userScrubbing = {false};
+        songWavyBar.setOnSeekBarChangeListener(new WavySeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(WavySeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser) {
+                    AudioPlayerManager mgr = AudioPlayerManager.getInstance();
+                    int dur = mgr.getDurationMs();
+                    if (dur > 0) {
+                        mgr.seekTo((int) ((progress * (long) dur) / 1000L));
+                    }
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(WavySeekBar seekBar) {
+                userScrubbing[0] = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(WavySeekBar seekBar) {
+                userScrubbing[0] = false;
+            }
+        });
 
         bar.addView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -174,11 +196,14 @@ public class MiniAudioBarHelper {
                 if (activity.isFinishing() || activity.isDestroyed()) return;
                 AudioPlayerManager mgr = AudioPlayerManager.getInstance();
                 if (barWrapper.getVisibility() == View.VISIBLE && mgr.hasActiveSession()) {
-                    int dur = mgr.getDurationMs();
-                    int pos = mgr.getCurrentPositionMs();
-                    int permille = dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0;
-                    songProgressBar.setProgress(permille);
-                    progressHandler.postDelayed(this, 250);
+                    songWavyBar.setPlaying(mgr.isPlaying());
+                    if (!userScrubbing[0]) {
+                        int dur = mgr.getDurationMs();
+                        int pos = mgr.getCurrentPositionMs();
+                        int permille = dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0;
+                        songWavyBar.setProgress(permille);
+                    }
+                    progressHandler.postDelayed(this, 220);
                 }
             }
         };
@@ -192,32 +217,43 @@ public class MiniAudioBarHelper {
             }
 
             int theme = PrefsManager.getThemeMode(activity);
-            int cardColor = ThemeHelper.getCardColor(theme);
-            int accent = ThemeHelper.getAccentColor(theme);
-            int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-            int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
+            int cardColor = ThemeHelper.getCardColor(activity, theme);
+            int defaultAccent = ThemeHelper.getAccentColor(activity, theme);
+            int defaultTextPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+            int defaultTextSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
 
-            barWrapper.setBackgroundColor(ThemeHelper.getBgColor(theme));
+            Bitmap art = mgr.getCurrentArtwork();
+            AudioPaletteHelper.AudioAdaptivePalette pal = AudioPaletteHelper.computePalette(
+                    activity, art, theme, cardColor, defaultTextPrimary, defaultTextSecondary, defaultAccent);
+
+            int barBgColor = (art != null && !art.isRecycled()) ? pal.bg : cardColor;
+            int activeAccent = (art != null && !art.isRecycled()) ? pal.accent : defaultAccent;
+            int activeTextPrimary = (art != null && !art.isRecycled()) ? pal.textPrimary : defaultTextPrimary;
+            int activeTextSecondary = (art != null && !art.isRecycled()) ? pal.textSecondary : defaultTextSecondary;
+            int playIconTint = (art != null && !art.isRecycled()) ? pal.playIconTint
+                    : (ColorUtils.calculateLuminance(defaultAccent) > 0.58 ? Color.parseColor("#0F172A") : Color.WHITE);
+
+            barWrapper.setBackgroundColor(ThemeHelper.getBgColor(activity, theme));
 
             GradientDrawable barBg = new GradientDrawable();
             barBg.setCornerRadius(28f);
-            barBg.setColor(cardColor);
-            barBg.setStroke(2, accent);
+            barBg.setColor(barBgColor);
+            barBg.setStroke(2, activeAccent);
             bar.setBackground(barBg);
             bar.setTranslationX(0f);
             bar.setAlpha(1f);
 
             tvTitle.setText(mgr.getCurrentFile().getName());
-            tvTitle.setTextColor(textPrimary);
+            tvTitle.setTextColor(activeTextPrimary);
 
-            int trackTint = Color.argb(60, Color.red(textSecondary), Color.green(textSecondary), Color.blue(textSecondary));
-            songProgressBar.setProgressTintList(ColorStateList.valueOf(accent));
-            songProgressBar.setProgressBackgroundTintList(ColorStateList.valueOf(trackTint));
+            int trackTint = ColorUtils.setAlphaComponent(activeTextSecondary, 75);
+            songWavyBar.setColors(activeAccent, trackTint, activeAccent);
+            songWavyBar.setPlaying(mgr.isPlaying());
             int dur = mgr.getDurationMs();
             int pos = mgr.getCurrentPositionMs();
-            songProgressBar.setProgress(dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0);
+            songWavyBar.setProgress(dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0);
 
-            Bitmap art = mgr.getCurrentArtwork();
+            ivArt.clearColorFilter();
             if (art != null && !art.isRecycled()) {
                 Bitmap miniThumb = FileThumbnailLoader.createRoundedSquareBitmap(art, 128, 22f);
                 ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -225,14 +261,15 @@ public class MiniAudioBarHelper {
             } else {
                 ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 ivArt.setImageResource(R.drawable.ic_audio);
+                ivArt.setColorFilter(activeAccent);
             }
 
             GradientDrawable playCircle = new GradientDrawable();
             playCircle.setShape(GradientDrawable.OVAL);
-            playCircle.setColor(theme == PrefsManager.THEME_NEON ? Color.parseColor("#00B4D8") : accent);
+            playCircle.setColor(activeAccent);
             btnPlayPause.setBackground(playCircle);
             btnPlayPause.setImageResource(mgr.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
-            btnPlayPause.setColorFilter(theme == PrefsManager.THEME_NEON ? Color.parseColor("#030712") : Color.WHITE);
+            btnPlayPause.setColorFilter(playIconTint);
 
             barWrapper.setVisibility(View.VISIBLE);
             progressHandler.removeCallbacks(updateProgressOnly);

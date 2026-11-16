@@ -555,7 +555,7 @@ public class StorageUtils {
             );
 
             NotificationCompat.Builder builder = new NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_storage_internal)
+                    .setSmallIcon(R.drawable.ic_app_logo_notif)
                     .setContentTitle("אזהרת נפח אחסון קריטית (מעל 96%)")
                     .setContentText(contentText)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(contentText))
@@ -578,7 +578,27 @@ public class StorageUtils {
         return String.format(Locale.US, "%.2f GB", gb);
     }
 
+    public interface CopyProgressCallback {
+        void onProgress(String currentFileName, long currentFileBytesDone, long currentFileTotalBytes, int completedFiles, int totalFiles);
+    }
+
+    public static int countTotalFileEntries(File root) {
+        if (root == null || !root.exists()) return 0;
+        if (!root.isDirectory()) return 1;
+        File[] children = root.listFiles();
+        if (children == null || children.length == 0) return 1;
+        int sum = 0;
+        for (File child : children) {
+            sum += countTotalFileEntries(child);
+        }
+        return Math.max(1, sum);
+    }
+
     public static boolean copyFileOrDir(File src, File dstDir) throws IOException {
+        return copyFileOrDir(src, dstDir, null, null, 1);
+    }
+
+    public static boolean copyFileOrDir(File src, File dstDir, CopyProgressCallback cb, int[] completedCounter, int totalFiles) throws IOException {
         if (!src.exists()) return false;
         if (!dstDir.exists() && !dstDir.mkdirs()) return false;
 
@@ -590,32 +610,78 @@ public class StorageUtils {
         if (src.isDirectory()) {
             if (!target.mkdirs()) return false;
             File[] children = src.listFiles();
-            if (children != null) {
+            if (children != null && children.length > 0) {
                 for (File child : children) {
-                    copyFileOrDir(child, target);
+                    copyFileOrDir(child, target, cb, completedCounter, totalFiles);
+                }
+            } else if (completedCounter != null) {
+                completedCounter[0]++;
+                if (cb != null) {
+                    cb.onProgress(src.getName(), 0L, 0L, completedCounter[0], totalFiles);
                 }
             }
             return true;
         } else {
+            long totalBytes = Math.max(0L, src.length());
+            int doneBefore = completedCounter != null ? completedCounter[0] : 0;
+            if (cb != null) {
+                cb.onProgress(src.getName(), 0L, totalBytes, doneBefore, totalFiles);
+            }
+            byte[] buf = new byte[64 * 1024];
+            long copiedBytes = 0L;
+            long lastReportMs = 0L;
             try (FileInputStream fis = new FileInputStream(src);
-                 FileOutputStream fos = new FileOutputStream(target);
-                 FileChannel inChannel = fis.getChannel();
-                 FileChannel outChannel = fos.getChannel()) {
-                inChannel.transferTo(0, inChannel.size(), outChannel);
+                 FileOutputStream fos = new FileOutputStream(target)) {
+                int r;
+                while ((r = fis.read(buf)) != -1) {
+                    fos.write(buf, 0, r);
+                    copiedBytes += r;
+                    if (cb != null) {
+                        long now = System.currentTimeMillis();
+                        if (now - lastReportMs >= 80L || copiedBytes >= totalBytes) {
+                            lastReportMs = now;
+                            cb.onProgress(src.getName(), copiedBytes, totalBytes, doneBefore, totalFiles);
+                        }
+                    }
+                }
+                fos.flush();
+            }
+            if (completedCounter != null) {
+                completedCounter[0]++;
+            }
+            if (cb != null) {
+                int doneAfter = completedCounter != null ? completedCounter[0] : (doneBefore + 1);
+                cb.onProgress(src.getName(), totalBytes, totalBytes, doneAfter, totalFiles);
             }
             return true;
         }
     }
 
     public static boolean moveFileOrDir(File src, File dstDir) throws IOException {
+        return moveFileOrDir(src, dstDir, null, null, 1);
+    }
+
+    public static boolean moveFileOrDir(File src, File dstDir, CopyProgressCallback cb, int[] completedCounter, int totalFiles) throws IOException {
         if (!src.exists()) return false;
         if (!dstDir.exists() && !dstDir.mkdirs()) return false;
 
+        int entriesCount = countTotalFileEntries(src);
+        long sizeBytes = src.isFile() ? Math.max(0L, src.length()) : 0L;
+        if (cb != null) {
+            cb.onProgress(src.getName(), 0L, sizeBytes, completedCounter != null ? completedCounter[0] : 0, totalFiles);
+        }
+
         File target = uniqueDestinationFile(dstDir, src.getName());
         if (src.renameTo(target)) {
+            if (completedCounter != null) {
+                completedCounter[0] += entriesCount;
+            }
+            if (cb != null) {
+                cb.onProgress(src.getName(), sizeBytes, sizeBytes, completedCounter != null ? completedCounter[0] : entriesCount, totalFiles);
+            }
             return true;
         }
-        if (copyFileOrDir(src, dstDir)) {
+        if (copyFileOrDir(src, dstDir, cb, completedCounter, totalFiles)) {
             return deleteRecursively(src);
         }
         return false;

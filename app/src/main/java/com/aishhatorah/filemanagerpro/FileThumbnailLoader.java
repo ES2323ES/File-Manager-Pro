@@ -67,6 +67,8 @@ public class FileThumbnailLoader {
             targetView.setTag(null);
             targetView.setScaleType(ImageView.ScaleType.FIT_CENTER);
             targetView.setImageResource(R.drawable.ic_folder);
+            int accent = ThemeHelper.getAccentColor(context, PrefsManager.getThemeMode(context));
+            targetView.setColorFilter(accent);
             return;
         }
 
@@ -75,6 +77,7 @@ public class FileThumbnailLoader {
         final String cacheKey = file.getAbsolutePath() + "@" + file.lastModified() + "@" + file.length();
 
         targetView.setTag(cacheKey);
+        targetView.clearColorFilter();
 
         if (!PrefsManager.isShowThumbnails(context)) {
             targetView.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -108,6 +111,7 @@ public class FileThumbnailLoader {
                 BITMAP_CACHE.put(cacheKey, rounded);
                 MAIN_HANDLER.post(() -> {
                     if (cacheKey.equals(targetView.getTag())) {
+                        targetView.clearColorFilter();
                         targetView.setScaleType(ImageView.ScaleType.FIT_CENTER);
                         targetView.setImageBitmap(rounded);
                     }

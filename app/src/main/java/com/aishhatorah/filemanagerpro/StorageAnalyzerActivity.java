@@ -1,7 +1,9 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.content.Intent;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Environment;
@@ -95,6 +97,26 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setItemAnimator(null);
+        final int divColor = ThemeHelper.getDividerColor(this, theme);
+        final float density = getResources().getDisplayMetrics().density;
+        rv.addItemDecoration(new RecyclerView.ItemDecoration() {
+            private final Paint paint = new Paint();
+
+            @Override
+            public void onDrawOver(@NonNull Canvas c, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+                paint.setColor(divColor);
+                paint.setStrokeWidth(Math.max(1f, density));
+                int count = parent.getChildCount();
+                int left = parent.getPaddingLeft();
+                int right = parent.getWidth() - parent.getPaddingRight();
+                for (int i = 0; i < count; i++) {
+                    View child = parent.getChildAt(i);
+                    float y = child.getBottom();
+                    c.drawLine(left, y, right, y, paint);
+                }
+            }
+        });
         adapter = new HeavyAdapter(cardColor, textPrimary, textSecondary, accent);
         rv.setAdapter(adapter);
 
@@ -225,7 +247,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             File f = largestFiles.get(position);
-            h.rowCard.setCardBackgroundColor(cardBg);
+            h.rowCard.setCardBackgroundColor(Color.TRANSPARENT);
             h.tvName.setText("#" + (position + 1) + "  " + f.getName());
             h.tvName.setTextColor(textPrimary);
             h.tvMeta.setText(StorageUtils.formatSize(f.length()) + "  •  " + f.getParent());

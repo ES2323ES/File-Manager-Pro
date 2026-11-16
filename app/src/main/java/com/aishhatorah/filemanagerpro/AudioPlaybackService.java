@@ -218,7 +218,7 @@ public class AudioPlaybackService extends Service {
         PendingIntent stopPi = serviceActionPi(ACTION_STOP_SERVICE, 405);
 
         Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_audio)
+                .setSmallIcon(R.drawable.ic_app_logo_notif)
                 .setContentTitle(songTitle)
                 .setContentText("File Manager Pro  •  " + mgr.getCurrentTrackNumber() + "/" + mgr.getFolderTrackCount())
                 .setContentIntent(contentPi)

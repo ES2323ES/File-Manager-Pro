@@ -171,8 +171,7 @@ public class UpdateChecker {
     }
 
     public static String formatOfficialVer(String ver) {
-        if (ver == null) return "";
-        return compareSemver(ver, "0.2.5") >= 0 ? (ver + " רשמית") : ver;
+        return ver == null ? "" : ver;
     }
 
     private static String extractRemoteSemver(String tag, String title, String body) {

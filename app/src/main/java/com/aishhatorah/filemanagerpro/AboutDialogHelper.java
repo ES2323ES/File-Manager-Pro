@@ -47,7 +47,7 @@ public class AboutDialogHelper {
         root.setBackground(ThemedDialogHelper.createDialogBackground(activity, theme));
 
         TextView tvVersionBadge = new TextView(activity);
-        tvVersionBadge.setText("File Manager Pro  •  גירסה " + UpdateChecker.formatOfficialVer(BuildConfig.VERSION_NAME));
+        tvVersionBadge.setText("File Manager Pro  •  גירסה " + BuildConfig.VERSION_NAME + " רשמית");
         tvVersionBadge.setTextColor(accent);
         tvVersionBadge.setTextSize(ThemeHelper.spScaled(activity, 14.5f));
         tvVersionBadge.setTypeface(Typeface.DEFAULT_BOLD);

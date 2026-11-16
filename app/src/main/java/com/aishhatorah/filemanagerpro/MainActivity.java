@@ -43,7 +43,7 @@ import java.util.concurrent.Executors;
 
 /**
  * סעיפים 3, 6, 7, 8, 17, 18, 19, 33, 34, 38:
- * מסך הבית המינימליסטי והרספונסיבי של File Manager Pro v0.2.9:
+ * מסך הבית המינימליסטי והרספונסיבי של File Manager Pro 0.3.4:
  * - טעינה מיידית ממטמון סריקה (FileScanCache) ועדכון ברקע
  * - כרטיס גישה מהירה לתיקייה האחרונה
  * - זיהוי והצגת כונני USB OTG מחוברים בזמן אמת
@@ -69,6 +69,7 @@ public class MainActivity extends AppCompatActivity {
     private CardView cardStorageAlert;
     private TextView tvAlertMessage;
     private CardView cardQuickAccess;
+    private ImageView ivQuickAccessIcon;
     private TextView tvQuickAccessLabel;
     private CardView cardStorageSummary;
     private TextView tvInternalSummaryTitle;
@@ -148,8 +149,8 @@ public class MainActivity extends AppCompatActivity {
             UpdateInstallReceiver.postSuccessNotification(this);
             ThemedDialogHelper.showCustomDialog(
                     this,
-                    "File Manager Pro עודכן בהצלחה",
-                    "האפליקציה שודרגה בהצלחה לגירסה " + UpdateChecker.formatOfficialVer(BuildConfig.VERSION_NAME) + ".\n\n"
+                    "\u2066File Manager Pro\u2069 עודכן בהצלחה",
+                    "האפליקציה שודרגה בהצלחה לגירסה " + BuildConfig.VERSION_NAME + ".\n\n"
                             + "כלל הקבצים, ההרשאות וההגדרות האישיות שלך נשמרו במלואם.",
                     null,
                     "הבנתי",
@@ -186,6 +187,7 @@ public class MainActivity extends AppCompatActivity {
         cardStorageAlert = findViewById(R.id.cardStorageAlert);
         tvAlertMessage = findViewById(R.id.tvAlertMessage);
         cardQuickAccess = findViewById(R.id.cardQuickAccess);
+        ivQuickAccessIcon = findViewById(R.id.ivQuickAccessIcon);
         tvQuickAccessLabel = findViewById(R.id.tvQuickAccessLabel);
         cardStorageSummary = findViewById(R.id.cardStorageSummary);
         tvInternalSummaryTitle = findViewById(R.id.tvInternalSummaryTitle);
@@ -243,6 +245,7 @@ public class MainActivity extends AppCompatActivity {
         ColorStateList accentState = ColorStateList.valueOf(accent);
         btnAbout.setColorFilter(accent);
         btnSettings.setColorFilter(accent);
+        swipeRefreshHome.setColorSchemeColors(accent);
 
         cardStorageSummary.setCardBackgroundColor(cardBg);
         tvInternalSummaryTitle.setTextColor(textPrimary);
@@ -280,6 +283,9 @@ public class MainActivity extends AppCompatActivity {
         }
         cardQuickAccess.setVisibility(View.VISIBLE);
         cardQuickAccess.setCardBackgroundColor(cardBg);
+        if (ivQuickAccessIcon != null) {
+            ivQuickAccessIcon.setColorFilter(accent);
+        }
         tvQuickAccessLabel.setTextColor(textPrimary);
         tvQuickAccessLabel.setTextSize(ThemeHelper.spScaled(this, 12.5f));
         tvQuickAccessLabel.setText("גישה מהירה: " + dir.getName());
@@ -523,6 +529,7 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 iv.setImageResource(item.iconRes);
+                iv.setColorFilter(accent);
                 tvTitle.setText(item.titleHe);
                 tvTitle.setTextSize(titleSp);
                 tvTitle.setTextColor(textPrimary);

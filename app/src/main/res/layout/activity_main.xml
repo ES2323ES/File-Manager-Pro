@@ -163,6 +163,7 @@
                         android:padding="11dp">
 
                         <ImageView
+                            android:id="@+id/ivQuickAccessIcon"
                             android:layout_width="20dp"
                             android:layout_height="20dp"
                             android:layout_marginEnd="8dp"

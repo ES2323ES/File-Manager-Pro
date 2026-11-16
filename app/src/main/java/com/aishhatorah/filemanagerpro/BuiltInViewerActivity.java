@@ -55,6 +55,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -105,8 +106,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.zip.GZIPInputStream;
 
+import com.aishhatorah.filemanagerpro.AudioPaletteHelper.AudioAdaptivePalette;
+
 /**
- * מציג ונגן המדיה המובנה של File Manager Pro v0.2.8:
+ * מציג ונגן המדיה המובנה של File Manager Pro 0.3.4:
  * - תצוגת Edge-to-Edge מלאה לתמונות ווידאו מאחורי סרגלים שקופים (סעיף 25)
  * - מצב מחוות אוטומטי מול מצב כפתורים קלאסי בווידאו ותמונות (סעיפים 29, 30, 44)
  * - לחיצה ארוכה בצד ימין 2x קדימה ובצד שמאל 2x אחורה בווידאו (סעיף 44)
@@ -152,11 +155,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean audioTickerActive = false;
     private AudioPlayerManager.PlaybackListener audioListener;
     private LinearLayout audioRootLayout = null;
+    private View audioStagePlayerView = null;
+    private TextView tvAudioCenterScrubTime = null;
     private ImageButton audioTopBackBtn = null;
     private ImageButton audioTopShareBtn = null;
     private String lastHeaderTitleName = null;
 
     private boolean isVideoMode = false;
+    private boolean awaitingInitialVideoPlay = false;
+    private boolean suppressNextVideoAutoPlay = false;
+    private TextView tvVideoCenterScrubTime = null;
     private final List<File> videoPlaylist = new ArrayList<>();
     private int currentVideoIdx = 0;
     private ExoPlayer exoPlayer;
@@ -364,7 +372,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     (!mediaControlsHidden && !autoGesture && imagePlaylist.size() > 1) ? View.VISIBLE : View.GONE);
         }
         if (activeVideoCenterOverlay != null) {
-            activeVideoCenterOverlay.setVisibility((mediaControlsHidden || isVideoLocked) ? View.GONE : View.VISIBLE);
+            boolean showCenter = !isVideoLocked && (!mediaControlsHidden || awaitingInitialVideoPlay);
+            activeVideoCenterOverlay.setVisibility(showCenter ? View.VISIBLE : View.GONE);
         }
         if (activeVideoLockFloatingBtn != null) {
             activeVideoLockFloatingBtn.setVisibility((isVideoMode && isVideoLocked) ? View.VISIBLE : View.GONE);
@@ -425,10 +434,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         activeZoomImageView = null;
         activeVideoSyncRunnable = null;
         audioRootLayout = null;
+        audioStagePlayerView = null;
+        tvAudioCenterScrubTime = null;
+        tvVideoCenterScrubTime = null;
         audioTopBackBtn = null;
         audioTopShareBtn = null;
         lastHeaderTitleName = null;
         isVideoLocked = false;
+        awaitingInitialVideoPlay = false;
+        suppressNextVideoAutoPlay = false;
         hasAppliedVideoMatrix = false;
 
         int theme = PrefsManager.getThemeMode(this);
@@ -464,6 +478,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         boolean isLandscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
         mediaControlsHidden = isVideoMode;
+        awaitingInitialVideoPlay = isVideoMode;
+        suppressNextVideoAutoPlay = isVideoMode;
 
         topBar = buildTopBar(theme, textPrimary, textSecondary, accent, isLandscape);
 
@@ -489,7 +505,134 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
 
         setSystemBarsFullscreen(false);
-        LinearLayout root = new LinearLayout(this);
+        final AudioPlayerManager audioMgr = AudioPlayerManager.getInstance();
+        final int touchSlopPx = ViewConfiguration.get(this).getScaledTouchSlop();
+
+        LinearLayout root;
+        if (isAudioMode) {
+            final int[] audioSwipeMode = new int[]{0}; // 0=none, 1=horizontal seek, 2=vertical track
+            final float[] swipeDownX = new float[]{0f};
+            final float[] swipeDownY = new float[]{0f};
+            final int[] swipeStartPosMs = new int[]{0};
+            final int[] pendingSwipeTargetMs = new int[]{0};
+            final long[] lastLiveSeekMs = new long[]{0L};
+
+            root = new LinearLayout(this) {
+                @Override
+                public boolean onInterceptTouchEvent(MotionEvent ev) {
+                    if (!isAudioMode) return super.onInterceptTouchEvent(ev);
+                    switch (ev.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            audioSwipeMode[0] = 0;
+                            swipeDownX[0] = ev.getRawX();
+                            swipeDownY[0] = ev.getRawY();
+                            swipeStartPosMs[0] = audioMgr.getCurrentPositionMs();
+                            pendingSwipeTargetMs[0] = swipeStartPosMs[0];
+                            break;
+                        case MotionEvent.ACTION_MOVE: {
+                            float dx = ev.getRawX() - swipeDownX[0];
+                            float dy = ev.getRawY() - swipeDownY[0];
+                            if (Math.abs(dx) > touchSlopPx * 1.4f && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                                audioSwipeMode[0] = 1;
+                                return true;
+                            }
+                            if (Math.abs(dy) > touchSlopPx * 1.6f && Math.abs(dy) > Math.abs(dx) * 1.3f) {
+                                audioSwipeMode[0] = 2;
+                                return true;
+                            }
+                            break;
+                        }
+                    }
+                    return super.onInterceptTouchEvent(ev);
+                }
+
+                @Override
+                public boolean onTouchEvent(MotionEvent ev) {
+                    if (!isAudioMode) return super.onTouchEvent(ev);
+                    switch (ev.getActionMasked()) {
+                        case MotionEvent.ACTION_MOVE: {
+                            float dx = ev.getRawX() - swipeDownX[0];
+                            float dy = ev.getRawY() - swipeDownY[0];
+                            if (audioSwipeMode[0] == 1) {
+                                int dur = audioMgr.getDurationMs();
+                                float width = Math.max(1f, getWidth());
+                                int deltaMs = Math.round((dx / width) * 90_000f);
+                                int target = dur > 0
+                                        ? Math.max(0, Math.min(dur, swipeStartPosMs[0] + deltaMs))
+                                        : Math.max(0, swipeStartPosMs[0] + deltaMs);
+                                pendingSwipeTargetMs[0] = target;
+                                if (tvAudioCenterScrubTime != null) {
+                                    tvAudioCenterScrubTime.setText(formatClock(target));
+                                    tvAudioCenterScrubTime.setVisibility(View.VISIBLE);
+                                }
+                                long now = System.currentTimeMillis();
+                                if (now - lastLiveSeekMs[0] >= 180L) {
+                                    lastLiveSeekMs[0] = now;
+                                    audioMgr.seekTo(target);
+                                }
+                                return true;
+                            } else if (audioSwipeMode[0] == 2) {
+                                if (audioStagePlayerView != null) {
+                                    audioStagePlayerView.setTranslationY(dy * 0.45f);
+                                    float alpha = Math.max(0.45f, 1f - Math.abs(dy) / Math.max(1f, getHeight()));
+                                    audioStagePlayerView.setAlpha(alpha);
+                                }
+                                return true;
+                            }
+                            break;
+                        }
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL: {
+                            float dy = ev.getRawY() - swipeDownY[0];
+                            if (audioSwipeMode[0] == 1) {
+                                audioMgr.seekTo(pendingSwipeTargetMs[0]);
+                                if (tvAudioCenterScrubTime != null) {
+                                    tvAudioCenterScrubTime.setVisibility(View.GONE);
+                                }
+                                audioSwipeMode[0] = 0;
+                                return true;
+                            } else if (audioSwipeMode[0] == 2) {
+                                final View stage = audioStagePlayerView;
+                                int slideDist = Math.max(dp(180), getHeight() / 2);
+                                int triggerThreshold = dp(64);
+                                if (stage != null && Math.abs(dy) > triggerThreshold) {
+                                    final boolean goingPreviousDown = dy > 0;
+                                    float exitY = goingPreviousDown ? slideDist : -slideDist;
+                                    float enterFromY = goingPreviousDown ? -slideDist : slideDist;
+                                    stage.animate()
+                                            .translationY(exitY)
+                                            .alpha(0f)
+                                            .setDuration(150)
+                                            .withEndAction(() -> {
+                                                if (goingPreviousDown) {
+                                                    audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
+                                                } else {
+                                                    audioMgr.playNext(BuiltInViewerActivity.this);
+                                                }
+                                                stage.setTranslationY(enterFromY);
+                                                stage.setAlpha(0f);
+                                                stage.animate()
+                                                        .translationY(0f)
+                                                        .alpha(1f)
+                                                        .setDuration(220)
+                                                        .start();
+                                            })
+                                            .start();
+                                } else if (stage != null) {
+                                    stage.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                                }
+                                audioSwipeMode[0] = 0;
+                                return true;
+                            }
+                            break;
+                        }
+                    }
+                    return super.onTouchEvent(ev);
+                }
+            };
+        } else {
+            root = new LinearLayout(this);
+        }
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(bgColor);
@@ -504,24 +647,33 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         root.addView(contentArea, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        setContentView(root);
-
         if (isAudioMode) {
+            FrameLayout audioOverlayFrame = new FrameLayout(this);
+            audioOverlayFrame.addView(root, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+            tvAudioCenterScrubTime = createCleanCenterTimeOverlay();
+            audioOverlayFrame.addView(tvAudioCenterScrubTime);
+            setContentView(audioOverlayFrame);
+
             audioRootLayout = root;
             renderAudioPlayer(contentArea, bgColor, textPrimary, textSecondary, accent, theme, isLandscape);
-        } else if (MediaFormatHelper.isPdfFile(lower)) {
-            renderPdfViewer(contentArea, cardColor, textSecondary, theme);
-        } else if (FileOpenWithHelper.ACTION_INTERNAL_ARCHIVE.equals(forceType)
-                || MediaFormatHelper.isZipOrArchiveFile(lower)
-                || MediaFormatHelper.isInstallableAppPackage(lower)) {
-            renderArchiveExtractor(contentArea, cardColor, textPrimary, textSecondary, accent, theme);
-        } else if (endsWithAny(lower, ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp")) {
-            renderOfficeDocumentViewer(contentArea, cardColor, textPrimary, textSecondary);
         } else {
-            Intent codeIntent = new Intent(this, CodeEditorActivity.class);
-            codeIntent.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, targetFile.getAbsolutePath());
-            startActivity(codeIntent);
-            finish();
+            setContentView(root);
+            if (MediaFormatHelper.isPdfFile(lower)) {
+                renderPdfViewer(contentArea, cardColor, textSecondary, theme);
+            } else if (FileOpenWithHelper.ACTION_INTERNAL_ARCHIVE.equals(forceType)
+                    || MediaFormatHelper.isZipOrArchiveFile(lower)
+                    || MediaFormatHelper.isInstallableAppPackage(lower)) {
+                renderArchiveExtractor(contentArea, cardColor, textPrimary, textSecondary, accent, theme);
+            } else if (endsWithAny(lower, ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp")) {
+                renderOfficeDocumentViewer(contentArea, cardColor, textPrimary, textSecondary);
+            } else {
+                Intent codeIntent = new Intent(this, CodeEditorActivity.class);
+                codeIntent.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, targetFile.getAbsolutePath());
+                startActivity(codeIntent);
+                finish();
+            }
         }
     }
 
@@ -1143,160 +1295,19 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     // ==================== נגן שמע מתקדם (תור ניגון, טיימר שינה, אקולייזר) ====================
 
-    private static class AudioAdaptivePalette {
-        final int bg;
-        final int textPrimary;
-        final int textSecondary;
-        final int accent;
-        final int playIconTint;
-        final boolean darkSurface;
-
-        AudioAdaptivePalette(int bg, int textPrimary, int textSecondary, int accent, int playIconTint, boolean darkSurface) {
-            this.bg = bg;
-            this.textPrimary = textPrimary;
-            this.textSecondary = textSecondary;
-            this.accent = accent;
-            this.playIconTint = playIconTint;
-            this.darkSurface = darkSurface;
-        }
-    }
-
-    private AudioAdaptivePalette computeAudioAdaptivePalette(
-            Bitmap art,
-            int theme,
-            int defaultBg,
-            int defaultTextPrimary,
-            int defaultTextSecondary,
-            int defaultAccent
-    ) {
-        boolean defaultDark = ThemeHelper.isDarkSurface(this, theme);
-        if (art == null || art.isRecycled() || art.getWidth() <= 0 || art.getHeight() <= 0) {
-            int playIcon = ColorUtils.calculateLuminance(defaultAccent) > 0.62
-                    ? Color.parseColor("#0F172A")
-                    : Color.WHITE;
-            return new AudioAdaptivePalette(defaultBg, defaultTextPrimary, defaultTextSecondary, defaultAccent, playIcon, defaultDark);
-        }
-
-        Bitmap sample = Bitmap.createScaledBitmap(art, 24, 24, true);
-        int count = sample.getWidth() * sample.getHeight();
-        int[] pixels = new int[count];
-        sample.getPixels(pixels, 0, sample.getWidth(), 0, 0, sample.getWidth(), sample.getHeight());
-        if (sample != art) {
-            sample.recycle();
-        }
-
-        final int bins = 15;
-        float[] binScore = new float[bins];
-        float[] binR = new float[bins];
-        float[] binG = new float[bins];
-        float[] binB = new float[bins];
-
-        double sumR = 0, sumG = 0, sumB = 0;
-        int visibleCount = 0;
-        float[] hsv = new float[3];
-
-        for (int p : pixels) {
-            if (Color.alpha(p) < 128) continue;
-            int r = Color.red(p);
-            int g = Color.green(p);
-            int b = Color.blue(p);
-            sumR += r;
-            sumG += g;
-            sumB += b;
-            visibleCount++;
-
-            Color.colorToHSV(p, hsv);
-            float sat = hsv[1];
-            float val = hsv[2];
-            if (val < 0.08f || (val > 0.96f && sat < 0.14f)) continue;
-            float weight = sat * Math.max(0.15f, 1.0f - Math.abs(val - 0.56f) * 1.15f);
-            int bin = Math.min(bins - 1, Math.max(0, (int) (hsv[0] / (360f / bins))));
-            binScore[bin] += weight;
-            binR[bin] += r * weight;
-            binG[bin] += g * weight;
-            binB[bin] += b * weight;
-        }
-
-        if (visibleCount == 0) {
-            int playIcon = ColorUtils.calculateLuminance(defaultAccent) > 0.62
-                    ? Color.parseColor("#0F172A")
-                    : Color.WHITE;
-            return new AudioAdaptivePalette(defaultBg, defaultTextPrimary, defaultTextSecondary, defaultAccent, playIcon, defaultDark);
-        }
-
-        int meanColor = Color.rgb(
-                (int) Math.round(sumR / visibleCount),
-                (int) Math.round(sumG / visibleCount),
-                (int) Math.round(sumB / visibleCount)
-        );
-
-        int bestBin = -1;
-        float bestWeight = 0.0f;
-        for (int i = 0; i < bins; i++) {
-            if (binScore[i] > bestWeight) {
-                bestWeight = binScore[i];
-                bestBin = i;
-            }
-        }
-
-        boolean hasVibrant = bestBin >= 0 && bestWeight > 0.4f;
-        int dominant = hasVibrant
-                ? Color.rgb(
-                Math.min(255, Math.round(binR[bestBin] / bestWeight)),
-                Math.min(255, Math.round(binG[bestBin] / bestWeight)),
-                Math.min(255, Math.round(binB[bestBin] / bestWeight)))
-                : meanColor;
-
-        double artLum = ColorUtils.calculateLuminance(meanColor);
-        boolean darkSurface = defaultDark || artLum < 0.38;
-
-        Color.colorToHSV(dominant, hsv);
-        float bgSat = hasVibrant ? Math.min(0.48f, Math.max(0.22f, hsv[1] * 0.58f)) : 0.06f;
-        int adaptedBg;
-        int adaptedTextPrimary;
-        int adaptedTextSecondary;
-        int adaptedAccent;
-
-        if (darkSurface) {
-            float[] bgHsv = new float[]{hsv[0], bgSat, 0.14f};
-            int deepTint = Color.HSVToColor(bgHsv);
-            adaptedBg = ColorUtils.blendARGB(Color.parseColor("#0A0E17"), deepTint, 0.72f);
-            adaptedTextPrimary = Color.parseColor("#F8FAFC");
-            adaptedTextSecondary = ColorUtils.setAlphaComponent(adaptedTextPrimary, 178);
-
-            if (hasVibrant) {
-                float[] accHsv = new float[]{hsv[0], Math.min(0.86f, Math.max(0.50f, hsv[1])), 0.93f};
-                int candidate = Color.HSVToColor(accHsv);
-                if (ColorUtils.calculateContrast(candidate, adaptedBg) < 4.5) {
-                    candidate = ColorUtils.blendARGB(candidate, Color.WHITE, 0.35f);
-                }
-                adaptedAccent = candidate;
-            } else {
-                adaptedAccent = Color.parseColor("#60A5FA");
-            }
-        } else {
-            float[] bgHsv = new float[]{hsv[0], Math.min(0.24f, bgSat), 0.96f};
-            int softTint = Color.HSVToColor(bgHsv);
-            adaptedBg = ColorUtils.blendARGB(Color.parseColor("#F8FAFC"), softTint, 0.78f);
-            adaptedTextPrimary = Color.parseColor("#0F172A");
-            adaptedTextSecondary = ColorUtils.setAlphaComponent(adaptedTextPrimary, 175);
-
-            if (hasVibrant) {
-                float[] accHsv = new float[]{hsv[0], Math.min(0.95f, Math.max(0.58f, hsv[1])), 0.52f};
-                int candidate = Color.HSVToColor(accHsv);
-                if (ColorUtils.calculateContrast(candidate, adaptedBg) < 4.5) {
-                    candidate = ColorUtils.blendARGB(candidate, Color.BLACK, 0.32f);
-                }
-                adaptedAccent = candidate;
-            } else {
-                adaptedAccent = defaultAccent;
-            }
-        }
-
-        int playIconTint = ColorUtils.calculateLuminance(adaptedAccent) > 0.58
-                ? Color.parseColor("#0F172A")
-                : Color.WHITE;
-        return new AudioAdaptivePalette(adaptedBg, adaptedTextPrimary, adaptedTextSecondary, adaptedAccent, playIconTint, darkSurface);
+    private TextView createCleanCenterTimeOverlay() {
+        TextView tv = new TextView(this);
+        tv.setTextSize(30f);
+        tv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tv.setTextColor(Color.WHITE);
+        tv.setTextDirection(View.TEXT_DIRECTION_LTR);
+        tv.setGravity(Gravity.CENTER);
+        tv.setBackground(null);
+        tv.setShadowLayer(8f, 0f, 2f, Color.argb(210, 0, 0, 0));
+        tv.setVisibility(View.GONE);
+        tv.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        return tv;
     }
 
     private void renderAudioPlayer(
@@ -1324,6 +1335,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         // מסך נקי באחידות מלאה ללא מלבנים מקיפים
         LinearLayout playerRoot = new LinearLayout(this);
         playerRoot.setBackground(null);
+        audioStagePlayerView = playerRoot;
         if (isLandscape) {
             playerRoot.setOrientation(LinearLayout.HORIZONTAL);
             playerRoot.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
@@ -1472,7 +1484,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         final AudioAdaptivePalette[] activePalHolder = new AudioAdaptivePalette[]{
-                computeAudioAdaptivePalette(null, theme, defaultBgColor, textPrimary, textSecondary, accent)
+                AudioPaletteHelper.computePalette(this, null, theme, defaultBgColor, textPrimary, textSecondary, accent)
         };
         final Object[] lastArtworkKey = new Object[]{new Object()};
         final String[] lastTrackCounter = new String[]{null};
@@ -1522,6 +1534,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
             btnPlayPause.setColorFilter(pal.playIconTint);
 
+            if (tvAudioCenterScrubTime != null) {
+                tvAudioCenterScrubTime.setTextColor(pal.textPrimary);
+            }
             btnBack10.setColorFilter(pal.textPrimary);
             btnPrevSong.setColorFilter(pal.textPrimary);
             btnNextSong.setColorFilter(pal.textPrimary);
@@ -1554,43 +1569,80 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             lastRepeatRes[0] = resolveRepeatIcon(nextMode);
             btnRepeatMode.setImageResource(lastRepeatRes[0]);
             btnRepeatMode.setColorFilter(nextMode != AudioPlayerManager.REPEAT_OFF ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
-            String toastText = nextMode == AudioPlayerManager.REPEAT_ONE
-                    ? "חזרה על השיר עצמו"
-                    : (nextMode == AudioPlayerManager.REPEAT_FOLDER ? "חזרה על כל התיקייה" : "ללא חזרה");
-            Toast.makeText(this, toastText, Toast.LENGTH_SHORT).show();
         });
 
         btnMorePlus.setOnClickListener(v -> {
-            long remMs = mgr.getSleepTimerRemainingMs();
-            String sleepLabel = remMs > 0
-                    ? ("טיימר שינה (" + Math.max(1, (int) Math.ceil(remMs / 60_000.0)) + " דק')")
-                    : "טיימר שינה";
-            List<String> tools = Arrays.asList(
-                    "תור ניגון",
-                    sleepLabel,
-                    "אקולייזר והדגשת בס",
-                    "חתוך אודיו"
-            );
-            String title = targetFile != null ? targetFile.getName() : "אפשרויות שמע";
-            ThemedDialogHelper.showThemedMenu(this, "כלים נוספים", title, tools, idx -> {
-                switch (idx) {
-                    case 0:
-                        showAudioQueueDialog();
-                        break;
-                    case 1:
-                        showSleepTimerDialog();
-                        break;
-                    case 2:
-                        showEqualizerDialog();
-                        break;
-                    case 3:
-                        File current = mgr.getCurrentFile() != null ? mgr.getCurrentFile() : targetFile;
-                        Intent ci = new Intent(this, AudioCutterActivity.class);
-                        ci.putExtra(AudioCutterActivity.EXTRA_INITIAL_PATH, current.getAbsolutePath());
-                        startActivity(ci);
-                        break;
-                }
+            AudioAdaptivePalette pal = activePalHolder[0];
+            LinearLayout iconStrip = new LinearLayout(this);
+            iconStrip.setOrientation(LinearLayout.HORIZONTAL);
+            iconStrip.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+            iconStrip.setGravity(Gravity.CENTER_VERTICAL);
+            iconStrip.setPadding(dp(10), dp(6), dp(10), dp(6));
+
+            GradientDrawable stripBg = new GradientDrawable();
+            stripBg.setCornerRadius(999f);
+            stripBg.setColor(pal.darkSurface
+                    ? ColorUtils.setAlphaComponent(Color.parseColor("#1E293B"), 242)
+                    : ColorUtils.setAlphaComponent(Color.WHITE, 245));
+            stripBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(pal.textSecondary, 60));
+            iconStrip.setBackground(stripBg);
+            iconStrip.setElevation(dp(8));
+
+            final PopupWindow[] popupRef = new PopupWindow[1];
+
+            int iconSize = dp(40);
+            ImageButton bQueue = createCleanBorderlessIconButton(R.drawable.ic_queue, iconSize, pal.textPrimary);
+            bQueue.setContentDescription("תור ניגון");
+            bQueue.setOnClickListener(iv -> {
+                if (popupRef[0] != null) popupRef[0].dismiss();
+                showAudioQueueDialog();
             });
+
+            int sleepTint = mgr.getSleepTimerRemainingMs() > 0 ? pal.accent : pal.textPrimary;
+            ImageButton bSleep = createCleanBorderlessIconButton(R.drawable.ic_sleep_timer, iconSize, sleepTint);
+            bSleep.setContentDescription("טיימר שינה");
+            bSleep.setOnClickListener(iv -> {
+                if (popupRef[0] != null) popupRef[0].dismiss();
+                showSleepTimerDialog();
+            });
+
+            ImageButton bEq = createCleanBorderlessIconButton(R.drawable.ic_equalizer, iconSize, pal.textPrimary);
+            bEq.setContentDescription("אקולייזר");
+            bEq.setOnClickListener(iv -> {
+                if (popupRef[0] != null) popupRef[0].dismiss();
+                showEqualizerDialog();
+            });
+
+            ImageButton bCut = createCleanBorderlessIconButton(R.drawable.ic_audio_cutter, iconSize, pal.textPrimary);
+            bCut.setContentDescription("חתוך אודיו");
+            bCut.setOnClickListener(iv -> {
+                if (popupRef[0] != null) popupRef[0].dismiss();
+                File current = mgr.getCurrentFile() != null ? mgr.getCurrentFile() : targetFile;
+                Intent ci = new Intent(this, AudioCutterActivity.class);
+                ci.putExtra(AudioCutterActivity.EXTRA_INITIAL_PATH, current.getAbsolutePath());
+                startActivity(ci);
+            });
+
+            iconStrip.addView(bQueue);
+            iconStrip.addView(bSleep);
+            iconStrip.addView(bEq);
+            iconStrip.addView(bCut);
+
+            iconStrip.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+            int popW = iconStrip.getMeasuredWidth();
+            int popH = iconStrip.getMeasuredHeight();
+            PopupWindow popup = new PopupWindow(iconStrip,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+            popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            popup.setOutsideTouchable(true);
+            popupRef[0] = popup;
+
+            int[] loc = new int[2];
+            v.getLocationInWindow(loc);
+            int screenW = getResources().getDisplayMetrics().widthPixels;
+            int showX = Math.max(dp(8), Math.min(screenW - popW - dp(8), loc[0] + v.getWidth() / 2 - popW / 2));
+            int showY = Math.max(dp(12), loc[1] - popH - dp(8));
+            popup.showAtLocation(v, Gravity.NO_GRAVITY, showX, showY);
         });
 
         seekBar.setOnSeekBarChangeListener(new WavySeekBar.OnSeekBarChangeListener() {
@@ -1632,7 +1684,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     ivArt.setClipToOutline(false);
                     ivArt.setImageResource(R.drawable.ic_audio);
                 }
-                activePalHolder[0] = computeAudioAdaptivePalette(art, theme, defaultBgColor, textPrimary, textSecondary, accent);
+                activePalHolder[0] = AudioPaletteHelper.computePalette(this, art, theme, defaultBgColor, textPrimary, textSecondary, accent);
                 applyPaletteAndButtonTints.run();
             } else {
                 btnSpeedCenter.setColorFilter(Math.abs(mgr.getPlaybackSpeed() - 1.0f) >= 0.02f
@@ -1641,7 +1693,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
             }
 
-            int playRes = mgr.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play;
+            boolean playingNow = mgr.isPlaying();
+            seekBar.setPlaying(playingNow);
+            int playRes = playingNow ? R.drawable.ic_pause : R.drawable.ic_play;
             if (lastPlayRes[0] != playRes) {
                 lastPlayRes[0] = playRes;
                 btnPlayPause.setImageResource(playRes);
@@ -1664,6 +1718,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (!audioTickerActive) return;
                 int dur = mgr.getDurationMs();
                 int pos = mgr.getCurrentPositionMs();
+                seekBar.setPlaying(mgr.isPlaying());
                 seekBar.setMax(Math.max(1, dur));
                 seekBar.setProgress(pos);
                 String posStr = formatClock(pos);
@@ -1887,19 +1942,24 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         final TextView tvVideoDoubleTapBadge = createSeekOverlayBadge();
         videoViewport.addView(tvVideoDoubleTapBadge);
 
+        tvVideoCenterScrubTime = createCleanCenterTimeOverlay();
+        videoViewport.addView(tvVideoCenterScrubTime);
+
         setupVideoAdvancedTouchGestures(videoViewport, tvVideoDoubleTapBadge);
 
         stageRoot.addView(videoViewport, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // עיגול תכלת במרכז הווידאו בלבד ללא כפתורים צדדיים
+        int skyBlueColor = Color.parseColor("#38BDF8");
         final ImageButton btnCenterPlayPause = createResponsiveRoundIconButton(
-                R.drawable.ic_pause, dp(58), 0, true, accent, theme);
+                R.drawable.ic_play, dp(62), 0, true, skyBlueColor, theme);
+        btnCenterPlayPause.setColorFilter(Color.WHITE);
         btnCenterPlayPause.setContentDescription("נגן / השהה");
         activeVideoCenterOverlay = btnCenterPlayPause;
 
         FrameLayout.LayoutParams centerLp = new FrameLayout.LayoutParams(
-                dp(58), dp(58), Gravity.CENTER);
+                dp(62), dp(62), Gravity.CENTER);
         stageRoot.addView(btnCenterPlayPause, centerLp);
 
         // כפתור שחרור נעילה בתחתית המסך בעת נעילת וידאו
@@ -2062,6 +2122,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         final Runnable syncVidButtons = () -> {
             boolean playing = isVideoPlayingSafely();
             lastSyncedPlaying[0] = playing;
+            videoSeek.setPlaying(playing);
             int playRes = playing ? R.drawable.ic_pause : R.drawable.ic_play;
             if (lastSyncedPlayRes[0] != playRes) {
                 lastSyncedPlayRes[0] = playRes;
@@ -2090,17 +2151,30 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         activeVideoSyncRunnable = syncVidButtons;
 
         View.OnClickListener playPauseClick = v -> {
+            boolean wasAwaiting = awaitingInitialVideoPlay;
+            awaitingInitialVideoPlay = false;
+            suppressNextVideoAutoPlay = false;
             if (exoPlayer == null && videoPlayer == null) {
                 loadVideoTrackAtIndex(currentVideoIdx, syncVidButtons);
+                applyMediaImmersiveAndLayoutState();
                 return;
             }
-            if (!videoPrepared) return;
+            if (!videoPrepared) {
+                applyMediaImmersiveAndLayoutState();
+                return;
+            }
             try {
-                if (isVideoPlayingSafely()) pauseVideoSafely();
-                else applyVideoSpeedInternal(true);
+                if (wasAwaiting || !isVideoPlayingSafely()) {
+                    applyVideoSpeedInternal(true);
+                } else {
+                    pauseVideoSafely();
+                }
             } catch (Exception ignored) {
             }
             syncVidButtons.run();
+            if (wasAwaiting) {
+                applyMediaImmersiveAndLayoutState();
+            }
         };
 
         btnCenterPlayPause.setOnClickListener(playPauseClick);
@@ -2231,6 +2305,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (!videoTickerActive) return;
                 if (videoPrepared && (exoPlayer != null || videoPlayer != null)) {
                     try {
+                        videoSeek.setPlaying(isVideoPlayingSafely());
                         int dur = getEffectiveVideoDurationMs();
                         int pos = getCurrentVideoPositionMs();
                         long now = System.currentTimeMillis();
@@ -2407,6 +2482,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void advanceVideoPlaylist(int direction, Runnable onReadyUi) {
+        awaitingInitialVideoPlay = false;
+        suppressNextVideoAutoPlay = false;
         if (videoPlaylist.isEmpty()) return;
         if (videoPlaylist.size() == 1) {
             currentVideoIdx = 0;
@@ -2708,8 +2785,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 itemBuilder.setMimeType(MimeTypes.VIDEO_MP2T);
             }
             exoPlayer.setMediaItem(itemBuilder.build());
+            boolean autoStart = !suppressNextVideoAutoPlay;
+            exoPlayer.setPlayWhenReady(autoStart);
             exoPlayer.prepare();
-            exoPlayer.play();
+            if (autoStart) {
+                exoPlayer.play();
+            }
         } catch (Throwable t) {
             startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
         }
@@ -2828,8 +2909,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 }
             });
             exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(mp4File)));
+            boolean autoStart = !suppressNextVideoAutoPlay;
+            exoPlayer.setPlayWhenReady(autoStart);
             exoPlayer.prepare();
-            exoPlayer.play();
+            if (autoStart) {
+                exoPlayer.play();
+            }
         } catch (Throwable t) {
             startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
         }
@@ -2869,13 +2954,23 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 currentVideoPixelRatio = 1.0f;
                 hasAppliedVideoMatrix = false;
                 updateVideoAspectRatioMatrix();
+                boolean autoStart = !suppressNextVideoAutoPlay;
                 try {
-                    mp.start();
+                    if (autoStart) {
+                        mp.start();
+                    } else {
+                        mp.setVolume(0f, 0f);
+                        mp.start();
+                        mp.pause();
+                        float restoreVol = videoMuted ? 0f : 1f;
+                        mp.setVolume(restoreVol, restoreVol);
+                        mp.seekTo(0);
+                    }
                 } catch (Exception ignored) {
                 }
                 if (Math.abs(videoSpeed - 1.0f) >= 0.02f) {
                     speedModifiedFromDefault = true;
-                    applyVideoSpeedInternal(true);
+                    applyVideoSpeedInternal(autoStart);
                 }
                 if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
                 else if (onReadyUi != null) onReadyUi.run();
@@ -3038,10 +3133,20 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     }
                 });
 
+        final int touchSlopPx = ViewConfiguration.get(this).getScaledTouchSlop();
+        final float[] swipeDownRawX = new float[]{0f};
+        final float[] swipeDownRawY = new float[]{0f};
+        final boolean[] isHorizontalSwipeSeek = new boolean[]{false};
+        final int[] horizontalSwipeStartPosMs = new int[]{0};
+        final int[] horizontalSwipeTargetMs = new int[]{0};
+        final long[] lastSwipeLiveSeekMs = new long[]{0L};
+
         viewport.setOnTouchListener((v, event) -> {
             if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
             if (isVideoLocked) {
                 stopVideoHoldGestures(badge);
+                if (tvVideoCenterScrubTime != null) tvVideoCenterScrubTime.setVisibility(View.GONE);
+                isHorizontalSwipeSeek[0] = false;
                 return true;
             }
 
@@ -3051,31 +3156,67 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     wasScalingSinceDown[0] = false;
+                    isHorizontalSwipeSeek[0] = false;
                     activePanPointerId[0] = event.getPointerId(0);
                     lastPan.set(event.getX(), event.getY());
+                    swipeDownRawX[0] = event.getRawX();
+                    swipeDownRawY[0] = event.getRawY();
+                    horizontalSwipeStartPosMs[0] = getCurrentVideoPositionMs();
+                    horizontalSwipeTargetMs[0] = horizontalSwipeStartPosMs[0];
                     break;
 
                 case MotionEvent.ACTION_POINTER_DOWN:
                     wasScalingSinceDown[0] = true;
+                    isHorizontalSwipeSeek[0] = false;
+                    if (tvVideoCenterScrubTime != null) tvVideoCenterScrubTime.setVisibility(View.GONE);
                     stopVideoHoldGestures(badge);
                     break;
 
                 case MotionEvent.ACTION_MOVE:
-                    if (!scaleDetector.isInProgress()
-                            && event.getPointerCount() == 1
-                            && videoScale > 1.01f
-                            && videoTextureView != null) {
-                        int ptrIdx = event.findPointerIndex(activePanPointerId[0]);
-                        if (ptrIdx < 0) ptrIdx = 0;
-                        float x = event.getX(ptrIdx);
-                        float y = event.getY(ptrIdx);
-                        float dx = x - lastPan.x;
-                        float dy = y - lastPan.y;
-                        videoTransX += dx;
-                        videoTransY += dy;
-                        clampVideoTranslation();
-                        updateVideoAspectRatioMatrix();
-                        lastPan.set(x, y);
+                    if (!scaleDetector.isInProgress() && event.getPointerCount() == 1) {
+                        if (videoScale > 1.01f && videoTextureView != null) {
+                            int ptrIdx = event.findPointerIndex(activePanPointerId[0]);
+                            if (ptrIdx < 0) ptrIdx = 0;
+                            float x = event.getX(ptrIdx);
+                            float y = event.getY(ptrIdx);
+                            float dx = x - lastPan.x;
+                            float dy = y - lastPan.y;
+                            videoTransX += dx;
+                            videoTransY += dy;
+                            clampVideoTranslation();
+                            updateVideoAspectRatioMatrix();
+                            lastPan.set(x, y);
+                        } else if (!wasScalingSinceDown[0] && !isHold2xForwardActive && !isHold2xRewindActive && videoPrepared) {
+                            float dx = event.getRawX() - swipeDownRawX[0];
+                            float dy = event.getRawY() - swipeDownRawY[0];
+                            if (!isHorizontalSwipeSeek[0]
+                                    && Math.abs(dx) > touchSlopPx * 1.5f
+                                    && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                                isHorizontalSwipeSeek[0] = true;
+                            }
+                            if (isHorizontalSwipeSeek[0]) {
+                                int dur = getEffectiveVideoDurationMs();
+                                float width = Math.max(1f, viewport.getWidth());
+                                int deltaMs = Math.round((dx / width) * 90_000f);
+                                int target = dur > 0
+                                        ? Math.max(0, Math.min(dur, horizontalSwipeStartPosMs[0] + deltaMs))
+                                        : Math.max(0, horizontalSwipeStartPosMs[0] + deltaMs);
+                                horizontalSwipeTargetMs[0] = target;
+                                pendingSeekTargetMs = target;
+                                holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
+                                if (tvVideoCenterScrubTime != null) {
+                                    tvVideoCenterScrubTime.setText(formatClock(target));
+                                    tvVideoCenterScrubTime.setVisibility(View.VISIBLE);
+                                }
+                                long now = System.currentTimeMillis();
+                                boolean isTs = targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName());
+                                long minInterval = isTs ? 450L : 220L;
+                                if (now - lastSwipeLiveSeekMs[0] >= minInterval) {
+                                    lastSwipeLiveSeekMs[0] = now;
+                                    seekVideoToMs(target);
+                                }
+                            }
+                        }
                     }
                     break;
 
@@ -3100,6 +3241,17 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     activePanPointerId[0] = MotionEvent.INVALID_POINTER_ID;
+                    if (isHorizontalSwipeSeek[0]) {
+                        isHorizontalSwipeSeek[0] = false;
+                        if (tvVideoCenterScrubTime != null) {
+                            tvVideoCenterScrubTime.setVisibility(View.GONE);
+                        }
+                        if (videoPrepared) {
+                            pendingSeekTargetMs = horizontalSwipeTargetMs[0];
+                            holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
+                            seekVideoToMs(horizontalSwipeTargetMs[0]);
+                        }
+                    }
                     stopVideoHoldGestures(badge);
                     break;
             }
@@ -3264,15 +3416,50 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void showSpeedPickerDialog(String title, float current, SpeedSelectedCallback cb) {
         final float[] values = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
-        List<String> labels = new ArrayList<>();
+        int theme = PrefsManager.getThemeMode(this);
+        int bgColor = ThemeHelper.getCardColor(this, theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        int accent = ThemeHelper.getAccentColor(this, theme);
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setGravity(Gravity.CENTER_HORIZONTAL);
+        container.setPadding(dp(18), dp(12), dp(18), dp(12));
+
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setCornerRadius(dp(18));
+        cardBg.setColor(bgColor);
+        container.setBackground(cardBg);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setView(container)
+                .create();
+
         for (float v : values) {
-            String base = v == 1.0f ? "1.0x (מהירות רגילה)" : String.format(Locale.US, "%.2fx", v).replace("0x", "x");
-            if (Math.abs(v - current) < 0.02f) {
-                base = "✓  " + base;
-            }
-            labels.add(base);
+            boolean selected = Math.abs(v - current) < 0.02f;
+            String label = v == 1.0f
+                    ? "1.0x"
+                    : String.format(Locale.US, "%.2fx", v).replaceAll("0x$", "x");
+            TextView tv = new TextView(this);
+            tv.setText(label);
+            tv.setTextSize(selected ? 19f : 16.5f);
+            tv.setTypeface(Typeface.MONOSPACE, selected ? Typeface.BOLD : Typeface.NORMAL);
+            tv.setTextColor(selected ? accent : textPrimary);
+            tv.setGravity(Gravity.CENTER);
+            tv.setPadding(dp(32), dp(10), dp(32), dp(10));
+            tv.setBackgroundColor(Color.TRANSPARENT);
+            tv.setOnClickListener(view -> {
+                dlg.dismiss();
+                cb.onSpeedChosen(v);
+            });
+            container.addView(tv, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
-        ThemedDialogHelper.showThemedMenu(this, title, "בחר את מהירות ההפעלה הרצויה:", labels, idx -> cb.onSpeedChosen(values[idx]));
+
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        }
+        dlg.show();
     }
 
     private interface RepeatSelectedCallback {

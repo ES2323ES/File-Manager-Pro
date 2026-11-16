@@ -209,7 +209,7 @@ public class HomeLayoutActivity extends AppCompatActivity {
                 bg.setColor(ThemeHelper.getCardColor(HomeLayoutActivity.this, theme));
                 h.title.setText(labelForKey(key));
                 h.title.setTextColor(ThemeHelper.getPrimaryTextColor(HomeLayoutActivity.this, theme));
-                h.handle.setColorFilter(ThemeHelper.getSecondaryTextColor(HomeLayoutActivity.this, theme));
+                h.handle.setColorFilter(ThemeHelper.getAccentColor(HomeLayoutActivity.this, theme));
             }
             h.container.setBackground(bg);
         }

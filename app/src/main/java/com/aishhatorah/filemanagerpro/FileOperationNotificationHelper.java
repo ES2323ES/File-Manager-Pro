@@ -38,7 +38,7 @@ public final class FileOperationNotificationHelper {
             if (nm == null) return;
             boolean indet = total <= 0;
             NotificationCompat.Builder b = new NotificationCompat.Builder(context, CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_folder)
+                    .setSmallIcon(R.drawable.ic_app_logo_notif)
                     .setContentTitle(title)
                     .setContentText(detail)
                     .setOnlyAlertOnce(true)
@@ -57,7 +57,7 @@ public final class FileOperationNotificationHelper {
             NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
             NotificationCompat.Builder b = new NotificationCompat.Builder(context, CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_folder)
+                    .setSmallIcon(R.drawable.ic_app_logo_notif)
                     .setContentTitle(title)
                     .setContentText(resultText)
                     .setAutoCancel(true)

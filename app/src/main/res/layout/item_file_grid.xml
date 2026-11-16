@@ -4,20 +4,20 @@
     android:id="@+id/rowCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_margin="4dp"
+    android:layout_margin="0dp"
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    app:cardCornerRadius="13dp"
+    app:cardCornerRadius="0dp"
     app:cardElevation="0dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:minHeight="104dp"
+        android:minHeight="110dp"
         android:orientation="vertical"
-        android:padding="8dp">
+        android:padding="10dp">
 
         <ImageView
             android:id="@+id/ivFileIcon"
@@ -37,7 +37,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:ellipsize="end"
-            android:gravity="center"
+            android:gravity="center_horizontal|top"
+            android:lines="2"
             android:maxLines="2"
             android:textAlignment="center"
             android:textDirection="anyRtl"

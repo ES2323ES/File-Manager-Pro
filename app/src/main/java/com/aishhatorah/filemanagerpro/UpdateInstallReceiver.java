@@ -54,7 +54,7 @@ public class UpdateInstallReceiver extends BroadcastReceiver {
             } else {
                 PrefsManager.setPendingUpdateSuccessBanner(context, true);
                 postSuccessNotification(context);
-                Toast.makeText(context, "File Manager Pro עודכן בהצלחה!", Toast.LENGTH_LONG).show();
+                Toast.makeText(context, "\u2066File Manager Pro\u2069 עודכן בהצלחה", Toast.LENGTH_LONG).show();
             }
         } else if (status == PackageInstaller.STATUS_FAILURE_ABORTED) {
             Toast.makeText(context, "ההתקנה בוטלה", Toast.LENGTH_SHORT).show();
@@ -109,12 +109,11 @@ public class UpdateInstallReceiver extends BroadcastReceiver {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
             );
 
-            String verDisplay = BuildConfig.VERSION_NAME
-                    + (UpdateChecker.compareSemver(BuildConfig.VERSION_NAME, "0.2.5") >= 0 ? " רשמית" : "");
+            String verDisplay = BuildConfig.VERSION_NAME;
             String text = "העדכון לגירסה " + verDisplay + " הושלם בהצלחה. כל ההגדרות והקבצים נשמרו במלואם.";
             NotificationCompat.Builder builder = new NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_storage_internal)
-                    .setContentTitle("File Manager Pro עודכן בהצלחה")
+                    .setSmallIcon(R.drawable.ic_app_logo_notif)
+                    .setContentTitle("\u2066File Manager Pro\u2069 עודכן בהצלחה")
                     .setContentText(text)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
