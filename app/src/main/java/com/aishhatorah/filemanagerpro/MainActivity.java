@@ -17,6 +17,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -30,8 +31,6 @@ import androidx.cardview.widget.CardView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-
-import com.google.android.material.button.MaterialButton;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -63,8 +62,8 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout rootContainer;
     private LinearLayout topBar;
     private View topDivider;
-    private MaterialButton btnAbout;
-    private MaterialButton btnSettings;
+    private ImageButton btnAbout;
+    private ImageButton btnSettings;
     private TextView tvAppTitle;
     private SwipeRefreshLayout swipeRefreshHome;
     private CardView cardStorageAlert;
@@ -242,13 +241,8 @@ public class MainActivity extends AppCompatActivity {
         tvPullHint.setTextSize(ThemeHelper.spScaled(this, 11.5f));
 
         ColorStateList accentState = ColorStateList.valueOf(accent);
-        btnAbout.setTextColor(accent);
-        btnAbout.setIconTint(accentState);
-        btnAbout.setStrokeColor(accentState);
-
-        btnSettings.setTextColor(accent);
-        btnSettings.setIconTint(accentState);
-        btnSettings.setStrokeColor(accentState);
+        btnAbout.setColorFilter(accent);
+        btnSettings.setColorFilter(accent);
 
         cardStorageSummary.setCardBackgroundColor(cardBg);
         tvInternalSummaryTitle.setTextColor(textPrimary);

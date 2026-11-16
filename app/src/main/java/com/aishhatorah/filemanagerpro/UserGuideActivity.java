@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -44,25 +45,37 @@ public class UserGuideActivity extends AppCompatActivity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(bg);
 
-        LinearLayout topBar = new LinearLayout(this);
-        topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        topBar.setPadding(22, 18, 22, 18);
+        // כותרת זהה בעיצובה ליומן השינויים (אייקון אפליקציה + כותרת + תת-כותרת)
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        headerRow.setPadding(dp(20), dp(16), dp(20), dp(10));
 
-        Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
-        btnBack.setOnClickListener(v -> finish());
-        topBar.addView(btnBack);
+        android.widget.ImageView heroIcon = new android.widget.ImageView(this);
+        heroIcon.setImageResource(R.drawable.ic_app_logo);
+        int iconPx = dp(36);
+        LinearLayout.LayoutParams hIcLp = new LinearLayout.LayoutParams(iconPx, iconPx);
+        hIcLp.setMarginEnd(dp(10));
+        headerRow.addView(heroIcon, hIcLp);
 
-        TextView tvTitle = new TextView(this);
-        tvTitle.setText("מדריך למשתמש — v0.2.8");
-        tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(17f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tLp.setMarginStart(14);
-        topBar.addView(tvTitle, tLp);
-        root.addView(topBar);
+        LinearLayout headerText = new LinearLayout(this);
+        headerText.setOrientation(LinearLayout.VERTICAL);
+
+        TextView tvHeader = new TextView(this);
+        tvHeader.setText("מדריך למשתמש");
+        tvHeader.setTextSize(ThemeHelper.spScaled(this, 17.5f));
+        tvHeader.setTypeface(Typeface.DEFAULT_BOLD);
+        tvHeader.setTextColor(textPrimary);
+        headerText.addView(tvHeader);
+
+        TextView tvSub = new TextView(this);
+        tvSub.setText("File Manager Pro");
+        tvSub.setTextSize(ThemeHelper.spScaled(this, 13f));
+        tvSub.setTextColor(textSecondary);
+        headerText.addView(tvSub);
+
+        headerRow.addView(headerText);
+        root.addView(headerRow);
 
         // סרגל קיצורי קפיצה עליון
         HorizontalScrollView navScroll = new HorizontalScrollView(this);
@@ -144,7 +157,26 @@ public class UserGuideActivity extends AppCompatActivity {
 
         mainScroll.addView(body);
         root.addView(mainScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        Button btnClose = ThemedDialogHelper.createThemedButton(this, "סגור", theme, true, false);
+        btnClose.setGravity(Gravity.CENTER);
+        btnClose.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        closeLp.setMargins(dp(16), dp(6), dp(16), dp(12));
+        btnClose.setLayoutParams(closeLp);
+        btnClose.setOnClickListener(v -> finish());
+        root.addView(btnClose);
+
         setContentView(root);
+    }
+
+    private int dp(float value) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value,
+                getResources().getDisplayMetrics()
+        ));
     }
 
     private View addGuideCard(LinearLayout parent, int cardBg, int textPrimary, int textSecondary, int accent,

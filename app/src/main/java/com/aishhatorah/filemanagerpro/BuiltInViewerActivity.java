@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.ImageDecoder;
 import android.graphics.Matrix;
+import android.graphics.Outline;
 import android.graphics.PixelFormat;
 import android.graphics.PointF;
 import android.graphics.SurfaceTexture;
@@ -43,6 +44,7 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
@@ -65,6 +67,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.AppCompatTextView;
 import androidx.cardview.widget.CardView;
 import androidx.core.content.FileProvider;
+import androidx.core.graphics.ColorUtils;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -148,6 +151,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean isAudioMode = false;
     private boolean audioTickerActive = false;
     private AudioPlayerManager.PlaybackListener audioListener;
+    private LinearLayout audioRootLayout = null;
+    private ImageButton audioTopBackBtn = null;
+    private ImageButton audioTopShareBtn = null;
+    private String lastHeaderTitleName = null;
 
     private boolean isVideoMode = false;
     private final List<File> videoPlaylist = new ArrayList<>();
@@ -417,6 +424,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         activeMediaViewport = null;
         activeZoomImageView = null;
         activeVideoSyncRunnable = null;
+        audioRootLayout = null;
+        audioTopBackBtn = null;
+        audioTopShareBtn = null;
+        lastHeaderTitleName = null;
         isVideoLocked = false;
         hasAppliedVideoMatrix = false;
 
@@ -488,7 +499,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         LinearLayout contentArea = new LinearLayout(this);
         contentArea.setOrientation(LinearLayout.VERTICAL);
         contentArea.setGravity(Gravity.CENTER);
-        int areaPad = isLandscape ? dp(8) : dp(12);
+        int areaPad = isAudioMode ? dp(isLandscape ? 8 : 14) : (isLandscape ? dp(8) : dp(12));
         contentArea.setPadding(areaPad, areaPad, areaPad, areaPad);
         root.addView(contentArea, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -496,7 +507,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         setContentView(root);
 
         if (isAudioMode) {
-            renderAudioPlayer(contentArea, cardColor, textPrimary, textSecondary, accent, theme, isLandscape);
+            audioRootLayout = root;
+            renderAudioPlayer(contentArea, bgColor, textPrimary, textSecondary, accent, theme, isLandscape);
         } else if (MediaFormatHelper.isPdfFile(lower)) {
             renderPdfViewer(contentArea, cardColor, textSecondary, theme);
         } else if (FileOpenWithHelper.ACTION_INTERNAL_ARCHIVE.equals(forceType)
@@ -518,7 +530,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
+        bar.setBackgroundColor(isAudioMode ? Color.TRANSPARENT : ThemeHelper.getTopBarColor(this, theme));
         int vPad = isLandscape ? dp(6) : dp(8);
         bar.setPadding(dp(10), vPad, dp(10), vPad);
 
@@ -526,11 +538,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         int effectiveText = translucentOverlay ? Color.WHITE : textPrimary;
         int effectiveSub = translucentOverlay ? Color.parseColor("#CBD5E1") : textSecondary;
 
-        if (isVideoMode) {
-            ImageButton btnBackIcon = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(42), Color.WHITE);
+        if (isVideoMode || isAudioMode) {
+            int backColor = isVideoMode ? Color.WHITE : textPrimary;
+            ImageButton btnBackIcon = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(42), backColor);
             btnBackIcon.setContentDescription("חזרה");
             btnBackIcon.setOnClickListener(v -> proceedCloseOrNavigateBack());
             bar.addView(btnBackIcon);
+            if (isAudioMode) {
+                audioTopBackBtn = btnBackIcon;
+            }
         } else {
             Button btnClose = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
             if (translucentOverlay) {
@@ -545,18 +561,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         centerTitleCol.setOrientation(LinearLayout.VERTICAL);
         centerTitleCol.setGravity(Gravity.CENTER);
 
-        if (isVideoMode) {
+        if (isVideoMode || isAudioMode) {
             tvMarqueeTitle = new TextView(this);
-            tvMarqueeTitle.setText(targetFile.getName());
+            lastHeaderTitleName = targetFile.getName();
+            tvMarqueeTitle.setText(lastHeaderTitleName);
             tvMarqueeTitle.setTextSize(ThemeHelper.spScaled(this, isLandscape ? 13.5f : 14.5f));
             tvMarqueeTitle.setTypeface(Typeface.DEFAULT_BOLD);
-            tvMarqueeTitle.setTextColor(Color.WHITE);
+            tvMarqueeTitle.setTextColor(isVideoMode ? Color.WHITE : effectiveText);
             tvMarqueeTitle.setSingleLine(false);
             tvMarqueeTitle.setMaxLines(2);
             tvMarqueeTitle.setEllipsize(TextUtils.TruncateAt.MIDDLE);
             tvMarqueeTitle.setTextDirection(View.TEXT_DIRECTION_LOCALE);
             tvMarqueeTitle.setGravity(Gravity.CENTER);
-            tvMarqueeTitle.setShadowLayer(4f, 0f, 1.5f, Color.argb(200, 0, 0, 0));
+            if (isVideoMode) {
+                tvMarqueeTitle.setShadowLayer(4f, 0f, 1.5f, Color.argb(200, 0, 0, 0));
+            }
             centerTitleCol.addView(tvMarqueeTitle, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         } else {
@@ -566,7 +585,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     return true;
                 }
             };
-            tvMarqueeTitle.setText("   " + targetFile.getName() + "   •   " + targetFile.getName() + "   ");
+            lastHeaderTitleName = targetFile.getName();
+            tvMarqueeTitle.setText("   " + lastHeaderTitleName + "   •   " + lastHeaderTitleName + "   ");
             tvMarqueeTitle.setTextSize(ThemeHelper.spScaled(this, isLandscape ? 13.5f : 14.5f));
             tvMarqueeTitle.setTypeface(Typeface.DEFAULT_BOLD);
             tvMarqueeTitle.setTextColor(effectiveText);
@@ -630,10 +650,18 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
 
         if (!isVideoMode && !isImageMode) {
-            Button btnShare = ThemedDialogHelper.createThemedButton(this, "שיתוף", theme, true, false);
-            btnShare.setPadding(dp(12), dp(5), dp(12), dp(5));
-            btnShare.setOnClickListener(v -> shareCurrentFile());
-            bar.addView(btnShare);
+            if (isAudioMode) {
+                ImageButton btnShareIcon = createCleanBorderlessIconButton(R.drawable.ic_share, dp(42), effectiveText);
+                btnShareIcon.setContentDescription("שיתוף");
+                btnShareIcon.setOnClickListener(v -> shareCurrentFile());
+                bar.addView(btnShareIcon);
+                audioTopShareBtn = btnShareIcon;
+            } else {
+                Button btnShare = ThemedDialogHelper.createThemedButton(this, "שיתוף", theme, true, false);
+                btnShare.setPadding(dp(12), dp(5), dp(12), dp(5));
+                btnShare.setOnClickListener(v -> shareCurrentFile());
+                bar.addView(btnShare);
+            }
         }
 
         return bar;
@@ -641,7 +669,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void updateMarqueeHeaderName(String name) {
         if (tvMarqueeTitle != null && name != null) {
-            if (isVideoMode) {
+            if (name.equals(lastHeaderTitleName)) return;
+            lastHeaderTitleName = name;
+            if (isVideoMode || isAudioMode) {
                 tvMarqueeTitle.setText(name);
             } else {
                 tvMarqueeTitle.setText("   " + name + "   •   " + name + "   ");
@@ -1113,9 +1143,165 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     // ==================== נגן שמע מתקדם (תור ניגון, טיימר שינה, אקולייזר) ====================
 
+    private static class AudioAdaptivePalette {
+        final int bg;
+        final int textPrimary;
+        final int textSecondary;
+        final int accent;
+        final int playIconTint;
+        final boolean darkSurface;
+
+        AudioAdaptivePalette(int bg, int textPrimary, int textSecondary, int accent, int playIconTint, boolean darkSurface) {
+            this.bg = bg;
+            this.textPrimary = textPrimary;
+            this.textSecondary = textSecondary;
+            this.accent = accent;
+            this.playIconTint = playIconTint;
+            this.darkSurface = darkSurface;
+        }
+    }
+
+    private AudioAdaptivePalette computeAudioAdaptivePalette(
+            Bitmap art,
+            int theme,
+            int defaultBg,
+            int defaultTextPrimary,
+            int defaultTextSecondary,
+            int defaultAccent
+    ) {
+        boolean defaultDark = ThemeHelper.isDarkSurface(this, theme);
+        if (art == null || art.isRecycled() || art.getWidth() <= 0 || art.getHeight() <= 0) {
+            int playIcon = ColorUtils.calculateLuminance(defaultAccent) > 0.62
+                    ? Color.parseColor("#0F172A")
+                    : Color.WHITE;
+            return new AudioAdaptivePalette(defaultBg, defaultTextPrimary, defaultTextSecondary, defaultAccent, playIcon, defaultDark);
+        }
+
+        Bitmap sample = Bitmap.createScaledBitmap(art, 24, 24, true);
+        int count = sample.getWidth() * sample.getHeight();
+        int[] pixels = new int[count];
+        sample.getPixels(pixels, 0, sample.getWidth(), 0, 0, sample.getWidth(), sample.getHeight());
+        if (sample != art) {
+            sample.recycle();
+        }
+
+        final int bins = 15;
+        float[] binScore = new float[bins];
+        float[] binR = new float[bins];
+        float[] binG = new float[bins];
+        float[] binB = new float[bins];
+
+        double sumR = 0, sumG = 0, sumB = 0;
+        int visibleCount = 0;
+        float[] hsv = new float[3];
+
+        for (int p : pixels) {
+            if (Color.alpha(p) < 128) continue;
+            int r = Color.red(p);
+            int g = Color.green(p);
+            int b = Color.blue(p);
+            sumR += r;
+            sumG += g;
+            sumB += b;
+            visibleCount++;
+
+            Color.colorToHSV(p, hsv);
+            float sat = hsv[1];
+            float val = hsv[2];
+            if (val < 0.08f || (val > 0.96f && sat < 0.14f)) continue;
+            float weight = sat * Math.max(0.15f, 1.0f - Math.abs(val - 0.56f) * 1.15f);
+            int bin = Math.min(bins - 1, Math.max(0, (int) (hsv[0] / (360f / bins))));
+            binScore[bin] += weight;
+            binR[bin] += r * weight;
+            binG[bin] += g * weight;
+            binB[bin] += b * weight;
+        }
+
+        if (visibleCount == 0) {
+            int playIcon = ColorUtils.calculateLuminance(defaultAccent) > 0.62
+                    ? Color.parseColor("#0F172A")
+                    : Color.WHITE;
+            return new AudioAdaptivePalette(defaultBg, defaultTextPrimary, defaultTextSecondary, defaultAccent, playIcon, defaultDark);
+        }
+
+        int meanColor = Color.rgb(
+                (int) Math.round(sumR / visibleCount),
+                (int) Math.round(sumG / visibleCount),
+                (int) Math.round(sumB / visibleCount)
+        );
+
+        int bestBin = -1;
+        float bestWeight = 0.0f;
+        for (int i = 0; i < bins; i++) {
+            if (binScore[i] > bestWeight) {
+                bestWeight = binScore[i];
+                bestBin = i;
+            }
+        }
+
+        boolean hasVibrant = bestBin >= 0 && bestWeight > 0.4f;
+        int dominant = hasVibrant
+                ? Color.rgb(
+                Math.min(255, Math.round(binR[bestBin] / bestWeight)),
+                Math.min(255, Math.round(binG[bestBin] / bestWeight)),
+                Math.min(255, Math.round(binB[bestBin] / bestWeight)))
+                : meanColor;
+
+        double artLum = ColorUtils.calculateLuminance(meanColor);
+        boolean darkSurface = defaultDark || artLum < 0.38;
+
+        Color.colorToHSV(dominant, hsv);
+        float bgSat = hasVibrant ? Math.min(0.48f, Math.max(0.22f, hsv[1] * 0.58f)) : 0.06f;
+        int adaptedBg;
+        int adaptedTextPrimary;
+        int adaptedTextSecondary;
+        int adaptedAccent;
+
+        if (darkSurface) {
+            float[] bgHsv = new float[]{hsv[0], bgSat, 0.14f};
+            int deepTint = Color.HSVToColor(bgHsv);
+            adaptedBg = ColorUtils.blendARGB(Color.parseColor("#0A0E17"), deepTint, 0.72f);
+            adaptedTextPrimary = Color.parseColor("#F8FAFC");
+            adaptedTextSecondary = ColorUtils.setAlphaComponent(adaptedTextPrimary, 178);
+
+            if (hasVibrant) {
+                float[] accHsv = new float[]{hsv[0], Math.min(0.86f, Math.max(0.50f, hsv[1])), 0.93f};
+                int candidate = Color.HSVToColor(accHsv);
+                if (ColorUtils.calculateContrast(candidate, adaptedBg) < 4.5) {
+                    candidate = ColorUtils.blendARGB(candidate, Color.WHITE, 0.35f);
+                }
+                adaptedAccent = candidate;
+            } else {
+                adaptedAccent = Color.parseColor("#60A5FA");
+            }
+        } else {
+            float[] bgHsv = new float[]{hsv[0], Math.min(0.24f, bgSat), 0.96f};
+            int softTint = Color.HSVToColor(bgHsv);
+            adaptedBg = ColorUtils.blendARGB(Color.parseColor("#F8FAFC"), softTint, 0.78f);
+            adaptedTextPrimary = Color.parseColor("#0F172A");
+            adaptedTextSecondary = ColorUtils.setAlphaComponent(adaptedTextPrimary, 175);
+
+            if (hasVibrant) {
+                float[] accHsv = new float[]{hsv[0], Math.min(0.95f, Math.max(0.58f, hsv[1])), 0.52f};
+                int candidate = Color.HSVToColor(accHsv);
+                if (ColorUtils.calculateContrast(candidate, adaptedBg) < 4.5) {
+                    candidate = ColorUtils.blendARGB(candidate, Color.BLACK, 0.32f);
+                }
+                adaptedAccent = candidate;
+            } else {
+                adaptedAccent = defaultAccent;
+            }
+        }
+
+        int playIconTint = ColorUtils.calculateLuminance(adaptedAccent) > 0.58
+                ? Color.parseColor("#0F172A")
+                : Color.WHITE;
+        return new AudioAdaptivePalette(adaptedBg, adaptedTextPrimary, adaptedTextSecondary, adaptedAccent, playIconTint, darkSurface);
+    }
+
     private void renderAudioPlayer(
             LinearLayout host,
-            int cardColor,
+            int defaultBgColor,
             int textPrimary,
             int textSecondary,
             int accent,
@@ -1129,43 +1315,44 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         float smallestDp = Math.min(dm.widthPixels, dm.heightPixels) / dm.density;
         float scale = Math.max(0.82f, Math.min(1.06f, smallestDp / 380f));
 
-        int primaryBtnPx = dp(Math.round(52 * scale));
+        int primaryBtnPx = dp(Math.round(54 * scale));
         int skipBtnPx = dp(Math.round(42 * scale));
         int seek10BtnPx = dp(Math.round(40 * scale));
-        int repeatBtnPx = dp(Math.round(38 * scale));
+        int secRowBtnPx = dp(Math.round(40 * scale));
         int btnMarginPx = dp(Math.round(6 * scale));
 
-        LinearLayout card = createSurfaceCard(cardColor);
+        // מסך נקי באחידות מלאה ללא מלבנים מקיפים
+        LinearLayout playerRoot = new LinearLayout(this);
+        playerRoot.setBackground(null);
         if (isLandscape) {
-            card.setOrientation(LinearLayout.HORIZONTAL);
-            card.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-            card.setPadding(dp(12), dp(10), dp(12), dp(10));
+            playerRoot.setOrientation(LinearLayout.HORIZONTAL);
+            playerRoot.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+            playerRoot.setPadding(dp(8), dp(4), dp(8), dp(4));
         } else {
-            card.setOrientation(LinearLayout.VERTICAL);
+            playerRoot.setOrientation(LinearLayout.VERTICAL);
         }
 
         FrameLayout stageFrame = new FrameLayout(this);
-
-        CardView artCard = new CardView(this);
-        artCard.setRadius(dp(20));
-        artCard.setCardElevation(0f);
-        int stageBg = !ThemeHelper.isDarkSurface(this, theme)
-                ? Color.parseColor("#EFF6FF")
-                : Color.parseColor("#0B1325");
-        artCard.setCardBackgroundColor(stageBg);
+        stageFrame.setBackground(null);
 
         final ImageView ivArt = new ImageView(this);
         ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        artCard.addView(ivArt, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        ivArt.setBackgroundColor(Color.TRANSPARENT);
+        ivArt.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(20));
+            }
+        });
 
-        stageFrame.addView(artCard, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams artLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER);
+        stageFrame.addView(ivArt, artLp);
 
         final TextView tvDoubleTapBadge = createSeekOverlayBadge();
         stageFrame.addView(tvDoubleTapBadge);
 
-        attachDoubleTapSeekGesture(artCard, tvDoubleTapBadge, deltaSec -> mgr.seekBy(deltaSec * 1000));
+        attachDoubleTapSeekGesture(stageFrame, tvDoubleTapBadge, deltaSec -> mgr.seekBy(deltaSec * 1000));
 
         LinearLayout controlsColumn = new LinearLayout(this);
         controlsColumn.setOrientation(LinearLayout.VERTICAL);
@@ -1174,17 +1361,17 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         if (isLandscape) {
             LinearLayout.LayoutParams stageLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.44f);
             stageLp.rightMargin = dp(14);
-            card.addView(stageFrame, stageLp);
+            playerRoot.addView(stageFrame, stageLp);
 
             LinearLayout.LayoutParams ctrlLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.56f);
-            card.addView(controlsColumn, ctrlLp);
+            playerRoot.addView(controlsColumn, ctrlLp);
         } else {
             LinearLayout.LayoutParams stageLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-            stageLp.bottomMargin = dp(8);
-            card.addView(stageFrame, stageLp);
+            stageLp.bottomMargin = dp(10);
+            playerRoot.addView(stageFrame, stageLp);
 
-            card.addView(controlsColumn, new LinearLayout.LayoutParams(
+            playerRoot.addView(controlsColumn, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
 
@@ -1192,7 +1379,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         timeRowLtr.setOrientation(LinearLayout.HORIZONTAL);
         timeRowLtr.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         timeRowLtr.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        timeRowLtr.setPadding(dp(4), dp(4), dp(4), dp(2));
+        timeRowLtr.setPadding(dp(6), dp(4), dp(6), dp(2));
 
         final TextView tvElapsedLeftmost = new TextView(this);
         tvElapsedLeftmost.setText("00:00");
@@ -1203,7 +1390,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         final TextView tvTotalNextToIt = new TextView(this);
         tvTotalNextToIt.setText("  /  00:00");
-        tvTotalNextToIt.setTextColor(textSecondary);
+        tvTotalNextToIt.setTextColor(accent);
         tvTotalNextToIt.setTextSize(13.5f);
         tvTotalNextToIt.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         timeRowLtr.addView(tvTotalNextToIt);
@@ -1211,22 +1398,44 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         controlsColumn.addView(timeRowLtr, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        final SeekBar seekBar = new SeekBar(this);
-        seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        final WavySeekBar seekBar = new WavySeekBar(this);
+        seekBar.setColors(accent, ColorUtils.setAlphaComponent(textPrimary, 56), accent);
         controlsColumn.addView(seekBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // שורה 1: 10 שניות אחורה | הקודם | השהה/נגן | הבא | 10 שניות קדימה (הסרת העיגולים מלבד כפתור הנגן הראשי)
         LinearLayout transportRow = new LinearLayout(this);
         transportRow.setOrientation(LinearLayout.HORIZONTAL);
         transportRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         transportRow.setGravity(Gravity.CENTER);
-        transportRow.setPadding(0, dp(isLandscape ? 6 : 10), 0, dp(isLandscape ? 6 : 8));
+        transportRow.setPadding(0, dp(isLandscape ? 4 : 8), 0, dp(isLandscape ? 4 : 6));
 
-        ImageButton btnBack10 = createResponsiveRoundIconButton(R.drawable.ic_replay_10, seek10BtnPx, btnMarginPx, false, accent, theme);
-        ImageButton btnPrevSong = createResponsiveRoundIconButton(R.drawable.ic_skip_prev, skipBtnPx, btnMarginPx, false, accent, theme);
+        final ImageButton btnBack10 = createCleanBorderlessIconButton(R.drawable.ic_replay_10, seek10BtnPx, textPrimary);
+        btnBack10.setContentDescription("10 שניות אחורה");
+        final ImageButton btnPrevSong = createCleanBorderlessIconButton(R.drawable.ic_skip_prev, skipBtnPx, textPrimary);
+        btnPrevSong.setContentDescription("רצועה קודמת");
         final ImageButton btnPlayPause = createResponsiveRoundIconButton(R.drawable.ic_pause, primaryBtnPx, btnMarginPx, true, accent, theme);
-        ImageButton btnNextSong = createResponsiveRoundIconButton(R.drawable.ic_skip_next, skipBtnPx, btnMarginPx, false, accent, theme);
-        ImageButton btnFwd10 = createResponsiveRoundIconButton(R.drawable.ic_forward_10, seek10BtnPx, btnMarginPx, false, accent, theme);
+        btnPlayPause.setContentDescription("נגן / השהה");
+        final ImageButton btnNextSong = createCleanBorderlessIconButton(R.drawable.ic_skip_next, skipBtnPx, textPrimary);
+        btnNextSong.setContentDescription("רצועה הבאה");
+        final ImageButton btnFwd10 = createCleanBorderlessIconButton(R.drawable.ic_forward_10, seek10BtnPx, textPrimary);
+        btnFwd10.setContentDescription("10 שניות קדימה");
+
+        LinearLayout.LayoutParams b10Lp = new LinearLayout.LayoutParams(seek10BtnPx, seek10BtnPx);
+        b10Lp.setMargins(btnMarginPx, 0, btnMarginPx, 0);
+        btnBack10.setLayoutParams(b10Lp);
+
+        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(skipBtnPx, skipBtnPx);
+        pLp.setMargins(btnMarginPx, 0, btnMarginPx, 0);
+        btnPrevSong.setLayoutParams(pLp);
+
+        LinearLayout.LayoutParams nLp = new LinearLayout.LayoutParams(skipBtnPx, skipBtnPx);
+        nLp.setMargins(btnMarginPx, 0, btnMarginPx, 0);
+        btnNextSong.setLayoutParams(nLp);
+
+        LinearLayout.LayoutParams f10Lp = new LinearLayout.LayoutParams(seek10BtnPx, seek10BtnPx);
+        f10Lp.setMargins(btnMarginPx, 0, btnMarginPx, 0);
+        btnFwd10.setLayoutParams(f10Lp);
 
         transportRow.addView(btnBack10);
         transportRow.addView(btnPrevSong);
@@ -1236,43 +1445,98 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         controlsColumn.addView(transportRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        FrameLayout bottomCenterBar = new FrameLayout(this);
-        bottomCenterBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        bottomCenterBar.setPadding(dp(2), dp(2), dp(2), dp(4));
+        // שורה 2 מתחת לנגן/השהה: ימין (+ תפריט כלים), אמצע (אייקון מהירות בלבד), שמאל (אייקון חזרה בלבד)
+        FrameLayout secondRow = new FrameLayout(this);
+        secondRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        secondRow.setPadding(dp(14), dp(2), dp(14), dp(2));
 
-        final ImageButton btnRepeatMode = createResponsiveRoundIconButton(R.drawable.ic_repeat_off, repeatBtnPx, 0, false, accent, theme);
-        FrameLayout.LayoutParams repLp = new FrameLayout.LayoutParams(repeatBtnPx, repeatBtnPx, Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        bottomCenterBar.addView(btnRepeatMode, repLp);
+        final ImageButton btnMorePlus = createCleanBorderlessIconButton(R.drawable.ic_add, secRowBtnPx, textPrimary);
+        btnMorePlus.setContentDescription("כלים נוספים");
+        secondRow.addView(btnMorePlus, new FrameLayout.LayoutParams(
+                secRowBtnPx, secRowBtnPx, Gravity.RIGHT | Gravity.CENTER_VERTICAL));
 
-        final MaterialButton btnSpeedCenter = createSpeedPillButton(mgr.getPlaybackSpeed(), accent, theme);
-        FrameLayout.LayoutParams spdLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        bottomCenterBar.addView(btnSpeedCenter, spdLp);
+        final ImageButton btnSpeedCenter = createCleanBorderlessIconButton(R.drawable.ic_speed, secRowBtnPx, textPrimary);
+        btnSpeedCenter.setContentDescription("מהירות השמעה");
+        secondRow.addView(btnSpeedCenter, new FrameLayout.LayoutParams(
+                secRowBtnPx, secRowBtnPx, Gravity.CENTER));
 
-        controlsColumn.addView(bottomCenterBar, new LinearLayout.LayoutParams(
+        final ImageButton btnRepeatMode = createCleanBorderlessIconButton(R.drawable.ic_repeat_off, secRowBtnPx, textPrimary);
+        btnRepeatMode.setContentDescription("חזרה");
+        secondRow.addView(btnRepeatMode, new FrameLayout.LayoutParams(
+                secRowBtnPx, secRowBtnPx, Gravity.LEFT | Gravity.CENTER_VERTICAL));
+
+        controlsColumn.addView(secondRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // סעיף 22: סרגל כלים מתקדם לשמע (תור ניגון, טיימר שינה, אקולייזר, חיתוך אודיו)
-        LinearLayout proAudioRow = new LinearLayout(this);
-        proAudioRow.setOrientation(LinearLayout.HORIZONTAL);
-        proAudioRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        proAudioRow.setGravity(Gravity.CENTER);
-        proAudioRow.setPadding(0, dp(6), 0, 0);
-
-        Button btnQueue = createCompactAudioAction("תור", R.drawable.ic_queue, accent, textPrimary);
-        final Button btnSleep = createCompactAudioAction("שינה", R.drawable.ic_sleep_timer, accent, textPrimary);
-        Button btnEq = createCompactAudioAction("אקולייזר", R.drawable.ic_equalizer, accent, textPrimary);
-        Button btnCut = createCompactAudioAction("חתוך", R.drawable.ic_audio_cutter, accent, textPrimary);
-
-        proAudioRow.addView(btnQueue);
-        proAudioRow.addView(btnSleep);
-        proAudioRow.addView(btnEq);
-        proAudioRow.addView(btnCut);
-        controlsColumn.addView(proAudioRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        host.addView(card, new LinearLayout.LayoutParams(
+        host.addView(playerRoot, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        final AudioAdaptivePalette[] activePalHolder = new AudioAdaptivePalette[]{
+                computeAudioAdaptivePalette(null, theme, defaultBgColor, textPrimary, textSecondary, accent)
+        };
+        final Object[] lastArtworkKey = new Object[]{new Object()};
+        final String[] lastTrackCounter = new String[]{null};
+        final int[] lastPlayRes = new int[]{0};
+        final int[] lastRepeatRes = new int[]{0};
+        final String[] lastElapsedStr = new String[]{null};
+        final String[] lastTotalStr = new String[]{null};
+
+        final Runnable applyPaletteAndButtonTints = () -> {
+            AudioAdaptivePalette pal = activePalHolder[0];
+            if (audioRootLayout != null) {
+                audioRootLayout.setBackgroundColor(pal.bg);
+            }
+            if (topBar != null) {
+                topBar.setBackgroundColor(Color.TRANSPARENT);
+            }
+            Window window = getWindow();
+            if (window != null) {
+                window.setStatusBarColor(pal.bg);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    window.setNavigationBarColor(pal.bg);
+                }
+                WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
+                if (controller != null) {
+                    controller.setAppearanceLightStatusBars(!pal.darkSurface);
+                    controller.setAppearanceLightNavigationBars(!pal.darkSurface);
+                }
+            }
+            if (tvMarqueeTitle != null) {
+                tvMarqueeTitle.setTextColor(pal.textPrimary);
+            }
+            if (tvFolderTrackCounter != null) {
+                tvFolderTrackCounter.setTextColor(pal.textSecondary);
+            }
+            if (audioTopBackBtn != null) {
+                audioTopBackBtn.setColorFilter(pal.textPrimary);
+            }
+            if (audioTopShareBtn != null) {
+                audioTopShareBtn.setColorFilter(pal.textPrimary);
+            }
+            tvElapsedLeftmost.setTextColor(pal.accent);
+            tvTotalNextToIt.setTextColor(pal.accent);
+            seekBar.setColors(pal.accent, ColorUtils.setAlphaComponent(pal.textPrimary, 58), pal.accent);
+
+            if (btnPlayPause.getBackground() instanceof GradientDrawable) {
+                ((GradientDrawable) btnPlayPause.getBackground()).setColor(pal.accent);
+            }
+            btnPlayPause.setColorFilter(pal.playIconTint);
+
+            btnBack10.setColorFilter(pal.textPrimary);
+            btnPrevSong.setColorFilter(pal.textPrimary);
+            btnNextSong.setColorFilter(pal.textPrimary);
+            btnFwd10.setColorFilter(pal.textPrimary);
+            btnMorePlus.setColorFilter(pal.textPrimary);
+            btnSpeedCenter.setColorFilter(Math.abs(mgr.getPlaybackSpeed() - 1.0f) >= 0.02f ? pal.accent : pal.textPrimary);
+            btnRepeatMode.setColorFilter(mgr.getRepeatMode() != AudioPlayerManager.REPEAT_OFF ? pal.accent : pal.textPrimary);
+
+            Bitmap curArt = mgr.getCurrentArtwork();
+            if (curArt == null || curArt.isRecycled()) {
+                ivArt.setColorFilter(pal.accent);
+            } else {
+                ivArt.clearColorFilter();
+            }
+        };
 
         btnBack10.setOnClickListener(v -> mgr.seekBy(-10_000));
         btnFwd10.setOnClickListener(v -> mgr.seekBy(10_000));
@@ -1282,35 +1546,60 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         btnSpeedCenter.setOnClickListener(v -> showSpeedPickerDialog("בחירת מהירות השיר", mgr.getPlaybackSpeed(), chosen -> {
             mgr.setPlaybackSpeed(this, chosen);
-            btnSpeedCenter.setText(String.format(Locale.US, "מהירות %.2gx", chosen).replace(".00", ".0"));
+            btnSpeedCenter.setColorFilter(Math.abs(chosen - 1.0f) >= 0.02f ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
         }));
 
         btnRepeatMode.setOnClickListener(v -> {
             int nextMode = mgr.cycleRepeatMode();
-            btnRepeatMode.setImageResource(resolveRepeatIcon(nextMode));
+            lastRepeatRes[0] = resolveRepeatIcon(nextMode);
+            btnRepeatMode.setImageResource(lastRepeatRes[0]);
+            btnRepeatMode.setColorFilter(nextMode != AudioPlayerManager.REPEAT_OFF ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
             String toastText = nextMode == AudioPlayerManager.REPEAT_ONE
                     ? "חזרה על השיר עצמו"
                     : (nextMode == AudioPlayerManager.REPEAT_FOLDER ? "חזרה על כל התיקייה" : "ללא חזרה");
             Toast.makeText(this, toastText, Toast.LENGTH_SHORT).show();
         });
 
-        btnQueue.setOnClickListener(v -> showAudioQueueDialog());
-        btnSleep.setOnClickListener(v -> showSleepTimerDialog());
-        btnEq.setOnClickListener(v -> showEqualizerDialog());
-        btnCut.setOnClickListener(v -> {
-            File current = mgr.getCurrentFile() != null ? mgr.getCurrentFile() : targetFile;
-            Intent ci = new Intent(this, AudioCutterActivity.class);
-            ci.putExtra(AudioCutterActivity.EXTRA_INITIAL_PATH, current.getAbsolutePath());
-            startActivity(ci);
+        btnMorePlus.setOnClickListener(v -> {
+            long remMs = mgr.getSleepTimerRemainingMs();
+            String sleepLabel = remMs > 0
+                    ? ("טיימר שינה (" + Math.max(1, (int) Math.ceil(remMs / 60_000.0)) + " דק')")
+                    : "טיימר שינה";
+            List<String> tools = Arrays.asList(
+                    "תור ניגון",
+                    sleepLabel,
+                    "אקולייזר והדגשת בס",
+                    "חתוך אודיו"
+            );
+            String title = targetFile != null ? targetFile.getName() : "אפשרויות שמע";
+            ThemedDialogHelper.showThemedMenu(this, "כלים נוספים", title, tools, idx -> {
+                switch (idx) {
+                    case 0:
+                        showAudioQueueDialog();
+                        break;
+                    case 1:
+                        showSleepTimerDialog();
+                        break;
+                    case 2:
+                        showEqualizerDialog();
+                        break;
+                    case 3:
+                        File current = mgr.getCurrentFile() != null ? mgr.getCurrentFile() : targetFile;
+                        Intent ci = new Intent(this, AudioCutterActivity.class);
+                        ci.putExtra(AudioCutterActivity.EXTRA_INITIAL_PATH, current.getAbsolutePath());
+                        startActivity(ci);
+                        break;
+                }
+            });
         });
 
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        seekBar.setOnSeekBarChangeListener(new WavySeekBar.OnSeekBarChangeListener() {
             @Override
-            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+            public void onProgressChanged(WavySeekBar sb, int progress, boolean fromUser) {
                 if (fromUser) mgr.seekTo(progress);
             }
-            @Override public void onStartTrackingTouch(SeekBar sb) {}
-            @Override public void onStopTrackingTouch(SeekBar sb) {}
+            @Override public void onStartTrackingTouch(WavySeekBar sb) {}
+            @Override public void onStopTrackingTouch(WavySeekBar sb) {}
         });
 
         final Runnable syncAudioUi = () -> {
@@ -1320,28 +1609,48 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 updateMarqueeHeaderName(active.getName());
             }
             if (tvFolderTrackCounter != null) {
-                tvFolderTrackCounter.setVisibility(View.VISIBLE);
-                tvFolderTrackCounter.setText(mgr.getCurrentTrackNumber() + "/" + mgr.getFolderTrackCount());
+                String cntStr = mgr.getCurrentTrackNumber() + "/" + mgr.getFolderTrackCount();
+                if (!cntStr.equals(lastTrackCounter[0])) {
+                    lastTrackCounter[0] = cntStr;
+                    tvFolderTrackCounter.setVisibility(View.VISIBLE);
+                    tvFolderTrackCounter.setText(cntStr);
+                }
             }
 
             Bitmap art = mgr.getCurrentArtwork();
-            if (art != null && !art.isRecycled()) {
-                ivArt.setPadding(0, 0, 0, 0);
-                ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                ivArt.setImageBitmap(art);
+            if (lastArtworkKey[0] != art) {
+                lastArtworkKey[0] = art;
+                if (art != null && !art.isRecycled()) {
+                    ivArt.setPadding(0, 0, 0, 0);
+                    ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    ivArt.setClipToOutline(true);
+                    ivArt.setImageBitmap(art);
+                } else {
+                    int fallbackPad = dp(isLandscape ? 28 : 54);
+                    ivArt.setPadding(fallbackPad, fallbackPad, fallbackPad, fallbackPad);
+                    ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    ivArt.setClipToOutline(false);
+                    ivArt.setImageResource(R.drawable.ic_audio);
+                }
+                activePalHolder[0] = computeAudioAdaptivePalette(art, theme, defaultBgColor, textPrimary, textSecondary, accent);
+                applyPaletteAndButtonTints.run();
             } else {
-                int fallbackPad = dp(isLandscape ? 28 : 44);
-                ivArt.setPadding(fallbackPad, fallbackPad, fallbackPad, fallbackPad);
-                ivArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                ivArt.setImageResource(R.drawable.ic_audio);
+                btnSpeedCenter.setColorFilter(Math.abs(mgr.getPlaybackSpeed() - 1.0f) >= 0.02f
+                        ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
+                btnRepeatMode.setColorFilter(mgr.getRepeatMode() != AudioPlayerManager.REPEAT_OFF
+                        ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
             }
 
-            btnPlayPause.setImageResource(mgr.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
-            btnSpeedCenter.setText(formatSpeedLabel(mgr.getPlaybackSpeed()));
-            btnRepeatMode.setImageResource(resolveRepeatIcon(mgr.getRepeatMode()));
-
-            long remMs = mgr.getSleepTimerRemainingMs();
-            btnSleep.setText(remMs > 0 ? ("שינה (" + Math.max(1, (int) Math.ceil(remMs / 60_000.0)) + "ד)") : "שינה");
+            int playRes = mgr.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play;
+            if (lastPlayRes[0] != playRes) {
+                lastPlayRes[0] = playRes;
+                btnPlayPause.setImageResource(playRes);
+            }
+            int repRes = resolveRepeatIcon(mgr.getRepeatMode());
+            if (lastRepeatRes[0] != repRes) {
+                lastRepeatRes[0] = repRes;
+                btnRepeatMode.setImageResource(repRes);
+            }
         };
 
         audioListener = syncAudioUi::run;
@@ -1357,41 +1666,19 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 int pos = mgr.getCurrentPositionMs();
                 seekBar.setMax(Math.max(1, dur));
                 seekBar.setProgress(pos);
-                tvElapsedLeftmost.setText(formatClock(pos));
-                tvTotalNextToIt.setText("  /  " + formatClock(dur));
-                long remMs = mgr.getSleepTimerRemainingMs();
-                if (remMs > 0) {
-                    btnSleep.setText("שינה (" + formatClock((int) remMs) + ")");
+                String posStr = formatClock(pos);
+                if (!posStr.equals(lastElapsedStr[0])) {
+                    lastElapsedStr[0] = posStr;
+                    tvElapsedLeftmost.setText(posStr);
+                }
+                String totStr = "  /  " + formatClock(dur);
+                if (!totStr.equals(lastTotalStr[0])) {
+                    lastTotalStr[0] = totStr;
+                    tvTotalNextToIt.setText(totStr);
                 }
                 uiHandler.postDelayed(this, 250);
             }
         });
-    }
-
-    private Button createCompactAudioAction(String label, int iconRes, int accent, int textPrimary) {
-        MaterialButton btn = new MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
-        btn.setText(label);
-        btn.setAllCaps(false);
-        btn.setTextSize(11f);
-        btn.setTypeface(Typeface.DEFAULT_BOLD);
-        btn.setTextColor(textPrimary);
-        btn.setStrokeColor(ColorStateList.valueOf(Color.argb(65, Color.red(accent), Color.green(accent), Color.blue(accent))));
-        btn.setIconResource(iconRes);
-        btn.setIconTint(ColorStateList.valueOf(accent));
-        btn.setIconSize(dp(15));
-        btn.setIconPadding(dp(4));
-        btn.setCornerRadius(dp(10));
-        btn.setMinHeight(0);
-        btn.setMinimumHeight(0);
-        btn.setMinWidth(0);
-        btn.setMinimumWidth(0);
-        btn.setInsetTop(0);
-        btn.setInsetBottom(0);
-        btn.setPadding(dp(6), dp(5), dp(6), dp(5));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lp.setMargins(dp(2), 0, dp(2), 0);
-        btn.setLayoutParams(lp);
-        return btn;
     }
 
     private void showAudioQueueDialog() {
@@ -1696,8 +1983,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         tvVidPos.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         timeBar.addView(tvVidPos);
 
-        final SeekBar videoSeek = new SeekBar(this);
-        videoSeek.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        final WavySeekBar videoSeek = new WavySeekBar(this);
+        videoSeek.setColors(accent, Color.argb(95, 255, 255, 255), Color.WHITE);
         timeBar.addView(videoSeek, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         final TextView tvVidDur = new TextView(this);
@@ -1866,9 +2153,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             applyMediaImmersiveAndLayoutState();
         });
 
-        videoSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        videoSeek.setOnSeekBarChangeListener(new WavySeekBar.OnSeekBarChangeListener() {
             @Override
-            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+            public void onProgressChanged(WavySeekBar sb, int progress, boolean fromUser) {
                 if (fromUser && videoPrepared) {
                     int clamped = Math.max(0, progress);
                     tvVidPos.setText(formatClock(clamped));
@@ -1882,11 +2169,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 }
             }
             @Override
-            public void onStartTrackingTouch(SeekBar sb) {
+            public void onStartTrackingTouch(WavySeekBar sb) {
                 isUserSeekingVideo = true;
             }
             @Override
-            public void onStopTrackingTouch(SeekBar sb) {
+            public void onStopTrackingTouch(WavySeekBar sb) {
                 isUserSeekingVideo = false;
                 if (videoPrepared) {
                     int target = Math.max(0, sb.getProgress());
@@ -3115,25 +3402,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             btn.setBackgroundColor(Color.TRANSPARENT);
         }
         btn.setLayoutParams(new LinearLayout.LayoutParams(sizePx, sizePx));
-        return btn;
-    }
-
-    private MaterialButton createSpeedPillButton(float speed, int accent, int theme) {
-        MaterialButton btn = new MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
-        btn.setText(formatSpeedLabel(speed));
-        btn.setAllCaps(false);
-        btn.setTextSize(12f);
-        btn.setTypeface(Typeface.DEFAULT_BOLD);
-        btn.setTextColor(accent);
-        btn.setStrokeColor(ColorStateList.valueOf(accent));
-        btn.setIconResource(R.drawable.ic_speed);
-        btn.setIconTint(ColorStateList.valueOf(accent));
-        btn.setIconSize(dp(16));
-        btn.setIconPadding(dp(5));
-        btn.setCornerRadius(999);
-        btn.setMinHeight(0);
-        btn.setMinimumHeight(0);
-        btn.setPadding(dp(10), dp(6), dp(10), dp(6));
         return btn;
     }
 
