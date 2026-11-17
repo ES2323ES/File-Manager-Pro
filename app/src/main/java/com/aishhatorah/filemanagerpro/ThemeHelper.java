@@ -14,13 +14,17 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
+import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Build;
+import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.Switch;
 
@@ -308,10 +312,11 @@ public class ThemeHelper {
             targetView.setBackgroundColor(bg);
             return;
         }
-        String key = path + ":" + f.lastModified();
+        int blurRadius = PrefsManager.getWallpaperBlurRadius(context);
+        String key = path + ":" + f.lastModified() + ":b" + blurRadius;
         Bitmap blurred = cachedWallKey.equals(key) ? cachedBlurredWall : null;
         if (blurred == null) {
-            blurred = decodeAndBlurWallpaper(path, 14);
+            blurred = decodeAndBlurWallpaper(path, blurRadius);
             if (blurred != null) {
                 cachedWallKey = key;
                 cachedBlurredWall = blurred;
@@ -328,12 +333,13 @@ public class ThemeHelper {
 
     private static Bitmap decodeAndBlurWallpaper(String path, int radius) {
         try {
+            int maxOut = radius <= 4 ? 760 : 480;
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(path, bounds);
             int maxDim = Math.max(bounds.outWidth, bounds.outHeight);
             int sample = 1;
-            while (maxDim / sample > 480) {
+            while (maxDim / sample > maxOut) {
                 sample *= 2;
             }
             BitmapFactory.Options opts = new BitmapFactory.Options();
@@ -342,7 +348,8 @@ public class ThemeHelper {
             Bitmap decoded = BitmapFactory.decodeFile(path, opts);
             if (decoded == null) return null;
 
-            float scale = Math.min(1f, 340f / Math.max(1, Math.max(decoded.getWidth(), decoded.getHeight())));
+            float scaleCap = radius <= 4 ? 640f : 340f;
+            float scale = Math.min(1f, scaleCap / Math.max(1, Math.max(decoded.getWidth(), decoded.getHeight())));
             Bitmap scaled = scale < 0.99f
                     ? Bitmap.createScaledBitmap(decoded,
                             Math.max(1, Math.round(decoded.getWidth() * scale)),
@@ -351,6 +358,7 @@ public class ThemeHelper {
                     : decoded.copy(Bitmap.Config.ARGB_8888, true);
             if (scaled != decoded) decoded.recycle();
             if (scaled == null) return null;
+            if (radius < 1) return scaled;
             return fastStackBlur(scaled, radius);
         } catch (Throwable ignored) {
             return null;
@@ -589,10 +597,66 @@ public class ThemeHelper {
 
     public static void applySeekBarTint(SeekBar sb, int accent) {
         if (sb == null) return;
-        ColorStateList list = ColorStateList.valueOf(accent);
-        sb.setProgressTintList(list);
-        sb.setThumbTintList(list);
-        sb.setProgressBackgroundTintList(ColorStateList.valueOf(ColorUtils.setAlphaComponent(accent, 65)));
+        float d = sb.getResources().getDisplayMetrics().density;
+        int trackH = Math.max(4, Math.round(8f * d));
+        float cornerR = 999f;
+
+        GradientDrawable trackBg = new GradientDrawable();
+        trackBg.setCornerRadius(cornerR);
+        trackBg.setColor(ColorUtils.setAlphaComponent(accent, 65));
+
+        GradientDrawable trackFill = new GradientDrawable();
+        trackFill.setCornerRadius(cornerR);
+        trackFill.setColor(accent);
+        ClipDrawable clipFill = new ClipDrawable(trackFill, Gravity.START, ClipDrawable.HORIZONTAL);
+
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{trackBg, clipFill});
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.progress);
+        layers.setLayerHeight(0, trackH);
+        layers.setLayerHeight(1, trackH);
+        layers.setLayerGravity(0, Gravity.CENTER_VERTICAL);
+        layers.setLayerGravity(1, Gravity.CENTER_VERTICAL);
+
+        sb.setProgressDrawable(layers);
+        sb.setProgressTintList(null);
+        sb.setProgressBackgroundTintList(null);
+        sb.setSecondaryProgressTintList(null);
+
+        GradientDrawable stickThumb = new GradientDrawable();
+        stickThumb.setShape(GradientDrawable.RECTANGLE);
+        stickThumb.setCornerRadius(999f);
+        stickThumb.setColor(accent);
+        int thumbW = Math.max(4, Math.round(5.5f * d));
+        int thumbH = Math.max(18, Math.round(24f * d));
+        stickThumb.setSize(thumbW, thumbH);
+
+        sb.setThumb(stickThumb);
+        sb.setThumbTintList(null);
+        sb.setThumbOffset(thumbW / 2);
+        sb.setSplitTrack(false);
+        sb.setMinimumHeight(Math.round(34f * d));
+        int hPad = Math.round(10f * d);
+        sb.setPadding(hPad, Math.round(4f * d), hPad, Math.round(4f * d));
+    }
+
+    public static void styleHorizontalProgressBar(ProgressBar pb, int accent) {
+        if (pb == null) return;
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(999f);
+        bg.setColor(ColorUtils.setAlphaComponent(accent, 45));
+
+        GradientDrawable fill = new GradientDrawable();
+        fill.setCornerRadius(999f);
+        fill.setColor(accent);
+        ClipDrawable clip = new ClipDrawable(fill, Gravity.START, ClipDrawable.HORIZONTAL);
+
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{bg, clip});
+        ld.setId(0, android.R.id.background);
+        ld.setId(1, android.R.id.progress);
+        pb.setProgressDrawable(ld);
+        pb.setProgressTintList(null);
+        pb.setProgressBackgroundTintList(null);
     }
 
     public static void applyWindowStatusBar(Activity activity, int theme) {

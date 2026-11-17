@@ -248,6 +248,16 @@ public class PrefsManager {
         prefs(context).edit().putString("home_wallpaper_path", path == null ? "" : path).apply();
     }
 
+    public static int getWallpaperBlurRadius(Context context) {
+        int val = prefs(context).getInt("wallpaper_blur_radius", 14);
+        return Math.max(0, Math.min(28, val));
+    }
+
+    public static void setWallpaperBlurRadius(Context context, int radius) {
+        int clamped = Math.max(0, Math.min(28, radius));
+        prefs(context).edit().putInt("wallpaper_blur_radius", clamped).apply();
+    }
+
     public static boolean isShowHomeCategoryLabels(Context context) {
         return prefs(context).getBoolean("show_home_category_labels", true);
     }

@@ -78,7 +78,7 @@ public class MiniAudioBarHelper {
         songWavyBar.setProgress(0);
         songWavyBar.setPlaying(false);
         LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(activity, 18));
+                ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(activity, 22));
         pbLp.topMargin = dpToPx(activity, 4);
         textCol.addView(songWavyBar, pbLp);
 

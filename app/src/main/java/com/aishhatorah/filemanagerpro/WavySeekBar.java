@@ -5,6 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RectF;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
@@ -13,7 +15,8 @@ import android.view.ViewParent;
 import androidx.annotation.NonNull;
 
 /**
- * סרגל התקדמות בצורת גלים עדינים בעת ניגון, ובצורת פס רציף בעת עצירה.
+ * סרגל התקדמות עבה עם ידית בצורת מקל עומד, גלים הזורמים אחורה בעת ניגון,
+ * ופס ישר ורציף בעת עצירה.
  */
 public class WavySeekBar extends View {
 
@@ -27,6 +30,7 @@ public class WavySeekBar extends View {
     private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path wavePath = new Path();
+    private final RectF thumbRect = new RectF();
 
     private int max = 100;
     private int progress = 0;
@@ -35,11 +39,16 @@ public class WavySeekBar extends View {
     private float startX = 0f;
     private float endX = 0f;
     private float centerY = 0f;
-    private float thumbRadius;
-    private float thumbActiveRadius;
+    private float thumbHalfW;
+    private float thumbHalfH;
+    private float thumbActiveHalfW;
+    private float thumbActiveHalfH;
     private float amplitudePx;
     private float wavelengthPx;
     private float desiredHeightPx;
+
+    private float wavePhase = 0f;
+    private long lastWaveTickMs = 0L;
 
     private OnSeekBarChangeListener listener;
 
@@ -47,20 +56,14 @@ public class WavySeekBar extends View {
         super(context);
         setLayoutDirection(LAYOUT_DIRECTION_LTR);
 
-        thumbRadius = dp(5.5f);
-        thumbActiveRadius = dp(7.5f);
-        amplitudePx = dp(2.0f);
-        wavelengthPx = dp(24.0f);
-        desiredHeightPx = dp(32f);
+        applyDimensions(false);
 
         wavePaint.setStyle(Paint.Style.STROKE);
-        wavePaint.setStrokeWidth(dp(2.5f));
         wavePaint.setStrokeCap(Paint.Cap.ROUND);
         wavePaint.setStrokeJoin(Paint.Join.ROUND);
         wavePaint.setColor(Color.parseColor("#3B82F6"));
 
         trackPaint.setStyle(Paint.Style.STROKE);
-        trackPaint.setStrokeWidth(dp(2.2f));
         trackPaint.setStrokeCap(Paint.Cap.ROUND);
         trackPaint.setColor(Color.argb(80, 203, 213, 225));
 
@@ -72,25 +75,33 @@ public class WavySeekBar extends View {
         return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, val, getResources().getDisplayMetrics());
     }
 
-    public void setCompactStyle(boolean compact) {
+    private void applyDimensions(boolean compact) {
         if (compact) {
-            thumbRadius = dp(3.8f);
-            thumbActiveRadius = dp(5.2f);
-            amplitudePx = dp(1.5f);
+            thumbHalfW = dp(1.8f);
+            thumbHalfH = dp(7.5f);
+            thumbActiveHalfW = dp(2.4f);
+            thumbActiveHalfH = dp(9.5f);
+            amplitudePx = dp(1.8f);
             wavelengthPx = dp(18.0f);
-            desiredHeightPx = dp(18f);
-            wavePaint.setStrokeWidth(dp(2.0f));
-            trackPaint.setStrokeWidth(dp(1.8f));
+            desiredHeightPx = dp(22f);
+            wavePaint.setStrokeWidth(dp(3.4f));
+            trackPaint.setStrokeWidth(dp(3.0f));
         } else {
-            thumbRadius = dp(5.5f);
-            thumbActiveRadius = dp(7.5f);
-            amplitudePx = dp(2.0f);
-            wavelengthPx = dp(24.0f);
-            desiredHeightPx = dp(32f);
-            wavePaint.setStrokeWidth(dp(2.5f));
-            trackPaint.setStrokeWidth(dp(2.2f));
+            thumbHalfW = dp(2.6f);
+            thumbHalfH = dp(11.5f);
+            thumbActiveHalfW = dp(3.4f);
+            thumbActiveHalfH = dp(14.0f);
+            amplitudePx = dp(2.8f);
+            wavelengthPx = dp(26.0f);
+            desiredHeightPx = dp(38f);
+            wavePaint.setStrokeWidth(dp(4.8f));
+            trackPaint.setStrokeWidth(dp(4.4f));
         }
-        rebuildWavePath(getWidth(), getHeight());
+    }
+
+    public void setCompactStyle(boolean compact) {
+        applyDimensions(compact);
+        recomputeBounds(getWidth(), getHeight());
         requestLayout();
         invalidate();
     }
@@ -98,6 +109,7 @@ public class WavySeekBar extends View {
     public void setPlaying(boolean isPlaying) {
         if (this.playing != isPlaying) {
             this.playing = isPlaying;
+            lastWaveTickMs = SystemClock.uptimeMillis();
             invalidate();
         }
     }
@@ -161,35 +173,19 @@ public class WavySeekBar extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        rebuildWavePath(w, h);
+        recomputeBounds(w, h);
     }
 
-    private void rebuildWavePath(int w, int h) {
-        wavePath.reset();
+    private void recomputeBounds(int w, int h) {
         if (w <= 0 || h <= 0) {
             startX = 0f;
             endX = 0f;
             return;
         }
-        float padH = Math.max(thumbActiveRadius + dp(2f), dp(6f));
+        float padH = Math.max(thumbActiveHalfW + dp(4f), dp(8f));
         startX = padH;
         endX = Math.max(startX + 1f, w - padH);
         centerY = h / 2f;
-
-        float stepPx = Math.max(2f, dp(1.5f));
-        boolean first = true;
-        float twoPi = (float) (2.0 * Math.PI);
-        for (float x = startX; x <= endX; x += stepPx) {
-            float y = centerY + amplitudePx * (float) Math.sin(twoPi * (x - startX) / wavelengthPx);
-            if (first) {
-                wavePath.moveTo(x, y);
-                first = false;
-            } else {
-                wavePath.lineTo(x, y);
-            }
-        }
-        float endY = centerY + amplitudePx * (float) Math.sin(twoPi * (endX - startX) / wavelengthPx);
-        wavePath.lineTo(endX, endY);
     }
 
     @Override
@@ -206,17 +202,50 @@ public class WavySeekBar extends View {
 
         if (thumbX > startX) {
             if (playing) {
-                canvas.save();
-                canvas.clipRect(0, 0, thumbX, getHeight());
+                long now = SystemClock.uptimeMillis();
+                if (lastWaveTickMs == 0L) {
+                    lastWaveTickMs = now;
+                } else {
+                    long dt = Math.min(64L, Math.max(0L, now - lastWaveTickMs));
+                    lastWaveTickMs = now;
+                    // הגדלת המופע מעבירה את פסגות הגל שמאלה (אחורה ביחס להתקדמות הפס)
+                    wavePhase = (wavePhase + (dt * 0.0044f)) % (float) (2.0 * Math.PI);
+                }
+
+                wavePath.reset();
+                float stepPx = Math.max(2f, dp(2.0f));
+                float twoPi = (float) (2.0 * Math.PI);
+                boolean first = true;
+                for (float x = startX; x < thumbX; x += stepPx) {
+                    float y = centerY + amplitudePx * (float) Math.sin(twoPi * (x - startX) / wavelengthPx + wavePhase);
+                    if (first) {
+                        wavePath.moveTo(x, y);
+                        first = false;
+                    } else {
+                        wavePath.lineTo(x, y);
+                    }
+                }
+                float endY = centerY + amplitudePx * (float) Math.sin(twoPi * (thumbX - startX) / wavelengthPx + wavePhase);
+                if (first) {
+                    wavePath.moveTo(startX, endY);
+                }
+                wavePath.lineTo(thumbX, endY);
                 canvas.drawPath(wavePath, wavePaint);
-                canvas.restore();
+
+                if (isAttachedToWindow() && getVisibility() == VISIBLE) {
+                    postInvalidateOnAnimation();
+                }
             } else {
+                lastWaveTickMs = 0L;
                 canvas.drawLine(startX, centerY, thumbX, centerY, wavePaint);
             }
         }
 
-        float r = userDragging ? thumbActiveRadius : thumbRadius;
-        canvas.drawCircle(thumbX, centerY, r, thumbPaint);
+        // נקודת הראש בצורת מקל עומד עם קצוות מעוגלים
+        float hw = userDragging ? thumbActiveHalfW : thumbHalfW;
+        float hh = userDragging ? thumbActiveHalfH : thumbHalfH;
+        thumbRect.set(thumbX - hw, centerY - hh, thumbX + hw, centerY + hh);
+        canvas.drawRoundRect(thumbRect, hw, hw, thumbPaint);
     }
 
     @Override
