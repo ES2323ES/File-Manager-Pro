@@ -11,16 +11,18 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import androidx.core.graphics.ColorUtils;
+
 /**
- * סעיפים י, כ, 7, 37:
- * - עיצוב מינימליסטי ונקי המותאם לערכת הנושא הפעילה.
- * - קרדיט שמור במדויק: "פיתוח והנדסה: @אש התורה" עם קישורים כחולים ל"במתמחים טופ" ול"בעוגן פליי".
- * - כפתורים לבדיקת עידכונים, יומן שינויים, מדריך למשתמש ויומן שגיאות ודיווח תקלות.
+ * מסך אודות בעיצוב זכוכית צפה עם רקע מטושטש, הילה עדינה לכרטיסיות הפנימיות
+ * ואייקון סגירה נקי (SVG) בפינת הכרטיסייה ללא כפתור תחתון מיותר.
  */
 public class AboutDialogHelper {
 
@@ -29,8 +31,6 @@ public class AboutDialogHelper {
         int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
         int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
         int accent = ThemeHelper.getAccentColor(activity, theme);
-        int divider = ThemeHelper.getDividerColor(activity, theme);
-        int subtleBg = ThemeHelper.getBgColor(activity, theme);
         boolean dark = ThemeHelper.isDarkSurface(activity, theme);
 
         ScrollView scroll = new ScrollView(activity);
@@ -42,33 +42,53 @@ public class AboutDialogHelper {
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         float d = activity.getResources().getDisplayMetrics().density;
         int hPad = Math.round(18 * d);
-        int vPad = Math.round(16 * d);
-        root.setPadding(hPad, vPad, hPad, Math.round(14 * d));
+        int vPad = Math.round(14 * d);
+        root.setPadding(hPad, vPad, hPad, Math.round(18 * d));
         root.setBackground(ThemedDialogHelper.createDialogBackground(activity, theme));
+
+        AlertDialog dialog = new AlertDialog.Builder(activity)
+                .setView(scroll)
+                .create();
+
+        // שורת כותרת עליונה עם תג גרסה ממורכז וכפתור סגירה SVG ללא מסגרת על גבי הכרטיסייה
+        FrameLayout headerOverlay = new FrameLayout(activity);
+        headerOverlay.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView tvVersionBadge = new TextView(activity);
         tvVersionBadge.setText("File Manager Pro  •  גירסה " + BuildConfig.VERSION_NAME + " רשמית");
         tvVersionBadge.setTextColor(accent);
-        tvVersionBadge.setTextSize(ThemeHelper.spScaled(activity, 14.5f));
+        tvVersionBadge.setTextSize(ThemeHelper.spScaled(activity, 14f));
         tvVersionBadge.setTypeface(Typeface.DEFAULT_BOLD);
         tvVersionBadge.setGravity(Gravity.CENTER);
         tvVersionBadge.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        root.addView(tvVersionBadge, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        FrameLayout.LayoutParams badgeLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        badgeLp.setMarginStart(Math.round(34 * d));
+        badgeLp.setMarginEnd(Math.round(34 * d));
+        headerOverlay.addView(tvVersionBadge, badgeLp);
+
+        ImageButton btnCloseIcon = ThemeHelper.createBorderlessSvgButton(
+                activity, R.drawable.ic_close, textSecondary, "סגור", 36, 7, v -> dialog.dismiss());
+        FrameLayout.LayoutParams closeLp = new FrameLayout.LayoutParams(
+                ThemeHelper.dpScaled(activity, 36), ThemeHelper.dpScaled(activity, 36),
+                Gravity.TOP | Gravity.END);
+        headerOverlay.addView(btnCloseIcon, closeLp);
+        root.addView(headerOverlay);
 
         int logoPx = ThemeHelper.dpScaled(activity, 52);
         ImageView logo = new ImageView(activity);
         logo.setImageResource(R.drawable.ic_app_logo);
         LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(logoPx, logoPx);
         logoLp.gravity = Gravity.CENTER_HORIZONTAL;
-        logoLp.topMargin = Math.round(10 * d);
+        logoLp.topMargin = Math.round(8 * d);
         logoLp.bottomMargin = Math.round(6 * d);
         root.addView(logo, logoLp);
 
         TextView tvTitle = new TextView(activity);
         tvTitle.setText("מנהל קבצים מתקדם ומהיר לאנדרואיד");
         tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(ThemeHelper.spScaled(activity, 16.5f));
+        tvTitle.setTextSize(ThemeHelper.spScaled(activity, 16f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setGravity(Gravity.CENTER);
         tvTitle.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
@@ -76,19 +96,15 @@ public class AboutDialogHelper {
         root.addView(tvTitle, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // משבצת פיתוח והנדסה (סעיף י - שמורה בדיוק)
+        // משבצת פיתוח והנדסה צפה מזכוכית עם הילה עדינה
         LinearLayout creditCard = new LinearLayout(activity);
         creditCard.setOrientation(LinearLayout.VERTICAL);
         creditCard.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         creditCard.setGravity(Gravity.CENTER);
         int cPad = Math.round(14 * d);
         creditCard.setPadding(cPad, cPad, cPad, cPad);
-
-        GradientDrawable creditBg = new GradientDrawable();
-        creditBg.setCornerRadius(Math.round(14 * d));
-        creditBg.setColor(subtleBg);
-        creditBg.setStroke(2, divider);
-        creditCard.setBackground(creditBg);
+        creditCard.setBackground(ThemeHelper.createGlassCardBackground(activity, theme, 16f, false, true));
+        creditCard.setElevation(4f * d);
 
         TextView tvDevLine = new TextView(activity);
         tvDevLine.setText("פיתוח והנדסה: @אש התורה");
@@ -151,42 +167,29 @@ public class AboutDialogHelper {
         creditLp.bottomMargin = Math.round(14 * d);
         root.addView(creditCard, creditLp);
 
-        root.addView(buildMinimalButton(activity, "בדיקת עידכונים והתקנה אוטומטית",
-                accent, theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE, 0,
+        root.addView(buildFloatingGlassButton(activity, theme, "בדיקת עידכונים והתקנה אוטומטית",
+                true, accent, theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE,
                 v -> UpdateChecker.checkForUpdates(activity, true)));
 
-        root.addView(buildMinimalButton(activity, "יומן שינויים",
-                subtleBg, textPrimary, divider,
+        root.addView(buildFloatingGlassButton(activity, theme, "יומן שינויים",
+                false, accent, textPrimary,
                 v -> ChangelogDialogHelper.show(activity)));
 
-        root.addView(buildMinimalButton(activity, "מדריך למשתמש",
-                subtleBg, textPrimary, divider,
+        root.addView(buildFloatingGlassButton(activity, theme, "מדריך למשתמש",
+                false, accent, textPrimary,
                 v -> activity.startActivity(new Intent(activity, UserGuideActivity.class))));
 
-        root.addView(buildMinimalButton(activity, "יומן שגיאות ודיווח תקלות",
-                subtleBg, textSecondary, divider,
+        root.addView(buildFloatingGlassButton(activity, theme, "יומן שגיאות ודיווח תקלות",
+                false, accent, textSecondary,
                 v -> activity.startActivity(new Intent(activity, DiagnosticsActivity.class))));
-
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setView(scroll)
-                .create();
-
-        Button btnClose = ThemedDialogHelper.createThemedButton(activity, "סגור", theme, false, false);
-        btnClose.setGravity(Gravity.CENTER);
-        btnClose.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        closeLp.topMargin = Math.round(4 * d);
-        btnClose.setLayoutParams(closeLp);
-        btnClose.setOnClickListener(v -> dialog.dismiss());
-        root.addView(btnClose);
 
         scroll.addView(root);
         dialog.show();
         ThemedDialogHelper.applyResponsiveDialogWindow(activity, dialog);
     }
 
-    private static Button buildMinimalButton(Activity activity, String text, int bg, int fg, int strokeColor, View.OnClickListener listener) {
+    private static Button buildFloatingGlassButton(
+            Activity activity, int theme, String text, boolean primaryAccent, int accent, int fg, View.OnClickListener listener) {
         float d = activity.getResources().getDisplayMetrics().density;
         Button btn = new Button(activity);
         btn.setText(text);
@@ -197,19 +200,24 @@ public class AboutDialogHelper {
         btn.setGravity(Gravity.CENTER);
         btn.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
 
-        GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(Math.round(11 * d));
-        shape.setColor(bg);
-        if (strokeColor != 0) {
-            shape.setStroke(Math.max(2, Math.round(d)), strokeColor);
+        if (primaryAccent) {
+            GradientDrawable shape = new GradientDrawable();
+            shape.setCornerRadius(Math.round(14 * d));
+            shape.setColor(accent);
+            shape.setStroke(Math.max(1, Math.round(d)), ColorUtils.setAlphaComponent(Color.WHITE, 90));
+            btn.setBackground(shape);
+            btn.setElevation(4f * d);
+        } else {
+            btn.setBackground(ThemeHelper.createGlassCardBackground(activity, theme, 14f, false, true));
+            btn.setElevation(2.5f * d);
         }
-        btn.setBackground(shape);
+        btn.setStateListAnimator(null);
         btn.setMinHeight(0);
         btn.setMinimumHeight(0);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = Math.round(8 * d);
+        lp.bottomMargin = Math.round(9 * d);
         btn.setLayoutParams(lp);
         int padV = Math.round(11 * d);
         btn.setPadding(Math.round(14 * d), padV, Math.round(14 * d), padV);

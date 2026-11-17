@@ -3,7 +3,6 @@ package com.aishhatorah.filemanagerpro;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
@@ -12,15 +11,15 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * סעיפים 7, 35: יומן שינויים נקי ומינימליסטי עם כרטיסיות מתרחבות (Accordion) לפי גירסה.
- * גירסה 0.3.4 פתוחה כברירת מחדל והגרסאות הקודמות נפתחות בהקשה.
+ * יומן שינויים בעיצוב זכוכית צפה מודרני עם חץ חזרה (SVG) בצד שמאל למעלה למסך האודות
+ * וכרטיסיות מתרחבות עם אייקוני SVG נקיים.
  */
 public class ChangelogDialogHelper {
 
@@ -45,21 +44,36 @@ public class ChangelogDialogHelper {
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        outer.setPadding(dp(activity, 16), dp(activity, 16), dp(activity, 16), dp(activity, 14));
+        outer.setPadding(dp(activity, 16), dp(activity, 16), dp(activity, 16), dp(activity, 18));
         outer.setBackground(ThemedDialogHelper.createDialogBackground(activity, theme));
 
-        // כותרת נקייה
+        AlertDialog dialog = new AlertDialog.Builder(activity)
+                .setView(scroll)
+                .create();
+
+        // שורת כותרת: חץ חזרה (SVG, ללא מסגרת) בצד שמאל למעלה לחזרה למסך האודות
         LinearLayout headerRow = new LinearLayout(activity);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        headerRow.setPadding(dp(activity, 4), 0, dp(activity, 4), dp(activity, 12));
+        headerRow.setPadding(dp(activity, 2), 0, dp(activity, 4), dp(activity, 12));
+
+        ImageButton btnBackTopLeft = ThemeHelper.createBorderlessSvgButton(
+                activity, R.drawable.ic_arrow_back, accent, "חזרה לאודות", 38, 8, v -> dialog.dismiss());
+        btnBackTopLeft.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        headerRow.addView(btnBackTopLeft);
+
+        LinearLayout rightTitleGroup = new LinearLayout(activity);
+        rightTitleGroup.setOrientation(LinearLayout.HORIZONTAL);
+        rightTitleGroup.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        rightTitleGroup.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
 
         ImageView heroIcon = new ImageView(activity);
         heroIcon.setImageResource(R.drawable.ic_app_logo);
-        int iconPx = dp(activity, 36);
+        int iconPx = dp(activity, 34);
         LinearLayout.LayoutParams hIcLp = new LinearLayout.LayoutParams(iconPx, iconPx);
         hIcLp.setMarginEnd(dp(activity, 10));
-        headerRow.addView(heroIcon, hIcLp);
+        rightTitleGroup.addView(heroIcon, hIcLp);
 
         LinearLayout headerText = new LinearLayout(activity);
         headerText.setOrientation(LinearLayout.VERTICAL);
@@ -72,11 +86,14 @@ public class ChangelogDialogHelper {
 
         TextView tvSub = new TextView(activity);
         tvSub.setText("File Manager Pro");
-        tvSub.setTextSize(ThemeHelper.spScaled(activity, 13f));
+        tvSub.setTextSize(ThemeHelper.spScaled(activity, 12.5f));
         tvSub.setTextColor(textSecondary);
         headerText.addView(tvSub);
 
-        headerRow.addView(headerText);
+        rightTitleGroup.addView(headerText);
+        LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        rightLp.setMarginStart(dp(activity, 8));
+        headerRow.addView(rightTitleGroup, rightLp);
         outer.addView(headerRow);
 
         // ===================== גירסה 0.3.4 =====================
@@ -218,20 +235,6 @@ public class ChangelogDialogHelper {
                 "גירסאות 0.2.2 – 0.2.3", "השקת האפליקציה והתשתית הראשונית",
                 accent, textPrimary, textSecondary, subtleBg, divider, v22);
 
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setView(scroll)
-                .create();
-
-        Button btnClose = ThemedDialogHelper.createThemedButton(activity, "סגור", theme, true, false);
-        btnClose.setGravity(Gravity.CENTER);
-        btnClose.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        closeLp.topMargin = dp(activity, 6);
-        btnClose.setLayoutParams(closeLp);
-        btnClose.setOnClickListener(v -> dialog.dismiss());
-        outer.addView(btnClose);
-
         scroll.addView(outer);
         dialog.show();
         ThemedDialogHelper.applyResponsiveDialogWindow(activity, dialog);
@@ -275,15 +278,11 @@ public class ChangelogDialogHelper {
             int dividerColor,
             CharSequence richContent
     ) {
+        int theme = PrefsManager.getThemeMode(activity);
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(activity, 13), dp(activity, 11), dp(activity, 13), dp(activity, 11));
-
-        GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(activity, 12));
-        shape.setColor(cardBg);
-        shape.setStroke(2, initiallyExpanded ? accentColor : dividerColor);
-        card.setBackground(shape);
+        card.setBackground(ThemeHelper.createGlassCardBackground(activity, theme, 14f, true, initiallyExpanded));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -312,12 +311,13 @@ public class ChangelogDialogHelper {
 
         headerRow.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView tvChevron = new TextView(activity);
-        tvChevron.setText(initiallyExpanded ? "▲" : "▼");
-        tvChevron.setTextColor(textSecondary);
-        tvChevron.setTextSize(13f);
-        tvChevron.setPadding(dp(activity, 6), 0, dp(activity, 2), 0);
-        headerRow.addView(tvChevron);
+        ImageView ivChevron = new ImageView(activity);
+        ivChevron.setImageResource(initiallyExpanded ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+        ivChevron.setColorFilter(initiallyExpanded ? accentColor : textSecondary);
+        int chevPx = dp(activity, 22);
+        LinearLayout.LayoutParams chevLp = new LinearLayout.LayoutParams(chevPx, chevPx);
+        chevLp.setMarginStart(dp(activity, 6));
+        headerRow.addView(ivChevron, chevLp);
 
         card.addView(headerRow);
 
@@ -332,7 +332,8 @@ public class ChangelogDialogHelper {
         headerRow.setOnClickListener(v -> {
             boolean open = tvBody.getVisibility() != View.VISIBLE;
             tvBody.setVisibility(open ? View.VISIBLE : View.GONE);
-            tvChevron.setText(open ? "▲" : "▼");
+            ivChevron.setImageResource(open ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+            ivChevron.setColorFilter(open ? accentColor : textSecondary);
         });
 
         parent.addView(card);
