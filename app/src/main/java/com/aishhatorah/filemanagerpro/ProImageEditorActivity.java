@@ -251,15 +251,15 @@ public class ProImageEditorActivity extends AppCompatActivity {
         toolsBody.addView(filterScroll);
 
         // מכווני בהירות, ניגודיות ורוויה
-        addAdjustmentSlider(toolsBody, "בהירות", 50, textPrimary, textSecondary, progress -> {
+        addAdjustmentSlider(toolsBody, "בהירות", 50, textPrimary, accent, progress -> {
             brightnessOffset = (progress - 50) * 1.6f;
             canvasView.updateColorFilter();
         });
-        addAdjustmentSlider(toolsBody, "ניגודיות", 50, textPrimary, textSecondary, progress -> {
+        addAdjustmentSlider(toolsBody, "ניגודיות", 50, textPrimary, accent, progress -> {
             contrastFactor = 0.5f + (progress / 100f) * 1.3f;
             canvasView.updateColorFilter();
         });
-        addAdjustmentSlider(toolsBody, "רוויית צבע", 50, textPrimary, textSecondary, progress -> {
+        addAdjustmentSlider(toolsBody, "רוויית צבע", 50, textPrimary, accent, progress -> {
             saturationFactor = (progress / 50f);
             canvasView.updateColorFilter();
         });
@@ -298,7 +298,7 @@ public class ProImageEditorActivity extends AppCompatActivity {
         void onValue(int progress);
     }
 
-    private void addAdjustmentSlider(LinearLayout parent, String label, int initial, int textPrimary, int textSecondary, SliderListener cb) {
+    private void addAdjustmentSlider(LinearLayout parent, String label, int initial, int textPrimary, int accent, SliderListener cb) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -314,6 +314,7 @@ public class ProImageEditorActivity extends AppCompatActivity {
         SeekBar sb = new SeekBar(this);
         sb.setMax(100);
         sb.setProgress(initial);
+        ThemeHelper.applySeekBarTint(sb, accent);
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {

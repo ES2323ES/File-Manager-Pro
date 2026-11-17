@@ -69,6 +69,8 @@ import androidx.appcompat.widget.AppCompatTextView;
 import androidx.cardview.widget.CardView;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.ColorUtils;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -138,6 +140,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private boolean isImageMode = false;
     private boolean mediaControlsHidden = false;
+    private View activeImageTopOverlay = null;
     private View activeMediaBottomPanel = null;
     private View activeImagePrevFloat = null;
     private View activeImageNextFloat = null;
@@ -360,6 +363,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             topBar.setBackgroundColor(Color.argb(175, 10, 15, 28));
         }
 
+        if (activeImageTopOverlay != null) {
+            activeImageTopOverlay.setVisibility(mediaControlsHidden ? View.GONE : View.VISIBLE);
+        }
+
         if (activeMediaBottomPanel != null) {
             activeMediaBottomPanel.setVisibility(mediaControlsHidden ? View.GONE : View.VISIBLE);
         }
@@ -430,6 +437,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void buildViewerUiForCurrentFile() {
+        activeImageTopOverlay = null;
         activeMediaBottomPanel = null;
         activeImagePrevFloat = null;
         activeImageNextFloat = null;
@@ -488,9 +496,30 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         awaitingInitialVideoPlay = isVideoMode;
         suppressNextVideoAutoPlay = isVideoMode;
 
-        topBar = buildTopBar(theme, textPrimary, textSecondary, accent, isLandscape);
+        topBar = isImageMode ? null : buildTopBar(theme, textPrimary, textSecondary, accent, isLandscape);
 
         if (isImageMode || isVideoMode) {
+            Window win = getWindow();
+            if (win != null) {
+                WindowCompat.setDecorFitsSystemWindows(win, false);
+                win.setStatusBarColor(Color.TRANSPARENT);
+                win.setNavigationBarColor(Color.TRANSPARENT);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    WindowManager.LayoutParams lp = win.getAttributes();
+                    lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                    win.setAttributes(lp);
+                }
+                View decor = win.getDecorView();
+                if (decor != null) {
+                    int vis = decor.getSystemUiVisibility();
+                    vis &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vis &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                    }
+                    decor.setSystemUiVisibility(vis);
+                }
+            }
+
             FrameLayout stageRoot = new FrameLayout(this);
             stageRoot.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
             stageRoot.setBackgroundColor(Color.BLACK);
@@ -498,19 +527,41 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
             if (isImageMode) {
                 renderImageViewerOverlay(stageRoot, cardColor, textPrimary, textSecondary, accent, theme);
+                ViewCompat.setOnApplyWindowInsetsListener(stageRoot, (v, insets) -> {
+                    Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+                    if (activeImageTopOverlay != null) {
+                        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeImageTopOverlay.getLayoutParams();
+                        if (lp != null) {
+                            lp.topMargin = sys.top + dp(6);
+                            activeImageTopOverlay.setLayoutParams(lp);
+                        }
+                    }
+                    if (activeMediaBottomPanel != null) {
+                        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeMediaBottomPanel.getLayoutParams();
+                        if (lp != null) {
+                            lp.bottomMargin = sys.bottom + dp(14);
+                            activeMediaBottomPanel.setLayoutParams(lp);
+                        }
+                    }
+                    return insets;
+                });
             } else {
                 renderVideoPlayerOverlay(stageRoot, cardColor, textPrimary, textSecondary, accent, theme);
+                if (topBar != null) {
+                    FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+                    stageRoot.addView(topBar, topLp);
+                }
             }
-
-            FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
-            stageRoot.addView(topBar, topLp);
 
             setContentView(stageRoot);
             applyMediaImmersiveAndLayoutState();
             return;
         }
 
+        if (getWindow() != null) {
+            WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+        }
         setSystemBarsFullscreen(false);
         final AudioPlayerManager audioMgr = AudioPlayerManager.getInstance();
         final int touchSlopPx = ViewConfiguration.get(this).getScaledTouchSlop();
@@ -799,17 +850,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
 
         if (!isVideoMode && !isImageMode) {
+            ImageButton btnShareIcon = createCleanBorderlessIconButton(R.drawable.ic_share, dp(42), effectiveText);
+            btnShareIcon.setContentDescription("שיתוף");
+            btnShareIcon.setOnClickListener(v -> shareCurrentFile());
+            bar.addView(btnShareIcon);
             if (isAudioMode) {
-                ImageButton btnShareIcon = createCleanBorderlessIconButton(R.drawable.ic_share, dp(42), effectiveText);
-                btnShareIcon.setContentDescription("שיתוף");
-                btnShareIcon.setOnClickListener(v -> shareCurrentFile());
-                bar.addView(btnShareIcon);
                 audioTopShareBtn = btnShareIcon;
-            } else {
-                Button btnShare = ThemedDialogHelper.createThemedButton(this, "שיתוף", theme, true, false);
-                btnShare.setPadding(dp(12), dp(5), dp(12), dp(5));
-                btnShare.setOnClickListener(v -> shareCurrentFile());
-                bar.addView(btnShare);
             }
         }
 
@@ -887,72 +933,74 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         stageRoot.addView(btnFloatNext, nextFlp);
         activeImageNextFloat = btnFloatNext;
 
-        LinearLayout bottomCard = new LinearLayout(this);
-        bottomCard.setOrientation(LinearLayout.VERTICAL);
-        bottomCard.setPadding(dp(12), dp(8), dp(12), dp(10));
-        GradientDrawable transBg = new GradientDrawable();
-        transBg.setCornerRadius(dp(16));
-        transBg.setColor(Color.argb(185, 12, 18, 32));
-        bottomCard.setBackground(transBg);
-        activeMediaBottomPanel = bottomCard;
+        FrameLayout topOverlay = new FrameLayout(this);
+        topOverlay.setBackgroundColor(Color.TRANSPARENT);
+        topOverlay.setPadding(dp(12), dp(4), dp(12), dp(4));
 
-        final TextView tvMeta = new TextView(this);
-        tvMeta.setTextColor(Color.parseColor("#CBD5E1"));
-        tvMeta.setTextSize(11.5f);
-        tvMeta.setGravity(Gravity.CENTER);
-        tvMeta.setPadding(0, 0, 0, dp(6));
-        bottomCard.addView(tvMeta);
+        ImageButton btnImgBack = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(44), Color.WHITE);
+        btnImgBack.setContentDescription("חזרה");
+        btnImgBack.setOnClickListener(v -> proceedCloseOrNavigateBack());
+        topOverlay.addView(btnImgBack, new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.LEFT));
 
-        LinearLayout actionsRow = new LinearLayout(this);
-        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
-        actionsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        actionsRow.setGravity(Gravity.CENTER_VERTICAL);
+        ImageButton btnImgHamburger = createCleanBorderlessIconButton(R.drawable.ic_menu_hamburger, dp(44), Color.WHITE);
+        btnImgHamburger.setContentDescription("אפשרויות");
+        btnImgHamburger.setOnClickListener(v -> showImageOptionsDialog());
+        topOverlay.addView(btnImgHamburger, new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.RIGHT));
 
-        MaterialButton btnWallpaper = new MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
-        btnWallpaper.setText("קבע כטפט");
-        btnWallpaper.setAllCaps(false);
-        btnWallpaper.setTextSize(12f);
-        btnWallpaper.setTypeface(Typeface.DEFAULT_BOLD);
-        btnWallpaper.setTextColor(Color.WHITE);
-        btnWallpaper.setStrokeColor(ColorStateList.valueOf(Color.argb(140, 255, 255, 255)));
-        btnWallpaper.setIconResource(R.drawable.ic_wallpaper);
-        btnWallpaper.setIconTint(ColorStateList.valueOf(Color.WHITE));
-        btnWallpaper.setIconSize(dp(16));
-        btnWallpaper.setCornerRadius(dp(10));
-        btnWallpaper.setMinHeight(0);
-        btnWallpaper.setMinimumHeight(0);
-        btnWallpaper.setPadding(dp(10), dp(7), dp(10), dp(7));
+        FrameLayout.LayoutParams topOverlayLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        topOverlayLp.topMargin = dp(24);
+        stageRoot.addView(topOverlay, topOverlayLp);
+        activeImageTopOverlay = topOverlay;
+
+        LinearLayout bottomActionsRow = new LinearLayout(this);
+        bottomActionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        bottomActionsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        bottomActionsRow.setGravity(Gravity.CENTER);
+        bottomActionsRow.setBackgroundColor(Color.TRANSPARENT);
+        bottomActionsRow.setPadding(dp(12), dp(4), dp(12), dp(4));
+        activeMediaBottomPanel = bottomActionsRow;
+
+        final ImageButton btnProImageEditor = createCleanBorderlessIconButton(R.drawable.ic_edit_pencil, dp(46), Color.WHITE);
+        btnProImageEditor.setContentDescription("עורך תמונות");
+        btnProImageEditor.setOnClickListener(v -> {
+            Intent i = new Intent(this, ProImageEditorActivity.class);
+            i.putExtra(ProImageEditorActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
+            startActivity(i);
+        });
+        LinearLayout.LayoutParams editIconLp = new LinearLayout.LayoutParams(dp(46), dp(46));
+        editIconLp.setMarginStart(dp(14));
+        editIconLp.setMarginEnd(dp(14));
+        btnProImageEditor.setLayoutParams(editIconLp);
+
+        final ImageButton btnShareBottom = createCleanBorderlessIconButton(R.drawable.ic_share, dp(46), Color.WHITE);
+        btnShareBottom.setContentDescription("שיתוף");
+        btnShareBottom.setOnClickListener(v -> shareCurrentFile());
+        LinearLayout.LayoutParams shareIconLp = new LinearLayout.LayoutParams(dp(46), dp(46));
+        shareIconLp.setMarginStart(dp(14));
+        shareIconLp.setMarginEnd(dp(14));
+        btnShareBottom.setLayoutParams(shareIconLp);
+
+        final ImageButton btnWallpaper = createCleanBorderlessIconButton(R.drawable.ic_wallpaper, dp(46), Color.WHITE);
+        btnWallpaper.setContentDescription("קבע כרקע");
         btnWallpaper.setOnClickListener(v -> {
             Intent wi = new Intent(this, WallpaperCropActivity.class);
             wi.putExtra(WallpaperCropActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
             startActivity(wi);
         });
+        LinearLayout.LayoutParams wallIconLp = new LinearLayout.LayoutParams(dp(46), dp(46));
+        wallIconLp.setMarginStart(dp(14));
+        wallIconLp.setMarginEnd(dp(14));
+        btnWallpaper.setLayoutParams(wallIconLp);
 
-        MaterialButton btnProImageEditor = createPencilEditorButton("עורך תמונות", accent, theme, v -> {
-            Intent i = new Intent(this, ProImageEditorActivity.class);
-            i.putExtra(ProImageEditorActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
-            startActivity(i);
-        });
-        LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        editLp.setMarginStart(dp(6));
-        editLp.setMarginEnd(dp(6));
-        btnProImageEditor.setLayoutParams(editLp);
-
-        Button btnShareBottom = ThemedDialogHelper.createThemedButton(this, "שיתוף", theme, false, false);
-        btnShareBottom.setTextColor(Color.WHITE);
-        btnShareBottom.setPadding(dp(10), dp(7), dp(10), dp(7));
-        btnShareBottom.setOnClickListener(v -> shareCurrentFile());
-
-        actionsRow.addView(btnWallpaper);
-        actionsRow.addView(btnProImageEditor);
-        actionsRow.addView(btnShareBottom);
-        bottomCard.addView(actionsRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        bottomActionsRow.addView(btnProImageEditor);
+        bottomActionsRow.addView(btnShareBottom);
+        bottomActionsRow.addView(btnWallpaper);
 
         FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-        bottomLp.setMargins(dp(10), 0, dp(10), dp(12));
-        stageRoot.addView(bottomCard, bottomLp);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        bottomLp.bottomMargin = dp(20);
+        stageRoot.addView(bottomActionsRow, bottomLp);
 
         final Runnable preloadNeighbors = () -> {
             if (imagePlaylist.size() <= 1) return;
@@ -992,7 +1040,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 fallbackSvgWebView.setVisibility(View.VISIBLE);
                 btnProImageEditor.setVisibility(View.GONE);
                 btnWallpaper.setVisibility(View.GONE);
-                tvMeta.setText("קובץ SVG וקטורי • " + StorageUtils.formatSize(imgFile.length()));
                 try {
                     byte[] rawBytes = readFileBytesForViewer(imgFile, nameLow.endsWith(".svgz"));
                     String b64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP);
@@ -1027,7 +1074,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             if (animatedDrawable instanceof AnimatedImageDrawable) {
                                 ((AnimatedImageDrawable) animatedDrawable).start();
                             }
-                            tvMeta.setText("GIF מונפש • " + StorageUtils.formatSize(imgFile.length()));
                             preloadNeighbors.run();
                         });
                         return;
@@ -1041,9 +1087,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             DecodedPhoto cached = photoCache.get(cacheKey);
             if (cached != null && cached.bitmap != null && !cached.bitmap.isRecycled()) {
                 zoomView.setImageBitmap(cached.bitmap);
-                String dim = (cached.origWidth > 0 && cached.origHeight > 0)
-                        ? (cached.origWidth + "x" + cached.origHeight + "  •  ") : "";
-                tvMeta.setText(dim + StorageUtils.formatSize(imgFile.length()));
                 preloadNeighbors.run();
                 return;
             }
@@ -1057,9 +1100,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     if (gen != imageLoadGeneration || isFinishing()) return;
                     if (photo.bitmap != null) {
                         zoomView.setImageBitmap(photo.bitmap);
-                        String dim = (photo.origWidth > 0 && photo.origHeight > 0)
-                                ? (photo.origWidth + "x" + photo.origHeight + "  •  ") : "";
-                        tvMeta.setText(dim + StorageUtils.formatSize(imgFile.length()));
                         preloadNeighbors.run();
                     } else {
                         zoomView.setVisibility(View.GONE);
@@ -1907,6 +1947,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             SeekBar sb = new SeekBar(this);
             sb.setMax(span);
             sb.setProgress(mgr.getEqBandLevel(bandIdx) - minLvl);
+            ThemeHelper.applySeekBarTint(sb, accent);
             sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int p, boolean fromUser) {
@@ -1928,6 +1969,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         SeekBar sbBass = new SeekBar(this);
         sbBass.setMax(1000);
         sbBass.setProgress(mgr.getBassBoostStrength());
+        ThemeHelper.applySeekBarTint(sbBass, accent);
         sbBass.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int p, boolean fromUser) {
@@ -3147,10 +3189,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             isHold2xForwardActive = true;
                             videoSpeed = 2.0f;
                             applyVideoSpeedInternal(true);
-                            showPersistentHoldBadge(badge, "⏩ מהירות 2.0x");
+                            showPersistentHoldBadge(badge, ">> מהירות 2.0x");
                         } else if (normX <= 0.38f) {
                             isHold2xRewindActive = true;
-                            showPersistentHoldBadge(badge, "⏪ אחורה 2.0x");
+                            showPersistentHoldBadge(badge, "<< אחורה 2.0x");
                             rewindPulseRunnable = new Runnable() {
                                 @Override
                                 public void run() {
@@ -3962,16 +4004,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         btnExtract.setLayoutParams(exLp);
         bottomActions.addView(btnExtract);
 
-        if (MediaFormatHelper.isZipContainer(targetFile.getName())) {
-            Button btnPwd = ThemedDialogHelper.createThemedButton(this, "סיסמה", theme, false, false);
-            LinearLayout.LayoutParams pwLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            pwLp.setMarginStart(dp(6));
-            btnPwd.setLayoutParams(pwLp);
-            btnPwd.setOnClickListener(v -> promptArchivePassword(null));
-            bottomActions.addView(btnPwd);
-        }
-
         card.addView(bottomActions);
         host.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -4181,9 +4213,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             null, "הבנתי", this::finish, null, null, false);
                 });
             } catch (Exception e) {
+                String msg = e.getMessage() != null ? e.getMessage() : "";
                 uiHandler.post(() -> {
                     btnExtract.setEnabled(true);
-                    Toast.makeText(this, "שגיאה בחילוץ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    if (msg.contains("סיסמ")) {
+                        archivePassword = "";
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                        promptArchivePassword(() -> runFullExtraction(btnExtract));
+                    } else {
+                        Toast.makeText(this, "שגיאה בחילוץ: " + msg, Toast.LENGTH_LONG).show();
+                    }
                 });
             }
         });
@@ -4217,7 +4256,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 }
                 uiHandler.post(() -> FileOpenWithHelper.tryOpenByDefaultOrBuiltin(this, tmp));
             } catch (Exception e) {
-                uiHandler.post(() -> Toast.makeText(this, "שגיאה בפתיחת פריט: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                uiHandler.post(() -> {
+                    if (msg.contains("סיסמ")) {
+                        archivePassword = "";
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                        promptArchivePassword(() -> openArchiveEntry(item, retryAfterPwd));
+                    } else {
+                        Toast.makeText(this, "שגיאה בפתיחת פריט: " + msg, Toast.LENGTH_LONG).show();
+                    }
+                });
             }
         });
     }
