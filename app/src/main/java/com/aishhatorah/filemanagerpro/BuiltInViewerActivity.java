@@ -206,6 +206,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean videoMuted = false;
     private boolean videoAutoNext = true;
     private boolean isVideoLocked = false;
+    private int lastVideoTopInsetPx = 0;
     private int videoScaleMode = 0; // 0=FIT, 1=FILL_CROP, 2=STRETCH
     private float videoScale = 1.0f;
     private float videoTransX = 0f;
@@ -456,6 +457,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         audioTopShareBtn = null;
         lastHeaderTitleName = null;
         isVideoLocked = false;
+        lastVideoTopInsetPx = 0;
         awaitingInitialVideoPlay = false;
         suppressNextVideoAutoPlay = false;
         hasAppliedVideoMatrix = false;
@@ -530,18 +532,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewCompat.setOnApplyWindowInsetsListener(stageRoot, (v, insets) -> {
                     Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
                     if (activeImageTopOverlay != null) {
-                        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeImageTopOverlay.getLayoutParams();
-                        if (lp != null) {
-                            lp.topMargin = sys.top + dp(6);
-                            activeImageTopOverlay.setLayoutParams(lp);
-                        }
+                        activeImageTopOverlay.setPadding(dp(12) + sys.left, sys.top + dp(6), dp(12) + sys.right, dp(16));
                     }
                     if (activeMediaBottomPanel != null) {
-                        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeMediaBottomPanel.getLayoutParams();
-                        if (lp != null) {
-                            lp.bottomMargin = sys.bottom + dp(14);
-                            activeMediaBottomPanel.setLayoutParams(lp);
-                        }
+                        activeMediaBottomPanel.setPadding(dp(12) + sys.left, dp(18), dp(12) + sys.right, sys.bottom + dp(14));
                     }
                     return insets;
                 });
@@ -552,6 +546,31 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
                     stageRoot.addView(topBar, topLp);
                 }
+                final int baseVPad = isLandscape ? dp(6) : dp(8);
+                ViewCompat.setOnApplyWindowInsetsListener(stageRoot, (v, insets) -> {
+                    Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+                    lastVideoTopInsetPx = sys.top;
+                    if (topBar != null) {
+                        topBar.setPadding(dp(10) + sys.left, sys.top + baseVPad, dp(10) + sys.right, baseVPad);
+                    }
+                    if (activeMediaBottomPanel != null) {
+                        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeMediaBottomPanel.getLayoutParams();
+                        if (lp != null) {
+                            lp.leftMargin = sys.left + dp(10);
+                            lp.rightMargin = sys.right + dp(10);
+                            lp.bottomMargin = sys.bottom + dp(10);
+                            activeMediaBottomPanel.setLayoutParams(lp);
+                        }
+                    }
+                    if (activeVideoLockFloatingBtn != null) {
+                        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeVideoLockFloatingBtn.getLayoutParams();
+                        if (lp != null) {
+                            lp.bottomMargin = sys.bottom + dp(24);
+                            activeVideoLockFloatingBtn.setLayoutParams(lp);
+                        }
+                    }
+                    return insets;
+                });
             }
 
             setContentView(stageRoot);
@@ -700,7 +719,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         LinearLayout contentArea = new LinearLayout(this);
         contentArea.setOrientation(LinearLayout.VERTICAL);
         contentArea.setGravity(Gravity.CENTER);
-        int areaPad = isAudioMode ? dp(isLandscape ? 8 : 14) : (isLandscape ? dp(8) : dp(12));
+        boolean isPdfLayout = MediaFormatHelper.isPdfFile(lower);
+        int areaPad = isPdfLayout ? 0 : (isAudioMode ? dp(isLandscape ? 8 : 14) : (isLandscape ? dp(8) : dp(12)));
         contentArea.setPadding(areaPad, areaPad, areaPad, areaPad);
         root.addView(contentArea, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -921,21 +941,36 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         imageViewport.addView(fallbackSvgWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        ImageButton btnFloatPrev = createResponsiveRoundIconButton(R.drawable.ic_skip_prev, dp(40), 0, false, Color.WHITE, theme);
-        FrameLayout.LayoutParams prevFlp = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        ImageButton btnFloatPrev = createCleanBorderlessIconButton(R.drawable.ic_skip_prev, dp(42), Color.WHITE);
+        GradientDrawable prevScrim = new GradientDrawable();
+        prevScrim.setShape(GradientDrawable.OVAL);
+        prevScrim.setColor(Color.argb(125, 8, 12, 22));
+        prevScrim.setStroke(Math.max(1, dp(1)), Color.argb(75, 255, 255, 255));
+        btnFloatPrev.setBackground(prevScrim);
+        btnFloatPrev.setPadding(dp(9), dp(9), dp(9), dp(9));
+        FrameLayout.LayoutParams prevFlp = new FrameLayout.LayoutParams(dp(42), dp(42), Gravity.LEFT | Gravity.CENTER_VERTICAL);
         prevFlp.leftMargin = dp(10);
         stageRoot.addView(btnFloatPrev, prevFlp);
         activeImagePrevFloat = btnFloatPrev;
 
-        ImageButton btnFloatNext = createResponsiveRoundIconButton(R.drawable.ic_skip_next, dp(40), 0, false, Color.WHITE, theme);
-        FrameLayout.LayoutParams nextFlp = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        ImageButton btnFloatNext = createCleanBorderlessIconButton(R.drawable.ic_skip_next, dp(42), Color.WHITE);
+        GradientDrawable nextScrim = new GradientDrawable();
+        nextScrim.setShape(GradientDrawable.OVAL);
+        nextScrim.setColor(Color.argb(125, 8, 12, 22));
+        nextScrim.setStroke(Math.max(1, dp(1)), Color.argb(75, 255, 255, 255));
+        btnFloatNext.setBackground(nextScrim);
+        btnFloatNext.setPadding(dp(9), dp(9), dp(9), dp(9));
+        FrameLayout.LayoutParams nextFlp = new FrameLayout.LayoutParams(dp(42), dp(42), Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         nextFlp.rightMargin = dp(10);
         stageRoot.addView(btnFloatNext, nextFlp);
         activeImageNextFloat = btnFloatNext;
 
         FrameLayout topOverlay = new FrameLayout(this);
-        topOverlay.setBackgroundColor(Color.TRANSPARENT);
-        topOverlay.setPadding(dp(12), dp(4), dp(12), dp(4));
+        GradientDrawable topScrim = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.argb(175, 8, 12, 22), Color.argb(110, 8, 12, 22), Color.TRANSPARENT});
+        topOverlay.setBackground(topScrim);
+        topOverlay.setPadding(dp(12), dp(26), dp(12), dp(16));
 
         ImageButton btnImgBack = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(44), Color.WHITE);
         btnImgBack.setContentDescription("חזרה");
@@ -949,7 +984,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         FrameLayout.LayoutParams topOverlayLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
-        topOverlayLp.topMargin = dp(24);
         stageRoot.addView(topOverlay, topOverlayLp);
         activeImageTopOverlay = topOverlay;
 
@@ -957,8 +991,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bottomActionsRow.setOrientation(LinearLayout.HORIZONTAL);
         bottomActionsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bottomActionsRow.setGravity(Gravity.CENTER);
-        bottomActionsRow.setBackgroundColor(Color.TRANSPARENT);
-        bottomActionsRow.setPadding(dp(12), dp(4), dp(12), dp(4));
+        GradientDrawable bottomScrim = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.TRANSPARENT, Color.argb(115, 8, 12, 22), Color.argb(180, 8, 12, 22)});
+        bottomActionsRow.setBackground(bottomScrim);
+        bottomActionsRow.setPadding(dp(12), dp(18), dp(12), dp(20));
         activeMediaBottomPanel = bottomActionsRow;
 
         final ImageButton btnProImageEditor = createCleanBorderlessIconButton(R.drawable.ic_edit_pencil, dp(46), Color.WHITE);
@@ -999,7 +1036,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        bottomLp.bottomMargin = dp(20);
         stageRoot.addView(bottomActionsRow, bottomLp);
 
         final Runnable preloadNeighbors = () -> {
@@ -3189,10 +3225,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             isHold2xForwardActive = true;
                             videoSpeed = 2.0f;
                             applyVideoSpeedInternal(true);
-                            showPersistentHoldBadge(badge, ">> מהירות 2.0x");
+                            showPersistentHoldBadge(badge, "הרצה קדימה");
                         } else if (normX <= 0.38f) {
                             isHold2xRewindActive = true;
-                            showPersistentHoldBadge(badge, "<< אחורה 2.0x");
+                            showPersistentHoldBadge(badge, "הרצה אחורה");
                             rewindPulseRunnable = new Runnable() {
                                 @Override
                                 public void run() {
@@ -3350,7 +3386,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        lp.topMargin = dp(76);
+        lp.topMargin = Math.max(dp(86), lastVideoTopInsetPx + dp(62));
         badge.setLayoutParams(lp);
         badge.animate().cancel();
         badge.setText(text);
@@ -3411,6 +3447,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 "סיבוב מסך מלא (אופקי / אנכי)",
                 "איפוס זום תצוגה (100%)",
                 "ייצוא קטע פתיחה ל-GIF מונפש",
+                "עורך וידאו והפחתת משקל",
                 "שיתוף קובץ"
         );
 
@@ -3475,7 +3512,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                 }
                             });
                             break;
-                        case 8:
+                        case 8: {
+                            Intent vei = new Intent(this, ProVideoEditorActivity.class);
+                            vei.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, targetFile.getAbsolutePath());
+                            startActivity(vei);
+                            break;
+                        }
+                        case 9:
                             shareCurrentFile();
                             break;
                     }
@@ -3578,18 +3621,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private TextView createSeekOverlayBadge() {
+        int theme = PrefsManager.getThemeMode(this);
+        int accent = ThemeHelper.getAccentColor(this, theme);
         TextView badge = new TextView(this);
         badge.setTextColor(Color.WHITE);
-        badge.setTextSize(17f);
-        badge.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        badge.setTextDirection(View.TEXT_DIRECTION_LTR);
+        badge.setTextSize(15f);
+        badge.setTypeface(Typeface.DEFAULT_BOLD);
         badge.setGravity(Gravity.CENTER);
-        badge.setPadding(dp(18), dp(10), dp(18), dp(10));
-        GradientDrawable pill = new GradientDrawable();
-        pill.setCornerRadius(999f);
-        pill.setColor(Color.argb(215, 29, 78, 216));
-        pill.setStroke(dp(1.5f), Color.WHITE);
-        badge.setBackground(pill);
+        badge.setPadding(dp(16), dp(9), dp(16), dp(9));
+        GradientDrawable glassPill = new GradientDrawable();
+        glassPill.setCornerRadius(dp(16));
+        glassPill.setColor(Color.argb(198, 12, 18, 30));
+        glassPill.setStroke(Math.max(1, dp(1.1f)),
+                ColorUtils.setAlphaComponent(ColorUtils.blendARGB(Color.WHITE, accent, 0.45f), 115));
+        badge.setBackground(glassPill);
+        badge.setElevation(dp(6));
         badge.setVisibility(View.GONE);
         return badge;
     }
@@ -3603,7 +3649,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         lp.leftMargin = dp(20);
         lp.rightMargin = dp(20);
         badge.setLayoutParams(lp);
-        badge.setText(forwardRight ? "\u200E+10" : "\u200E-10");
+        badge.setText(forwardRight ? "\u200E+10 ש׳" : "\u200E-10 ש׳");
         badge.animate().cancel();
         badge.setAlpha(1f);
         badge.setScaleX(0.85f);
@@ -3892,35 +3938,51 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     // ==================== מציג PDF ====================
 
     private void renderPdfViewer(LinearLayout host, int cardColor, int textSecondary, int theme) {
-        LinearLayout card = createSurfaceCard(cardColor);
-        card.setGravity(Gravity.CENTER);
+        int accent = ThemeHelper.getAccentColor(this, theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        boolean dark = ThemeHelper.isDarkSurface(this, theme);
+
+        FrameLayout pdfStage = new FrameLayout(this);
+        pdfStage.setBackgroundColor(dark ? Color.parseColor("#0B0F19") : Color.parseColor("#E2E8F0"));
 
         ZoomableImageView pageImage = new ZoomableImageView(this);
         pageImage.setBackgroundColor(Color.WHITE);
-        card.addView(pageImage, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        pdfStage.addView(pageImage, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout navOverlay = new LinearLayout(this);
+        navOverlay.setOrientation(LinearLayout.HORIZONTAL);
+        navOverlay.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        navOverlay.setGravity(Gravity.CENTER_VERTICAL);
+        navOverlay.setPadding(dp(10), dp(4), dp(10), dp(4));
+        navOverlay.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 999f, true, true));
+        navOverlay.setElevation(dp(8));
+
+        ImageButton btnPrev = createCleanBorderlessIconButton(R.drawable.ic_chevron_right, dp(42), textPrimary);
+        btnPrev.setContentDescription("עמוד קודם");
 
         TextView tvPageIndicator = new TextView(this);
-        tvPageIndicator.setTextColor(textSecondary);
+        tvPageIndicator.setTextColor(textPrimary);
+        tvPageIndicator.setTextSize(13.5f);
+        tvPageIndicator.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tvPageIndicator.setTextDirection(View.TEXT_DIRECTION_LTR);
         tvPageIndicator.setGravity(Gravity.CENTER);
-        tvPageIndicator.setPadding(0, dp(8), 0, dp(8));
-        card.addView(tvPageIndicator);
+        tvPageIndicator.setPadding(dp(14), dp(4), dp(14), dp(4));
 
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
+        ImageButton btnNext = createCleanBorderlessIconButton(R.drawable.ic_chevron_left, dp(42), accent);
+        btnNext.setContentDescription("עמוד הבא");
 
-        Button btnPrev = ThemedDialogHelper.createThemedButton(this, "עמוד קודם", theme, false, false);
-        Button btnNext = ThemedDialogHelper.createThemedButton(this, "עמוד הבא", theme, true, false);
-        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lp1.setMarginEnd(dp(8));
-        btnPrev.setLayoutParams(lp1);
-        btnNext.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        nav.addView(btnPrev);
-        nav.addView(btnNext);
-        card.addView(nav, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        navOverlay.addView(btnPrev);
+        navOverlay.addView(tvPageIndicator);
+        navOverlay.addView(btnNext);
 
-        host.addView(card, new LinearLayout.LayoutParams(
+        FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        navLp.bottomMargin = dp(14);
+        pdfStage.addView(navOverlay, navLp);
+
+        host.addView(pdfStage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         try {
@@ -3931,15 +3993,20 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             Runnable renderPage = () -> {
                 if (pdfRenderer == null || totalPages == 0) return;
                 try (PdfRenderer.Page page = pdfRenderer.openPage(currentPdfPage)) {
-                    int w = Math.min(3600, Math.max(1200, page.getWidth() * 3));
-                    int h = Math.min(3600, Math.max(1500, page.getHeight() * 3));
+                    float scale = Math.max(2.5f, Math.min(4.0f, 2200f / Math.max(1, page.getWidth())));
+                    int w = Math.max(1, Math.round(page.getWidth() * scale));
+                    int h = Math.max(1, Math.round(page.getHeight() * scale));
                     Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                     bmp.eraseColor(Color.WHITE);
                     page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
                     pageImage.setImageBitmap(bmp);
-                    tvPageIndicator.setText("עמוד " + (currentPdfPage + 1) + " מתוך " + totalPages);
-                    btnPrev.setEnabled(currentPdfPage > 0);
-                    btnNext.setEnabled(currentPdfPage < totalPages - 1);
+                    tvPageIndicator.setText((currentPdfPage + 1) + " / " + totalPages);
+                    boolean hasPrev = currentPdfPage > 0;
+                    boolean hasNext = currentPdfPage < totalPages - 1;
+                    btnPrev.setEnabled(hasPrev);
+                    btnPrev.setAlpha(hasPrev ? 1f : 0.35f);
+                    btnNext.setEnabled(hasNext);
+                    btnNext.setAlpha(hasNext ? 1f : 0.35f);
                 }
             };
             renderPage.run();
@@ -3956,8 +4023,25 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     renderPage.run();
                 }
             });
+            pageImage.setOnHorizontalSwipeListener(new ZoomableImageView.HorizontalSwipeListener() {
+                @Override
+                public void onSwipeToNext() {
+                    if (currentPdfPage < totalPages - 1) {
+                        currentPdfPage++;
+                        renderPage.run();
+                    }
+                }
+
+                @Override
+                public void onSwipeToPrevious() {
+                    if (currentPdfPage > 0) {
+                        currentPdfPage--;
+                        renderPage.run();
+                    }
+                }
+            });
         } catch (Exception e) {
-            tvPageIndicator.setText("לא ניתן להציג קובץ PDF זה: " + e.getMessage());
+            tvPageIndicator.setText("לא ניתן להציג PDF: " + e.getMessage());
         }
     }
 
