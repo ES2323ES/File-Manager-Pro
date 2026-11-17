@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Main storage pie donut -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M24,6C14.06,6 6,14.06 6,24s8.06,18 18,18c8.56,0 15.72,-5.97 17.54,-14H24V6z" />
+    <!-- Active analyzed wedge -->
+    <path
+        android:fillColor="#6366F1"
+        android:pathData="M27,5.26V21h15.74C41.89,12.76 35.24,6.11 27,5.26z" />
+    <!-- Inner center cutout feel + subtle shine -->
+    <path
+        android:fillColor="#E0F2FE"
+        android:pathData="M24,18.5A5.5,5.5 0 1,0 24,29.5A5.5,5.5 0 1,0 24,18.5z" />
+    <!-- Mini bar accent bottom right -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M34,34h3.5v8H34zM40,30h3.5v12H40z" />
+</vector>

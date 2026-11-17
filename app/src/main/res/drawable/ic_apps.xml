@@ -1,10 +1,52 @@
-<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="28dp"
-    android:height="28dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Antennae -->
+    <path
+        android:pathData="M15.5,9.5 L19,14.5"
+        android:strokeWidth="2.4"
+        android:strokeColor="#22C55E"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M32.5,9.5 L29,14.5"
+        android:strokeWidth="2.4"
+        android:strokeColor="#22C55E"
+        android:strokeLineCap="round" />
+    <!-- Head dome -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M15,20.5 C15,15.3 19.0,11.5 24,11.5 C29.0,11.5 33,15.3 33,20.5 Z" />
+    <!-- Eyes -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M19.8,15.6 A1.4,1.4 0 1,0 19.8,18.4 A1.4,1.4 0 1,0 19.8,15.6 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28.2,15.6 A1.4,1.4 0 1,0 28.2,18.4 A1.4,1.4 0 1,0 28.2,15.6 Z" />
+    <!-- Body torso -->
     <path
         android:fillColor="#16A34A"
-        android:pathData="M17.6,9.48l1.84,-3.18c0.16,-0.31 0.04,-0.69 -0.26,-0.85 -0.29,-0.15 -0.65,-0.06 -0.83,0.22l-1.88,3.24c-2.86,-1.21 -6.08,-1.21 -8.94,0L5.65,5.67c-0.19,-0.29 -0.58,-0.38 -0.87,-0.2 -0.28,0.18 -0.37,0.54 -0.22,0.83L6.4,9.48C3.3,11.25 1.28,14.44 1,18h22c-0.28,-3.56 -2.3,-6.75 -5.4,-8.52zM7,15.25c-0.69,0 -1.25,-0.56 -1.25,-1.25s0.56,-1.25 1.25,-1.25 1.25,0.56 1.25,1.25 -0.56,1.25 -1.25,1.25zM17,15.25c-0.69,0 -1.25,-0.56 -1.25,-1.25s0.56,-1.25 1.25,-1.25 1.25,0.56 1.25,1.25 -0.56,1.25 -1.25,1.25z" />
+        android:pathData="M15,22 H33 V32.8 C33,34.6 31.6,36 29.8,36 H18.2 C16.4,36 15,34.6 15,32.8 Z" />
+    <!-- Subtle chest accent pill -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M18.5,25.5 C18.5,24.7 19.2,24 20,24 H28 C28.8,24 29.5,24.7 29.5,25.5 C29.5,26.3 28.8,27 28,27 H20 C19.2,27 18.5,26.3 18.5,25.5 Z" />
+    <!-- Left Arm -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M11.2,22 C12.4,22 13.4,23.0 13.4,24.2 V31.8 C13.4,33.0 12.4,34 11.2,34 C10.0,34 9,33.0 9,31.8 V24.2 C9,23.0 10.0,22 11.2,22 Z" />
+    <!-- Right Arm -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M36.8,22 C38.0,22 39,23.0 39,24.2 V31.8 C39,33.0 38.0,34 36.8,34 C35.6,34 34.6,33.0 34.6,31.8 V24.2 C34.6,23.0 35.6,22 36.8,22 Z" />
+    <!-- Left Leg -->
+    <path
+        android:fillColor="#15803D"
+        android:pathData="M18,36 H22.2 V41.2 C22.2,42.4 21.2,43.4 20.1,43.4 C19.0,43.4 18,42.4 18,41.2 Z" />
+    <!-- Right Leg -->
+    <path
+        android:fillColor="#15803D"
+        android:pathData="M25.8,36 H30 V41.2 C30,42.4 29.0,43.4 27.9,43.4 C26.8,43.4 25.8,42.4 25.8,41.2 Z" />
 </vector>

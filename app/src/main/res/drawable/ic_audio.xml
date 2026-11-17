@@ -1,10 +1,28 @@
-<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="28dp"
-    android:height="28dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Sound waves -->
     <path
-        android:fillColor="#D97706"
-        android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
+        android:pathData="M9.5,21.5 C8,17.5 10,12.5 13.5,10"
+        android:strokeWidth="2.4"
+        android:strokeColor="#FBBF24"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M39,25 C40.5,21.5 40,17 37.5,14"
+        android:strokeWidth="2.4"
+        android:strokeColor="#FBBF24"
+        android:strokeLineCap="round" />
+    <!-- Beamed double musical notes -->
+    <path
+        android:fillColor="#F97316"
+        android:pathData="M19,12.5 L34.5,9.2 C35.3,9.0 36,9.6 36,10.5 V31.5 C36,34.8 33.1,37.5 29.6,37.5 C26.3,37.5 23.8,35.2 23.8,32.3 C23.8,29.4 26.3,27.1 29.6,27.1 C30.8,27.1 31.9,27.4 32.8,28.0 V16.4 L21.2,18.9 V34.8 C21.2,38.1 18.3,40.8 14.8,40.8 C11.5,40.8 9.0,38.5 9.0,35.6 C9.0,32.7 11.5,30.4 14.8,30.4 C16.0,30.4 17.1,30.7 18.0,31.3 V13.8 C18.0,13.1 18.4,12.6 19,12.5 Z" />
+    <!-- Highlight sheen on note heads -->
+    <path
+        android:fillColor="#FED7AA"
+        android:pathData="M13.6,33.3 A2.0,1.4 0 1,0 13.6,36.1 A2.0,1.4 0 1,0 13.6,33.3 Z" />
+    <path
+        android:fillColor="#FED7AA"
+        android:pathData="M28.4,30.0 A2.0,1.4 0 1,0 28.4,32.8 A2.0,1.4 0 1,0 28.4,30.0 Z" />
 </vector>

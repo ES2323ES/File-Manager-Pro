@@ -1,10 +1,22 @@
-<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="28dp"
-    android:height="28dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Rounded photo frame -->
     <path
-        android:fillColor="#4F46E5"
-        android:pathData="M21,19V5c0,-1.1 -0.9,-2 -2,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2zM8.5,13.5l2.5,3.01L14.5,12l4.5,6H5l3.5,-4.5z" />
+        android:fillColor="#6366F1"
+        android:pathData="M10,8 H38 C40.2,8 42,9.8 42,12 V36 C42,38.2 40.2,40 38,40 H10 C7.8,40 6,38.2 6,36 V12 C6,9.8 7.8,8 10,8 Z" />
+    <!-- Sky highlight -->
+    <path
+        android:fillColor="#A5B4FC"
+        android:pathData="M10,12 H38 V26 L30.5,19 L23,27 L17.5,22 L10,30 Z" />
+    <!-- Sun circle -->
+    <path
+        android:fillColor="#FDE047"
+        android:pathData="M16.5,14.5 A2.8,2.8 0 1,0 16.5,20.1 A2.8,2.8 0 1,0 16.5,14.5 Z" />
+    <!-- Mountain foreground -->
+    <path
+        android:fillColor="#EEF2FF"
+        android:pathData="M10,36 L18.5,25.5 L24,31.5 L31,22 L38,36 Z" />
 </vector>

@@ -1,10 +1,26 @@
-<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="28dp"
-    android:height="28dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Film reel outer frame -->
     <path
-        android:fillColor="#E11D48"
-        android:pathData="M17,10.5V7c0,-0.55 -0.45,-1 -1,-1H4c-0.55,0 -1,0.45 -1,1v10c0,0.55 0.45,1 1,1h12c0.55,0 1,-0.45 1,-1v-3.5l4,4v-11l-4,4z" />
+        android:fillColor="#F43F5E"
+        android:pathData="M9,9 H39 C41.2,9 43,10.8 43,13 V35 C43,37.2 41.2,39 39,39 H9 C6.8,39 5,37.2 5,35 V13 C5,10.8 6.8,9 9,9 Z" />
+    <!-- Inner screen frame -->
+    <path
+        android:fillColor="#BE123C"
+        android:pathData="M14.5,12.5 H33.5 C34.3,12.5 35,13.2 35,14 V34 C35,34.8 34.3,35.5 33.5,35.5 H14.5 C13.7,35.5 13,34.8 13,34 V14 C13,13.2 13.7,12.5 14.5,12.5 Z" />
+    <!-- Left film sprocket holes -->
+    <path
+        android:fillColor="#FFE4E6"
+        android:pathData="M7.5,12.5 H10.8 V16.5 H7.5 Z M7.5,22 H10.8 V26 H7.5 Z M7.5,31.5 H10.8 V35.5 H7.5 Z" />
+    <!-- Right film sprocket holes -->
+    <path
+        android:fillColor="#FFE4E6"
+        android:pathData="M37.2,12.5 H40.5 V16.5 H37.2 Z M37.2,22 H40.5 V26 H37.2 Z M37.2,31.5 H40.5 V35.5 H37.2 Z" />
+    <!-- Center play triangle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M20.5,18.2 L30.2,24 L20.5,29.8 Z" />
 </vector>
