@@ -8,13 +8,16 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.ColorUtils;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -24,8 +27,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * סעיף 33: סידור והסתרת קטגוריות מסך הבית באמצעות גרירה ושחרור (Drag & Drop) כולל קו חסימה:
- * כל קטגוריה שתמוקם מתחת לקו החסימה תוסתר מהמסך הראשי!
+ * סידור והסתרת קטגוריות מסך הבית באמצעות גרירה ושחרור (Drag & Drop) כולל קו חסימה:
+ * כל קטגוריה שתמוקם מתחת לקו החסימה תוסתר מהמסך הראשי.
  */
 public class HomeLayoutActivity extends AppCompatActivity {
 
@@ -35,43 +38,69 @@ public class HomeLayoutActivity extends AppCompatActivity {
     private LayoutAdapter adapter;
     private int theme;
 
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
-        int bg = ThemeHelper.getBgColor(this, theme);
         int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        int accent = ThemeHelper.getAccentColor(this, theme);
+        boolean dark = ThemeHelper.isDarkSurface(this, theme);
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                persistOrder();
+                finish();
+            }
+        });
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(bg);
+        ThemeHelper.applyWallpaperBackdrop(this, root, theme);
 
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        topBar.setPadding(20, 18, 20, 18);
+        topBar.setPadding(dp(10), dp(8), dp(14), dp(10));
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
-        Button btnBack = ThemedDialogHelper.createThemedButton(this, "שמור וצא", theme, true, false);
-        btnBack.setOnClickListener(v -> {
-            persistOrder();
-            finish();
-        });
+        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_arrow_back, accent, "שמור וחזור", 40, 8, v -> {
+                    persistOrder();
+                    finish();
+                });
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
         tvTitle.setText("סידור מסך הבית");
         tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(17f);
+        tvTitle.setTextSize(ThemeHelper.spScaled(this, 17f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tLp.setMarginStart(14);
+        tLp.setMarginStart(dp(6));
         topBar.addView(tvTitle, tLp);
 
-        Button btnReset = ThemedDialogHelper.createThemedButton(this, "איפוס", theme, false, false);
+        Button btnReset = new Button(this);
+        btnReset.setText("איפוס");
+        btnReset.setAllCaps(false);
+        btnReset.setTextSize(ThemeHelper.spScaled(this, 13f));
+        btnReset.setTypeface(Typeface.DEFAULT_BOLD);
+        btnReset.setTextColor(accent);
+        GradientDrawable resetBg = new GradientDrawable();
+        resetBg.setCornerRadius(dp(12));
+        resetBg.setColor(ColorUtils.setAlphaComponent(accent, dark ? 28 : 16));
+        btnReset.setBackground(resetBg);
+        btnReset.setStateListAnimator(null);
+        btnReset.setMinHeight(0);
+        btnReset.setMinimumHeight(0);
+        btnReset.setPadding(dp(14), dp(7), dp(14), dp(7));
         btnReset.setOnClickListener(v -> {
             PrefsManager.setHomeCategoryOrder(this, null);
             PrefsManager.setHomeVisibleLimit(this, -1);
@@ -85,8 +114,8 @@ public class HomeLayoutActivity extends AppCompatActivity {
         TextView tvHint = new TextView(this);
         tvHint.setText("גרור למעלה/למטה לשינוי סדר הקטגוריות. פריטים מתחת ל\"קו החסימה\" לא יופיעו במסך הבית.");
         tvHint.setTextColor(ThemeHelper.getSecondaryTextColor(this, theme));
-        tvHint.setTextSize(12.5f);
-        tvHint.setPadding(28, 16, 28, 12);
+        tvHint.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        tvHint.setPadding(dp(16), dp(10), dp(16), dp(8));
         root.addView(tvHint);
 
         loadRows();
@@ -176,21 +205,22 @@ public class HomeLayoutActivity extends AppCompatActivity {
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(24, 20, 24, 20);
+            row.setPadding(dp(14), dp(12), dp(14), dp(12));
             RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMargins(22, 8, 22, 8);
+            lp.setMargins(dp(12), dp(4), dp(12), dp(4));
             row.setLayoutParams(lp);
 
             ImageView drag = new ImageView(parent.getContext());
             drag.setImageResource(R.drawable.ic_drag_handle);
-            row.addView(drag, new LinearLayout.LayoutParams(56, 56));
+            int iconSz = dp(24);
+            row.addView(drag, new LinearLayout.LayoutParams(iconSz, iconSz));
 
             TextView tv = new TextView(parent.getContext());
-            tv.setTextSize(14.5f);
+            tv.setTextSize(ThemeHelper.spScaled(HomeLayoutActivity.this, 14f));
             tv.setTypeface(Typeface.DEFAULT_BOLD);
             LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            tLp.setMarginStart(16);
+            tLp.setMarginStart(dp(10));
             row.addView(tv, tLp);
             return new VH(row, tv, drag);
         }
@@ -198,20 +228,21 @@ public class HomeLayoutActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int pos) {
             String key = rows.get(pos);
-            GradientDrawable bg = new GradientDrawable();
-            bg.setCornerRadius(16f);
             if (KEY_DIVIDER.equals(key)) {
-                bg.setColor(Color.parseColor("#DC2626"));
-                h.title.setText("─── קו חסימה (מתחת לקו מוסתר מהבית) ───");
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(dp(14));
+                bg.setColor(ColorUtils.setAlphaComponent(Color.parseColor("#DC2626"), 220));
+                h.container.setBackground(bg);
+                h.title.setText("קו חסימה — מתחת לקו מוסתר מהבית");
                 h.title.setTextColor(Color.WHITE);
                 h.handle.setColorFilter(Color.WHITE);
             } else {
-                bg.setColor(ThemeHelper.getCardColor(HomeLayoutActivity.this, theme));
+                h.container.setBackground(ThemeHelper.createGlassCardBackground(
+                        HomeLayoutActivity.this, theme, 14f, true, false));
                 h.title.setText(labelForKey(key));
                 h.title.setTextColor(ThemeHelper.getPrimaryTextColor(HomeLayoutActivity.this, theme));
                 h.handle.setColorFilter(ThemeHelper.getAccentColor(HomeLayoutActivity.this, theme));
             }
-            h.container.setBackground(bg);
         }
 
         @Override

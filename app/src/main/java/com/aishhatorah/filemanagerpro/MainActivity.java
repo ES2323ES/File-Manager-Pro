@@ -71,6 +71,7 @@ public class MainActivity extends AppCompatActivity {
     private CardView cardQuickAccess;
     private ImageView ivQuickAccessIcon;
     private TextView tvQuickAccessLabel;
+    private TextView tvQuickAccessPath;
     private CardView cardStorageSummary;
     private TextView tvInternalSummaryTitle;
     private TextView tvInternalSummaryStats;
@@ -189,6 +190,7 @@ public class MainActivity extends AppCompatActivity {
         cardQuickAccess = findViewById(R.id.cardQuickAccess);
         ivQuickAccessIcon = findViewById(R.id.ivQuickAccessIcon);
         tvQuickAccessLabel = findViewById(R.id.tvQuickAccessLabel);
+        tvQuickAccessPath = findViewById(R.id.tvQuickAccessPath);
         cardStorageSummary = findViewById(R.id.cardStorageSummary);
         tvInternalSummaryTitle = findViewById(R.id.tvInternalSummaryTitle);
         tvInternalSummaryStats = findViewById(R.id.tvInternalSummaryStats);
@@ -232,14 +234,14 @@ public class MainActivity extends AppCompatActivity {
         int accent = ThemeHelper.getAccentColor(this, theme);
         int divider = ThemeHelper.getDividerColor(this, theme);
 
-        rootContainer.setBackgroundColor(bg);
-        topBar.setBackgroundColor(topBg);
-        topDivider.setBackgroundColor(divider);
+        ThemeHelper.applyWallpaperBackdrop(this, rootContainer, theme);
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
+        topDivider.setVisibility(View.GONE);
 
         tvAppTitle.setText("File Manager Pro");
         tvAppTitle.setTextColor(textPrimary);
         tvAppTitle.setTextSize(ThemeHelper.spScaled(this, 15.5f));
-        tvPullHint.setTextColor(textSecondary);
+        tvPullHint.setTextColor(ThemeHelper.hasWallpaper(this) ? textPrimary : textSecondary);
         tvPullHint.setTextSize(ThemeHelper.spScaled(this, 11.5f));
 
         ColorStateList accentState = ColorStateList.valueOf(accent);
@@ -247,7 +249,7 @@ public class MainActivity extends AppCompatActivity {
         btnSettings.setColorFilter(accent);
         swipeRefreshHome.setColorSchemeColors(accent);
 
-        cardStorageSummary.setCardBackgroundColor(cardBg);
+        ThemeHelper.styleGlassCardView(this, cardStorageSummary, theme, 16f, false);
         tvInternalSummaryTitle.setTextColor(textPrimary);
         tvInternalSummaryStats.setTextColor(textSecondary);
         tvSdSummaryTitle.setTextColor(textPrimary);
@@ -255,9 +257,9 @@ public class MainActivity extends AppCompatActivity {
         progressInternal.setProgressTintList(accentState);
         progressSd.setProgressTintList(accentState);
 
-        refreshQuickAccessBanner(cardBg, textPrimary, accent);
-        refreshStorageSummaryAnd96Alert(textPrimary, textSecondary, accent);
-        buildHomeGrid(cardBg, textPrimary, textSecondary, accent);
+        refreshQuickAccessBanner(theme, textPrimary, textSecondary, accent);
+        refreshStorageSummaryAnd96Alert(theme, textPrimary, textSecondary, accent);
+        buildHomeGrid(theme, cardBg, textPrimary, textSecondary, accent);
 
         if (miniAudioListener != null) {
             miniAudioListener.onPlaybackStateChanged();
@@ -265,7 +267,7 @@ public class MainActivity extends AppCompatActivity {
         refreshCategoryVolumesAsync(fromUserPullToRefresh);
     }
 
-    private void refreshQuickAccessBanner(int cardBg, int textPrimary, int accent) {
+    private void refreshQuickAccessBanner(int theme, int textPrimary, int textSecondary, int accent) {
         if (!PrefsManager.isQuickAccessEnabled(this)) {
             cardQuickAccess.setVisibility(View.GONE);
             return;
@@ -282,13 +284,18 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         cardQuickAccess.setVisibility(View.VISIBLE);
-        cardQuickAccess.setCardBackgroundColor(cardBg);
+        ThemeHelper.styleGlassCardView(this, cardQuickAccess, theme, 16f, false);
         if (ivQuickAccessIcon != null) {
             ivQuickAccessIcon.setColorFilter(accent);
         }
         tvQuickAccessLabel.setTextColor(textPrimary);
-        tvQuickAccessLabel.setTextSize(ThemeHelper.spScaled(this, 12.5f));
-        tvQuickAccessLabel.setText("גישה מהירה: " + dir.getName());
+        tvQuickAccessLabel.setTextSize(ThemeHelper.spScaled(this, 13f));
+        tvQuickAccessLabel.setText("גישה מהירה");
+        if (tvQuickAccessPath != null) {
+            tvQuickAccessPath.setTextColor(textSecondary);
+            tvQuickAccessPath.setTextSize(ThemeHelper.spScaled(this, 10.5f));
+            tvQuickAccessPath.setText(dir.getAbsolutePath());
+        }
         cardQuickAccess.setOnClickListener(v -> {
             Intent i = new Intent(this, FileBrowserActivity.class);
             i.putExtra(FileBrowserActivity.EXTRA_MODE, lastMode.isEmpty() ? FileBrowserActivity.MODE_INTERNAL : lastMode);
@@ -305,12 +312,13 @@ public class MainActivity extends AppCompatActivity {
                     .summary;
             runOnUiThread(() -> {
                 cachedSizes = fresh;
+                boolean showLabelsNow = PrefsManager.isShowHomeCategoryLabels(this);
                 for (Map.Entry<String, TextView> entry : subtitleViewsById.entrySet()) {
                     String catId = entry.getKey();
                     String sub = getCategorySubtitle(catId, null);
                     TextView tv = entry.getValue();
                     tv.setText(sub);
-                    tv.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+                    tv.setVisibility((showLabelsNow && !sub.isEmpty()) ? View.VISIBLE : View.GONE);
                 }
                 if (notifyWhenScanFinished) {
                     swipeRefreshHome.setRefreshing(false);
@@ -320,15 +328,19 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void refreshStorageSummaryAnd96Alert(int textPrimary, int textSecondary, int accent) {
+    private String formatRtlStorageStats(long usedBytes, long totalBytes, double usedPercent) {
+        String used = StorageUtils.formatSize(usedBytes);
+        String total = StorageUtils.formatSize(totalBytes);
+        String pct = String.format(Locale.US, "%.1f%%", usedPercent);
+        return "\u2066" + used + "\u2069 מתוך \u2066" + total + "\u2069 (\u2066" + pct + "\u2069)";
+    }
+
+    private void refreshStorageSummaryAnd96Alert(int theme, int textPrimary, int textSecondary, int accent) {
         StorageUtils.StorageStat internal = StorageUtils.getInternalStorageStat();
         if (internal.available) {
             int pct = (int) Math.round(internal.usedPercent);
             progressInternal.setProgress(pct);
-            tvInternalSummaryStats.setText(String.format(Locale.US, "%s מתוך %s (%.1f%%)",
-                    StorageUtils.formatSize(internal.usedBytes),
-                    StorageUtils.formatSize(internal.totalBytes),
-                    internal.usedPercent));
+            tvInternalSummaryStats.setText(formatRtlStorageStats(internal.usedBytes, internal.totalBytes, internal.usedPercent));
         }
 
         StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
@@ -336,17 +348,12 @@ public class MainActivity extends AppCompatActivity {
             sdSummaryBlock.setVisibility(View.VISIBLE);
             int sdPct = (int) Math.round(sd.usedPercent);
             progressSd.setProgress(sdPct);
-            tvSdSummaryStats.setText(String.format(Locale.US, "%s מתוך %s (%.1f%%)",
-                    StorageUtils.formatSize(sd.usedBytes),
-                    StorageUtils.formatSize(sd.totalBytes),
-                    sd.usedPercent));
+            tvSdSummaryStats.setText(formatRtlStorageStats(sd.usedBytes, sd.totalBytes, sd.usedPercent));
         } else {
-            sdSummaryBlock.setVisibility(View.VISIBLE);
-            progressSd.setProgress(0);
-            tvSdSummaryStats.setText("לא זוהה כרטיס SD חיצוני");
+            sdSummaryBlock.setVisibility(View.GONE);
         }
 
-        // סעיף 34: כונני USB OTG מחוברים
+        // כונני USB OTG מחוברים
         usbOtgContainer.removeAllViews();
         List<StorageUtils.StorageStat> otgVolumes = StorageUtils.getConnectedUsbOtgVolumes(this);
         if (otgVolumes.isEmpty()) {
@@ -368,14 +375,17 @@ public class MainActivity extends AppCompatActivity {
                 tvName.setTextColor(accent);
                 tvName.setTextSize(13f);
                 tvName.setTypeface(Typeface.DEFAULT_BOLD);
-                top.addView(tvName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                top.addView(tvName, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
                 TextView tvStat = new TextView(this);
-                tvStat.setText(String.format(Locale.US, "%s פנוי מתוך %s",
-                        StorageUtils.formatSize(usb.freeBytes), StorageUtils.formatSize(usb.totalBytes)));
+                tvStat.setText("\u2066" + StorageUtils.formatSize(usb.freeBytes) + "\u2069 פנוי מתוך \u2066" + StorageUtils.formatSize(usb.totalBytes) + "\u2069");
+                tvStat.setTextDirection(View.TEXT_DIRECTION_RTL);
+                tvStat.setGravity(Gravity.END);
                 tvStat.setTextColor(textSecondary);
                 tvStat.setTextSize(11.5f);
-                top.addView(tvStat);
+                LinearLayout.LayoutParams statLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                statLp.setMarginStart(Math.round(8 * d));
+                top.addView(tvStat, statLp);
                 row.addView(top);
 
                 ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -440,20 +450,51 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void buildHomeGrid(int cardBg, int textPrimary, int textSecondary, int accent) {
+    private boolean isMultiColorCategoryIcon(int iconRes) {
+        return iconRes == R.drawable.ic_apps
+                || iconRes == R.drawable.ic_audio
+                || iconRes == R.drawable.ic_video
+                || iconRes == R.drawable.ic_images
+                || iconRes == R.drawable.ic_documents
+                || iconRes == R.drawable.ic_downloads
+                || iconRes == R.drawable.ic_analyzer;
+    }
+
+    private int resolveSoftCategoryTint(String id, int accent) {
+        if (FileBrowserActivity.MODE_RECENT.equals(id)) return 0xFFF59E0B;
+        if (FileBrowserActivity.MODE_RECYCLE_BIN.equals(id)) return 0xFF10B981;
+        if ("TOOL_AUDIO_CUTTER".equals(id)) return 0xFF8B5CF6;
+        if ("TOOL_VIDEO_CUTTER".equals(id)) return 0xFFF43F5E;
+        return accent;
+    }
+
+    private void buildHomeGrid(int theme, int cardBg, int textPrimary, int textSecondary, int accent) {
         gridRowsContainer.removeAllViews();
         subtitleViewsById.clear();
         LayoutInflater inflater = LayoutInflater.from(this);
 
+        StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
+        List<StorageUtils.StorageStat> otgVolumes = StorageUtils.getConnectedUsbOtgVolumes(this);
+        boolean hasRemovable = sd.available || !otgVolumes.isEmpty();
+
         List<HomeCategory> ordered = new ArrayList<>();
         for (String key : PrefsManager.getHomeCategoryOrder(this)) {
+            if ("sd_card".equals(key)) {
+                if (sd.available) {
+                    ordered.add(mapIdToHomeCategory(key));
+                } else if (!hasRemovable) {
+                    ordered.add(new HomeCategory("TOOL_ANALYZER", "ניתוח", R.drawable.ic_analyzer));
+                }
+                continue;
+            }
             HomeCategory hc = mapIdToHomeCategory(key);
             if (hc != null) ordered.add(hc);
         }
         // הוספת אריחי USB OTG אם מחוברים
-        for (StorageUtils.StorageStat usb : StorageUtils.getConnectedUsbOtgVolumes(this)) {
+        int otgInsertIdx = Math.min(2, ordered.size());
+        for (StorageUtils.StorageStat usb : otgVolumes) {
             if (usb.root != null) {
-                ordered.add(2, new HomeCategory(
+                ordered.add(otgInsertIdx++, new HomeCategory(
                         FileBrowserActivity.MODE_USB_OTG,
                         usb.label.isEmpty() ? "כונן USB" : usb.label,
                         R.drawable.ic_usb_otg,
@@ -483,11 +524,14 @@ public class MainActivity extends AppCompatActivity {
         boolean compact = widthDp < 330f || heightDp < 560f;
         boolean tablet = Math.min(widthDp, heightDp) >= 600f;
         int cols = widthDp >= 780f ? 5 : (widthDp >= 520f ? 4 : 3);
+        boolean showLabels = PrefsManager.isShowHomeCategoryLabels(this);
 
         int tileHeightPx = ThemeHelper.dpScaled(this, compact ? 86 : (tablet ? 116 : 98));
-        int iconSizePx = ThemeHelper.dpScaled(this, compact ? 26 : (tablet ? 36 : 30));
-        float titleSp = ThemeHelper.spScaled(this, compact ? 11.5f : (tablet ? 14f : 12.5f));
-        float subSp = ThemeHelper.spScaled(this, compact ? 9.5f : (tablet ? 11.5f : 10.5f));
+        int iconSizePx = ThemeHelper.dpScaled(this, showLabels
+                ? (compact ? 32 : (tablet ? 44 : 38))
+                : (compact ? 38 : (tablet ? 50 : 44)));
+        float titleSp = ThemeHelper.spScaled(this, compact ? 10f : (tablet ? 12.5f : 11f));
+        float subSp = ThemeHelper.spScaled(this, compact ? 9f : (tablet ? 11f : 10f));
         int tileMarginPx = Math.round((compact ? 3f : 4f) * d);
 
         for (int i = 0; i < ordered.size(); i += cols) {
@@ -512,7 +556,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 HomeCategory item = ordered.get(idx);
                 CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, rowLayout, false);
-                tile.setCardBackgroundColor(cardBg);
+                ThemeHelper.styleGlassCardView(this, tile, theme, 16f, false);
                 LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(0, tileHeightPx, 1f);
                 tileLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
                 tile.setLayoutParams(tileLp);
@@ -529,17 +573,23 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 iv.setImageResource(item.iconRes);
-                iv.setColorFilter(accent);
+                if (isMultiColorCategoryIcon(item.iconRes)) {
+                    iv.clearColorFilter();
+                } else {
+                    iv.setColorFilter(resolveSoftCategoryTint(item.id, accent));
+                }
+
                 tvTitle.setText(item.titleHe);
                 tvTitle.setTextSize(titleSp);
                 tvTitle.setTextColor(textPrimary);
+                tvTitle.setVisibility(showLabels ? View.VISIBLE : View.GONE);
 
                 String sub = getCategorySubtitle(item.id, item.customDirPath);
                 tvSub.setText(sub);
                 tvSub.setTextSize(subSp);
                 tvSub.setTextColor(textSecondary);
                 tvSub.setTextDirection(View.TEXT_DIRECTION_LTR);
-                tvSub.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+                tvSub.setVisibility((showLabels && !sub.isEmpty()) ? View.VISIBLE : View.GONE);
                 if (!FileBrowserActivity.MODE_USB_OTG.equals(item.id)) {
                     subtitleViewsById.put(item.id, tvSub);
                 }
@@ -552,6 +602,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String getCategorySubtitle(String id, String customPath) {
+        if ("TOOL_ANALYZER".equals(id)) {
+            return "קבצים כבדים";
+        }
         if (FileBrowserActivity.MODE_INTERNAL.equals(id)) {
             StorageUtils.StorageStat st = StorageUtils.getInternalStorageStat();
             return st.available ? StorageUtils.formatSize(st.freeBytes) + " פנוי" : "פנימי";
@@ -602,6 +655,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void onCategoryClicked(HomeCategory item) {
+        if ("TOOL_ANALYZER".equals(item.id)) {
+            startActivity(new Intent(this, StorageAnalyzerActivity.class));
+            return;
+        }
         if ("TOOL_AUDIO_CUTTER".equals(item.id)) {
             startActivity(new Intent(this, AudioCutterActivity.class));
             return;

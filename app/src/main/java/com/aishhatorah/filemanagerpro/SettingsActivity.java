@@ -1,18 +1,20 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -21,7 +23,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.ColorUtils;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -29,12 +35,12 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * סעיפים 6, 7, 8, 27, 32, 33, 37, 38, 40, 44:
- * מסך הגדרות מינימליסטי ומקצועי עם ערכות נושא מורחבות, בחירת צבע מרכזי,
- * גודל תצוגה, בחירת מנוע פנימי/מערכת, מחוות אוטומטיות, סידור מסך בית, איפוס אפליקציות ברירת מחדל,
- * הסתרת סעיף הרשאות כאשר מאושרות וקישור מהיר לאבחון שגיאות.
+ * מסך הגדרות בעיצוב זכוכית מודרני עם בחירת רקע מטושטש לדף הבית והתיקיות,
+ * שליטה בהצגת שמות קטגוריות, ערכות נושא, צבע מרכזי וסקאלת תצוגה.
  */
 public class SettingsActivity extends AppCompatActivity {
+
+    private static final int REQ_PICK_WALLPAPER = 4102;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,6 +54,69 @@ public class SettingsActivity extends AppCompatActivity {
         renderSettingsUi();
     }
 
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_PICK_WALLPAPER && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            savePickedWallpaper(data.getData());
+        }
+    }
+
+    private void savePickedWallpaper(Uri uri) {
+        new Thread(() -> {
+            try {
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                try (InputStream is = getContentResolver().openInputStream(uri)) {
+                    if (is == null) return;
+                    BitmapFactory.decodeStream(is, null, bounds);
+                }
+                int maxDim = Math.max(bounds.outWidth, bounds.outHeight);
+                int sample = 1;
+                while (maxDim / sample > 1600) {
+                    sample *= 2;
+                }
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = sample;
+                opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                Bitmap bmp;
+                try (InputStream is2 = getContentResolver().openInputStream(uri)) {
+                    if (is2 == null) return;
+                    bmp = BitmapFactory.decodeStream(is2, null, opts);
+                }
+                if (bmp == null) {
+                    runOnUiThread(() -> Toast.makeText(this, "לא ניתן לקרוא את התמונה שנבחרה", Toast.LENGTH_SHORT).show());
+                    return;
+                }
+                File dest = new File(getFilesDir(), "home_wallpaper.jpg");
+                try (FileOutputStream fos = new FileOutputStream(dest, false)) {
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 88, fos);
+                }
+                bmp.recycle();
+                ThemeHelper.invalidateWallpaperCache();
+                PrefsManager.setHomeWallpaperPath(this, dest.getAbsolutePath());
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "תמונת הרקע עודכנה לדף הבית ולתיקיות", Toast.LENGTH_SHORT).show();
+                    renderSettingsUi();
+                });
+            } catch (Throwable t) {
+                AppLogger.error(this, "SettingsWallpaper", "Failed to save wallpaper", t);
+                runOnUiThread(() -> Toast.makeText(this, "שגיאה בשמירת תמונת הרקע", Toast.LENGTH_SHORT).show());
+            }
+        }).start();
+    }
+
+    private void launchWallpaperPicker() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.setType("image/*");
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(intent, "בחר תמונת רקע"), REQ_PICK_WALLPAPER);
+        } catch (Throwable t) {
+            Toast.makeText(this, "לא נמצא בורר תמונות במכשיר", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
@@ -56,35 +125,26 @@ public class SettingsActivity extends AppCompatActivity {
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
 
-        int bgColor = ThemeHelper.getBgColor(this, theme);
-        int cardColor = ThemeHelper.getCardColor(this, theme);
         int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
         int textSecondary = ThemeHelper.getSecondaryTextColor(this, theme);
         int accent = ThemeHelper.getAccentColor(this, theme);
         int divider = ThemeHelper.getDividerColor(this, theme);
+        boolean dark = ThemeHelper.isDarkSurface(this, theme);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(bgColor);
+        ThemeHelper.applyWallpaperBackdrop(this, root, theme);
 
-        // סרגל כותרת עליון מינימליסטי
+        // כותרת מעוגלת כלפי מעלה (ללא תמונת רקע בתוכה)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        topBar.setPadding(dp(12), dp(10), dp(12), dp(10));
+        topBar.setPadding(dp(10), dp(8), dp(14), dp(10));
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
-        Button btnBack = new Button(this);
-        btnBack.setText("חזרה");
-        btnBack.setAllCaps(false);
-        btnBack.setTextColor(accent);
-        btnBack.setTextSize(ThemeHelper.spScaled(this, 14f));
-        btnBack.setTypeface(Typeface.DEFAULT_BOLD);
-        btnBack.setBackgroundColor(Color.TRANSPARENT);
-        btnBack.setMinHeight(0);
-        btnBack.setMinimumHeight(0);
-        btnBack.setOnClickListener(v -> finish());
+        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> finish());
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
@@ -93,22 +153,18 @@ public class SettingsActivity extends AppCompatActivity {
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpTitle.setMarginStart(dp(8));
+        lpTitle.setMarginStart(dp(6));
         topBar.addView(tvTitle, lpTitle);
         root.addView(topBar);
-
-        View topDiv = new View(this);
-        topDiv.setBackgroundColor(divider);
-        root.addView(topDiv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(14), dp(12), dp(14), dp(26));
+        body.setPadding(dp(14), dp(10), dp(14), dp(26));
 
-        // 1. ערכות נושא וצבע מרכזי + גודל תצוגה (סעיפים 6, 7, 8)
+        // 1. ערכות נושא וצבע מרכזי + גודל תצוגה
         addSectionTitle(body, "מראה, ערכת נושא וגודל תצוגה", accent);
-        LinearLayout themeCard = createSectionCard(cardColor, divider);
+        LinearLayout themeCard = createSectionCard(theme);
 
         TextView tvThemeSub = new TextView(this);
         tvThemeSub.setText("ערכת נושא פעילה: " + ThemeHelper.getThemeNameHe(theme));
@@ -137,8 +193,9 @@ public class SettingsActivity extends AppCompatActivity {
             int end = Math.min(themeIds.length, rowStart + 4);
             for (int i = rowStart; i < end; i++) {
                 final int tId = themeIds[i];
-                Button b = createOptionButton(ThemeHelper.getThemeNameHe(tId).replace(" (AMOLED)", "").replace(" (דינאמי)", ""),
-                        theme == tId, accent, divider, () -> {
+                Button b = createOptionButton(
+                        ThemeHelper.getThemeNameHe(tId).replace(" (AMOLED)", "").replace(" (דינאמי)", ""),
+                        theme == tId, accent, dark, () -> {
                             PrefsManager.setThemeMode(this, tId);
                             renderSettingsUi();
                         });
@@ -209,7 +266,7 @@ public class SettingsActivity extends AppCompatActivity {
             themeCard.addView(swatchRow, srLp);
         }
 
-        // סקאלת גודל תצוגה (סעיף 6)
+        // סקאלת גודל תצוגה
         float currentScale = PrefsManager.getUiScale(this);
         TextView tvScaleLabel = new TextView(this);
         tvScaleLabel.setText(String.format(Locale.US, "גודל תצוגה וטקסט באפליקציה: %.0f%%", currentScale * 100f));
@@ -240,116 +297,147 @@ public class SettingsActivity extends AppCompatActivity {
         themeCard.addView(sbScale);
         body.addView(themeCard);
 
-        // 2. מנועי צפייה, נגן מדיה ומחוות (סעיפים 6, 44)
+        // 2. מנועי צפייה, נגן מדיה ומחוות
         addSectionTitle(body, "מנועי מדיה ומחוות הפעלה", accent);
-        LinearLayout mediaCard = createSectionCard(cardColor, divider);
+        LinearLayout mediaCard = createSectionCard(theme);
 
         addSwitchRow(mediaCard,
                 "פתח סירטונים בנגן המובנה של האפליקציה",
                 "כבה כדי לפתוח קבצי וידאו דרך נגן המערכת / אפליקציה חיצונית",
                 PrefsManager.isUseInternalVideoPlayer(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setUseInternalVideoPlayer(this, checked));
 
         addSwitchRow(mediaCard,
                 "פתח תמונות ו-GIF במציג המובנה",
                 "מציג זום עמוק, תמיכה ב-GIF מונפש, קביעת טפט והגנת מסך מלא",
                 PrefsManager.isUseInternalImageViewer(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setUseInternalImageViewer(this, checked));
 
         addSwitchRow(mediaCard,
                 "פתח שמע (אודיו) בנגן המובנה",
                 "נגן רקע מלא עם תור שירים, טיימר שינה ואקולייזר",
                 PrefsManager.isUseInternalAudioPlayer(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setUseInternalAudioPlayer(this, checked));
 
         addSwitchRow(mediaCard,
                 "מצב מחוות אוטומטי בנגן (כמו סטטוס)",
                 "לחיצה קלה מציגה/מסתירה כפתורים; לחיצה ארוכה בצד ימין מריצה ×2",
                 PrefsManager.isAutoGestureMode(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setAutoGestureMode(this, checked));
         body.addView(mediaCard);
 
-        // 3. מסך בית, ניווט וגיבויי .bak (סעיפים 33, 38, 40)
-        addSectionTitle(body, "מסך הבית, סייר ועורך קבצים", accent);
-        LinearLayout homeCard = createSectionCard(cardColor, divider);
+        // 3. מסך בית, רקע זכוכית, ניווט וגיבויי .bak
+        addSectionTitle(body, "מסך הבית, רקע וסייר קבצים", accent);
+        LinearLayout homeCard = createSectionCard(theme);
 
-        homeCard.addView(createSubtleButton("סידור והסתרת קטגוריות במסך הבית", cardColor, accent,
+        homeCard.addView(createSubtleButton("סידור והסתרת קטגוריות במסך הבית", accent, dark,
                 v -> startActivity(new Intent(this, HomeLayoutActivity.class))));
+
+        homeCard.addView(createSubtleButton(
+                ThemeHelper.hasWallpaper(this)
+                        ? "החלפת תמונת רקע לדף הבית ולתיקיות"
+                        : "בחירת תמונת רקע לדף הבית ולתיקיות",
+                accent, dark,
+                v -> launchWallpaperPicker()));
+
+        if (ThemeHelper.hasWallpaper(this)) {
+            int danger = dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626");
+            homeCard.addView(createSubtleButton("הסר תמונת רקע פעילה", danger, dark, v -> {
+                String path = PrefsManager.getHomeWallpaperPath(this);
+                if (path != null && !path.isEmpty()) {
+                    try {
+                        new File(path).delete();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                PrefsManager.setHomeWallpaperPath(this, null);
+                ThemeHelper.invalidateWallpaperCache();
+                Toast.makeText(this, "תמונת הרקע הוסרה", Toast.LENGTH_SHORT).show();
+                renderSettingsUi();
+            }));
+        }
+
+        addSwitchRow(homeCard,
+                "הצגת שמות קטגוריות במסך הבית",
+                "כבה כדי להציג אייקונים גדולים בלבד ללא כיתוב מתחתם",
+                PrefsManager.isShowHomeCategoryLabels(this),
+                textPrimary, textSecondary,
+                checked -> PrefsManager.setShowHomeCategoryLabels(this, checked));
 
         addSwitchRow(homeCard,
                 "גישה מהירה לתיקייה האחרונה במסך הבית",
                 "הצג כרטיס חזרה מהירה למיקום האחרון בו ביקרת בסייר",
                 PrefsManager.isQuickAccessEnabled(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setQuickAccessEnabled(this, checked));
 
         addSwitchRow(homeCard,
                 "יצירת קובץ גיבוי .bak לפני שמירה בעורך",
                 "שומר עותק של הקובץ המקורי עם סיומת .bak לפני כל שמירת עריכה",
                 PrefsManager.isCreateBackupOnSave(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setCreateBackupOnSave(this, checked));
         body.addView(homeCard);
 
-        // 4. תצוגה בתיקיות ומיון (סעיפים ג, 5)
+        // 4. תצוגה בתיקיות ומיון
         addSectionTitle(body, "תצוגת תיקיות, קטגוריות ומיון", accent);
-        LinearLayout displayCard = createSectionCard(cardColor, divider);
+        LinearLayout displayCard = createSectionCard(theme);
 
         boolean isGrid = PrefsManager.isGridLayout(this);
         LinearLayout viewModeRow = new LinearLayout(this);
         viewModeRow.setOrientation(LinearLayout.HORIZONTAL);
-        viewModeRow.addView(createOptionButton("תצוגת רשימה", !isGrid, accent, divider, () -> {
+        viewModeRow.addView(createOptionButton("תצוגת רשימה", !isGrid, accent, dark, () -> {
             PrefsManager.setGeneralGridLayoutAndSyncNonMedia(this, false);
             renderSettingsUi();
         }));
-        viewModeRow.addView(createOptionButton("תצוגת רשת", isGrid, accent, divider, () -> {
+        viewModeRow.addView(createOptionButton("תצוגת רשת", isGrid, accent, dark, () -> {
             PrefsManager.setGeneralGridLayoutAndSyncNonMedia(this, true);
             renderSettingsUi();
         }));
         displayCard.addView(viewModeRow);
 
-        displayCard.addView(createSubtleButton("תצוגת רשת / רשימה לכל קטגוריה בנפרד", cardColor, accent,
+        displayCard.addView(createSubtleButton("תצוגת רשת / רשימה לכל קטגוריה בנפרד", accent, dark,
                 v -> showPerCategoryLayoutDialog()));
 
         addSwitchRow(displayCard,
                 "הצגת קבצים מוסתרים",
                 "הצג קבצים ותיקיות שמתחילים בנקודה (.)",
                 PrefsManager.isShowHidden(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setShowHidden(this, checked));
 
         addSwitchRow(displayCard,
                 "תצוגה מקדימה לקבצי מדיה ו-APK",
                 "טען עטיפות אלבום, פריימים מוידאו וסמלי חבילות APK",
                 PrefsManager.isShowThumbnails(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setShowThumbnails(this, checked));
 
         addSwitchRow(displayCard,
                 "חישוב נפח תיקיות משנה",
                 "הצג משקל מצטבר לתיקיות (עלול להאט בתיקיות ענקיות)",
                 PrefsManager.isShowFolderSizes(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setShowFolderSizes(this, checked));
 
         addSwitchRow(displayCard,
                 "סדר מיון עולה (א-ת / מהקטן לגדול)",
                 "כבה למיון בסדר יורד (הגדול או החדש ביותר ראשון)",
                 PrefsManager.isSortAscending(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setSortAscending(this, checked));
 
-        displayCard.addView(createSubtleButton("שינוי שדה מיון ברירת מחדל", cardColor, accent,
+        displayCard.addView(createSubtleButton("שינוי שדה מיון ברירת מחדל", accent, dark,
                 v -> showSortModeDialog()));
         body.addView(displayCard);
 
-        // 5. אפליקציות ברירת מחדל ("פתיחה באמצעות" -> תמיד, סעיף 32)
+        // 5. אפליקציות ברירת מחדל
         addSectionTitle(body, "אפליקציות ברירת מחדל לסוגי קבצים", accent);
-        LinearLayout defaultsCard = createSectionCard(cardColor, divider);
+        LinearLayout defaultsCard = createSectionCard(theme);
         Map<String, String> savedDefaults = PrefsManager.getAllDefaultOpenActions(this);
         TextView tvDefInfo = new TextView(this);
         tvDefInfo.setText(savedDefaults.isEmpty()
@@ -359,23 +447,23 @@ public class SettingsActivity extends AppCompatActivity {
         tvDefInfo.setTextSize(ThemeHelper.spScaled(this, 12.5f));
         defaultsCard.addView(tvDefInfo);
         if (!savedDefaults.isEmpty()) {
-            defaultsCard.addView(createSubtleButton("ניהול ואיפוס ברירות מחדל לסיומות", cardColor, accent,
+            defaultsCard.addView(createSubtleButton("ניהול ואיפוס ברירות מחדל לסיומות", accent, dark,
                     v -> showDefaultOpenManagerDialog(savedDefaults)));
         }
         body.addView(defaultsCard);
 
-        // 6. אחסון, ניתוח וייצור סל מיחזור
+        // 6. אחסון, ניתוח וסל מיחזור
         addSectionTitle(body, "ניתוח נפחים, התרעת 96% וסל מיחזור", accent);
-        LinearLayout analyzerCard = createSectionCard(cardColor, divider);
+        LinearLayout analyzerCard = createSectionCard(theme);
 
-        analyzerCard.addView(createSubtleButton("ניתוח — איתור הקבצים הכבדים ביותר", cardColor, accent,
+        analyzerCard.addView(createSubtleButton("ניתוח — איתור הקבצים הכבדים ביותר", accent, dark,
                 v -> startActivity(new Intent(this, StorageAnalyzerActivity.class))));
 
         addSwitchRow(analyzerCard,
                 "התרעה אוטומטית ב-96% תפוסה",
                 "מתריע כאשר הזיכרון הפנימי או הכרטיס מתקרבים למילוי מלא",
                 PrefsManager.isAlert96Enabled(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> {
                     PrefsManager.setAlert96Enabled(this, checked);
                     if (checked) StorageUtils.checkAndNotify96Threshold(this);
@@ -385,25 +473,26 @@ public class SettingsActivity extends AppCompatActivity {
                 "העברה לסל המיחזור בעת מחיקה",
                 "שמור קבצים שנמחקו לצורך שחזור עתידי",
                 PrefsManager.isUseRecycleBin(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setUseRecycleBin(this, checked));
 
         addSwitchRow(analyzerCard,
                 "בקשת אישור לפני מחיקה",
                 "אישור בטיחותי לפני העברה לסל או מחיקה",
                 PrefsManager.isConfirmDelete(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setConfirmDelete(this, checked));
 
         int trashCount = RecycleBinManager.getTrashItemCount(this);
         String trashSize = StorageUtils.formatSize(RecycleBinManager.getTrashTotalBytes(this));
+        int dangerColor = dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626");
         analyzerCard.addView(createSubtleButton(
                 "ריקון סל המיחזור (" + trashCount + " פריטים • " + trashSize + ")",
-                cardColor, Color.parseColor("#DC2626"),
+                dangerColor, dark,
                 v -> confirmEmptyRecycleBinTwoStep()));
         body.addView(analyzerCard);
 
-        // 7. סעיף 27: הסתרת סעיף הרשאות כאשר ההרשאות מאושרות ופעילות
+        // 7. הסתרת סעיף הרשאות כאשר ההרשאות מאושרות ופעילות
         boolean allFilesGranted = StorageUtils.hasAllStoragePermissions(this);
         boolean notifGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
                 || androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
@@ -411,9 +500,9 @@ public class SettingsActivity extends AppCompatActivity {
 
         if (!allFilesGranted || !notifGranted) {
             addSectionTitle(body, "הרשאות גישה נדרשות", Color.parseColor("#D97706"));
-            LinearLayout permsCard = createSectionCard(cardColor, divider);
+            LinearLayout permsCard = createSectionCard(theme);
             if (!allFilesGranted) {
-                permsCard.addView(createSubtleButton("אשר הרשאת גישה לכל הקבצים והאחסון", cardColor, accent, v -> {
+                permsCard.addView(createSubtleButton("אשר הרשאת גישה לכל הקבצים והאחסון", accent, dark, v -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                                 Uri.parse("package:" + getPackageName())));
@@ -423,7 +512,7 @@ public class SettingsActivity extends AppCompatActivity {
                 }));
             }
             if (!notifGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                permsCard.addView(createSubtleButton("אשר הרשאת התראות (נגן ופעולות רקע)", cardColor, accent, v ->
+                permsCard.addView(createSubtleButton("אשר הרשאת התראות (נגן ופעולות רקע)", accent, dark, v ->
                         androidx.core.app.ActivityCompat.requestPermissions(
                                 this,
                                 new String[]{android.Manifest.permission.POST_NOTIFICATIONS},
@@ -435,28 +524,28 @@ public class SettingsActivity extends AppCompatActivity {
 
         // 8. עידכונים, יומן שגיאות ואיפוס
         addSectionTitle(body, "עידכונים, יומן אבחון ואיפוס", accent);
-        LinearLayout updateCard = createSectionCard(cardColor, divider);
+        LinearLayout updateCard = createSectionCard(theme);
 
         addSwitchRow(updateCard,
                 "בדיקת עדכונים אוטומטית בהפעלה",
                 "כולל תמיכה מאובטחת בתעודות רשת מסוננת (נטפרי) עבור GitHub בלבד",
                 PrefsManager.isAutoCheckUpdates(this),
-                textPrimary, textSecondary, divider,
+                textPrimary, textSecondary,
                 checked -> PrefsManager.setAutoCheckUpdates(this, checked));
 
         updateCard.addView(createSubtleButton(
                 "בדיקת עדכון כעת",
-                cardColor, accent,
+                accent, dark,
                 v -> UpdateChecker.checkForUpdates(this, true)));
 
         updateCard.addView(createSubtleButton(
                 "יומן שגיאות ואבחון תקלות",
-                cardColor, textPrimary,
+                textPrimary, dark,
                 v -> startActivity(new Intent(this, DiagnosticsActivity.class))));
 
         updateCard.addView(createSubtleButton(
                 "איפוס כל ההגדרות לברירת מחדל",
-                cardColor, Color.parseColor("#DC2626"),
+                dangerColor, dark,
                 v -> confirmResetSettingsTwoStep()));
 
         body.addView(updateCard);
@@ -522,11 +611,11 @@ public class SettingsActivity extends AppCompatActivity {
                             Toast.makeText(this, "רוקנו לצמיתות " + deleted + " פריטים מסל המיחזור", Toast.LENGTH_SHORT).show();
                             renderSettingsUi();
                         },
-                        "סגור",
+                        "חזור",
                         null,
                         true
                 ),
-                "סגור",
+                "חזור",
                 null,
                 false
         );
@@ -547,14 +636,15 @@ public class SettingsActivity extends AppCompatActivity {
                         "כן, אפס הגדרות",
                         () -> {
                             PrefsManager.resetAll(this);
+                            ThemeHelper.invalidateWallpaperCache();
                             Toast.makeText(this, "כל ההגדרות אופסו לברירת המחדל", Toast.LENGTH_SHORT).show();
                             renderSettingsUi();
                         },
-                        "סגור",
+                        "חזור",
                         null,
                         true
                 ),
-                "סגור",
+                "חזור",
                 null,
                 false
         );
@@ -570,15 +660,11 @@ public class SettingsActivity extends AppCompatActivity {
         parent.addView(tv);
     }
 
-    private LinearLayout createSectionCard(int cardColor, int divider) {
+    private LinearLayout createSectionCard(int theme) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(14));
-        shape.setColor(cardColor);
-        shape.setStroke(Math.max(1, dp(1)), divider);
-        card.setBackground(shape);
+        card.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 16f, true, false));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(6);
@@ -586,7 +672,7 @@ public class SettingsActivity extends AppCompatActivity {
         return card;
     }
 
-    private Button createOptionButton(String label, boolean active, int accent, int divider, Runnable onClick) {
+    private Button createOptionButton(String label, boolean active, int accent, boolean dark, Runnable onClick) {
         int theme = PrefsManager.getThemeMode(this);
         Button b = new Button(this);
         b.setText(label);
@@ -598,10 +684,13 @@ public class SettingsActivity extends AppCompatActivity {
                 : ThemeHelper.getPrimaryTextColor(this, theme));
 
         GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(10));
-        bg.setColor(active ? accent : Color.TRANSPARENT);
-        bg.setStroke(Math.max(1, dp(1)), active ? accent : divider);
+        bg.setCornerRadius(dp(12));
+        bg.setColor(active
+                ? accent
+                : ColorUtils.setAlphaComponent(accent, dark ? 24 : 14));
         b.setBackground(bg);
+        b.setStateListAnimator(null);
+        b.setElevation(0f);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setPadding(dp(6), dp(8), dp(6), dp(8));
@@ -618,7 +707,7 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void addSwitchRow(LinearLayout parent, String title, String subtitle, boolean initial,
-                              int textPrimary, int textSecondary, int divider, SwitchCallback cb) {
+                              int textPrimary, int textSecondary, SwitchCallback cb) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -651,7 +740,7 @@ public class SettingsActivity extends AppCompatActivity {
         parent.addView(row);
     }
 
-    private Button createSubtleButton(String label, int cardColor, int textColor, View.OnClickListener listener) {
+    private Button createSubtleButton(String label, int textColor, boolean dark, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
@@ -660,13 +749,14 @@ public class SettingsActivity extends AppCompatActivity {
         b.setTypeface(Typeface.DEFAULT_BOLD);
 
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(10));
-        shape.setColor(cardColor);
-        shape.setStroke(Math.max(1, dp(1)), textColor);
+        shape.setCornerRadius(dp(12));
+        shape.setColor(ColorUtils.setAlphaComponent(textColor, dark ? 28 : 16));
         b.setBackground(shape);
+        b.setStateListAnimator(null);
+        b.setElevation(0f);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
-        b.setPadding(dp(12), dp(9), dp(12), dp(9));
+        b.setPadding(dp(12), dp(10), dp(12), dp(10));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
