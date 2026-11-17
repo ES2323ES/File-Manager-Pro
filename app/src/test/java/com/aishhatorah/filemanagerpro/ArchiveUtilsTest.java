@@ -98,4 +98,31 @@ public class ArchiveUtilsTest {
         assertEquals(1, ArchiveUtils.extractArchive(tgz, outDir, null));
         assertTrue(new File(outDir, "data.json").exists());
     }
+
+    @Test
+    public void archiveTreeNavigationGroupsNestedFolders() {
+        List<ArchiveUtils.ArchiveEntryInfo> entries = java.util.Arrays.asList(
+                new ArchiveUtils.ArchiveEntryInfo("res/layout/main.xml", 120, 60, false, false),
+                new ArchiveUtils.ArchiveEntryInfo("res/drawable/icon.png", 500, 300, false, false),
+                new ArchiveUtils.ArchiveEntryInfo("AndroidManifest.xml", 800, 400, false, false),
+                new ArchiveUtils.ArchiveEntryInfo("assets/sub/readme.txt", 40, 25, false, true)
+        );
+
+        List<ArchiveUtils.ArchiveTreeNode> rootNodes = ArchiveUtils.listTreeChildren(entries, "");
+        assertEquals(3, rootNodes.size());
+        assertTrue(rootNodes.get(0).directory);
+        assertTrue(rootNodes.get(1).directory);
+        assertFalse(rootNodes.get(2).directory);
+        assertEquals("AndroidManifest.xml", rootNodes.get(2).displayName);
+
+        List<ArchiveUtils.ArchiveTreeNode> resChildren = ArchiveUtils.listTreeChildren(entries, "res/");
+        assertEquals(2, resChildren.size());
+        assertTrue(resChildren.get(0).directory);
+        assertTrue(resChildren.get(1).directory);
+
+        List<ArchiveUtils.ArchiveTreeNode> layoutChildren = ArchiveUtils.listTreeChildren(entries, "res/layout/");
+        assertEquals(1, layoutChildren.size());
+        assertEquals("main.xml", layoutChildren.get(0).displayName);
+        assertFalse(layoutChildren.get(0).directory);
+    }
 }

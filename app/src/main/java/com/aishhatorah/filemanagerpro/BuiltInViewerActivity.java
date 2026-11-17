@@ -150,6 +150,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private int currentImageIdx = 0;
     private ZoomableImageView activeZoomImageView = null;
     private int imageLoadGeneration = 0;
+    private final android.util.LruCache<String, DecodedPhoto> photoCache = new android.util.LruCache<>(5);
+    private Runnable archiveNavigateUpHandler = null;
 
     private boolean isAudioMode = false;
     private boolean audioTickerActive = false;
@@ -405,6 +407,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void proceedCloseOrNavigateBack() {
+        if (archiveNavigateUpHandler != null) {
+            archiveNavigateUpHandler.run();
+            return;
+        }
         setSystemBarsFullscreen(false);
         if (openedFromNotification && targetFile != null && targetFile.getParentFile() != null) {
             openedFromNotification = false;
@@ -432,6 +438,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         activeMediaStageRoot = null;
         activeMediaViewport = null;
         activeZoomImageView = null;
+        archiveNavigateUpHandler = null;
         activeVideoSyncRunnable = null;
         audioRootLayout = null;
         audioStagePlayerView = null;
@@ -690,23 +697,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         int effectiveText = translucentOverlay ? Color.WHITE : textPrimary;
         int effectiveSub = translucentOverlay ? Color.parseColor("#CBD5E1") : textSecondary;
 
-        if (isVideoMode || isAudioMode) {
-            int backColor = isVideoMode ? Color.WHITE : textPrimary;
-            ImageButton btnBackIcon = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(42), backColor);
-            btnBackIcon.setContentDescription("חזרה");
-            btnBackIcon.setOnClickListener(v -> proceedCloseOrNavigateBack());
-            bar.addView(btnBackIcon);
-            if (isAudioMode) {
-                audioTopBackBtn = btnBackIcon;
-            }
-        } else {
-            Button btnClose = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
-            if (translucentOverlay) {
-                btnClose.setTextColor(Color.WHITE);
-            }
-            btnClose.setPadding(dp(10), dp(5), dp(10), dp(5));
-            btnClose.setOnClickListener(v -> proceedCloseOrNavigateBack());
-            bar.addView(btnClose);
+        int backColor = translucentOverlay ? Color.WHITE : textPrimary;
+        ImageButton btnBackIcon = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(42), backColor);
+        btnBackIcon.setContentDescription("חזרה");
+        btnBackIcon.setOnClickListener(v -> proceedCloseOrNavigateBack());
+        bar.addView(btnBackIcon);
+        if (isAudioMode) {
+            audioTopBackBtn = btnBackIcon;
         }
 
         LinearLayout centerTitleCol = new LinearLayout(this);
@@ -957,6 +954,26 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bottomLp.setMargins(dp(10), 0, dp(10), dp(12));
         stageRoot.addView(bottomCard, bottomLp);
 
+        final Runnable preloadNeighbors = () -> {
+            if (imagePlaylist.size() <= 1) return;
+            int[] offsets = new int[]{1, -1};
+            for (int off : offsets) {
+                int nIdx = (currentImageIdx + off + imagePlaylist.size()) % imagePlaylist.size();
+                File neighbor = imagePlaylist.get(nIdx);
+                String nLow = neighbor.getName().toLowerCase(Locale.ROOT);
+                if (MediaFormatHelper.isSvgFile(nLow) || MediaFormatHelper.isGifFile(nLow)) continue;
+                String cacheKey = neighbor.getAbsolutePath() + ":" + neighbor.lastModified();
+                if (photoCache.get(cacheKey) != null) continue;
+                executor.execute(() -> {
+                    if (photoCache.get(cacheKey) != null) return;
+                    DecodedPhoto decoded = decodeUltraClearPhoto(neighbor);
+                    if (decoded != null && decoded.bitmap != null) {
+                        photoCache.put(cacheKey, decoded);
+                    }
+                });
+            }
+        };
+
         final Runnable loadCurrentImageIntoStage = () -> {
             if (imagePlaylist.isEmpty()) return;
             final int gen = ++imageLoadGeneration;
@@ -989,8 +1006,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 return;
             }
 
-            fallbackSvgWebView.setVisibility(View.GONE);
-            zoomView.setVisibility(View.VISIBLE);
+            if (fallbackSvgWebView.getVisibility() != View.GONE) {
+                fallbackSvgWebView.setVisibility(View.GONE);
+            }
+            if (zoomView.getVisibility() != View.VISIBLE) {
+                zoomView.setVisibility(View.VISIBLE);
+            }
             btnProImageEditor.setVisibility(View.VISIBLE);
             btnWallpaper.setVisibility(View.VISIBLE);
 
@@ -1007,6 +1028,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                 ((AnimatedImageDrawable) animatedDrawable).start();
                             }
                             tvMeta.setText("GIF מונפש • " + StorageUtils.formatSize(imgFile.length()));
+                            preloadNeighbors.run();
                         });
                         return;
                     } catch (Throwable ignored) {
@@ -1015,8 +1037,22 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 return;
             }
 
+            final String cacheKey = imgFile.getAbsolutePath() + ":" + imgFile.lastModified();
+            DecodedPhoto cached = photoCache.get(cacheKey);
+            if (cached != null && cached.bitmap != null && !cached.bitmap.isRecycled()) {
+                zoomView.setImageBitmap(cached.bitmap);
+                String dim = (cached.origWidth > 0 && cached.origHeight > 0)
+                        ? (cached.origWidth + "x" + cached.origHeight + "  •  ") : "";
+                tvMeta.setText(dim + StorageUtils.formatSize(imgFile.length()));
+                preloadNeighbors.run();
+                return;
+            }
+
             executor.execute(() -> {
                 DecodedPhoto photo = decodeUltraClearPhoto(imgFile);
+                if (photo.bitmap != null) {
+                    photoCache.put(cacheKey, photo);
+                }
                 uiHandler.post(() -> {
                     if (gen != imageLoadGeneration || isFinishing()) return;
                     if (photo.bitmap != null) {
@@ -1024,6 +1060,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         String dim = (photo.origWidth > 0 && photo.origHeight > 0)
                                 ? (photo.origWidth + "x" + photo.origHeight + "  •  ") : "";
                         tvMeta.setText(dim + StorageUtils.formatSize(imgFile.length()));
+                        preloadNeighbors.run();
                     } else {
                         zoomView.setVisibility(View.GONE);
                         fallbackSvgWebView.setVisibility(View.VISIBLE);
@@ -1780,10 +1817,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 row.addView(tvName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
                 if (i > 0) {
-                    TextView up = new TextView(this);
-                    up.setText("▲");
-                    up.setTextColor(accent);
-                    up.setPadding(dp(8), dp(4), dp(8), dp(4));
+                    ImageButton up = createCleanBorderlessIconButton(R.drawable.ic_chevron_up, dp(32), accent);
+                    up.setContentDescription("הזז למעלה");
                     up.setOnClickListener(v -> {
                         mgr.moveQueueItem(idx, idx - 1);
                         rebuild[0].run();
@@ -1791,10 +1826,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     row.addView(up);
                 }
                 if (i < queue.size() - 1) {
-                    TextView dn = new TextView(this);
-                    dn.setText("▼");
-                    dn.setTextColor(accent);
-                    dn.setPadding(dp(8), dp(4), dp(8), dp(4));
+                    ImageButton dn = createCleanBorderlessIconButton(R.drawable.ic_chevron_down, dp(32), accent);
+                    dn.setContentDescription("הזז למטה");
                     dn.setOnClickListener(v -> {
                         mgr.moveQueueItem(idx, idx + 1);
                         rebuild[0].run();
@@ -1802,10 +1835,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     row.addView(dn);
                 }
                 if (i != curIdx && queue.size() > 1) {
-                    TextView del = new TextView(this);
-                    del.setText("✕");
-                    del.setTextColor(Color.parseColor("#DC2626"));
-                    del.setPadding(dp(8), dp(4), dp(4), dp(4));
+                    ImageButton del = createCleanBorderlessIconButton(R.drawable.ic_close, dp(32), Color.parseColor("#DC2626"));
+                    del.setContentDescription("הסר מהתור");
                     del.setOnClickListener(v -> {
                         mgr.removeFromQueue(idx);
                         rebuild[0].run();
@@ -3093,7 +3124,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             if (videoPrepared && (exoPlayer != null || videoPlayer != null)) {
                                 if (isVideoPlayingSafely()) pauseVideoSafely();
                                 else applyVideoSpeedInternal(true);
-                                flashStatusBadge(badge, isVideoPlayingSafely() ? "▶ נגן" : "⏸ השהה");
+                                flashStatusBadge(badge, isVideoPlayingSafely() ? "מנגן" : "מושהה");
                             }
                         } else if (normX >= 0.66f) {
                             seekVideoBy(10_000);
@@ -3470,9 +3501,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         String itemLabel = isAudio ? "חזרה על השיר עצמו" : "חזרה על הסרטון עצמו";
         String folderLabel = isAudio ? "חזרה על כל הקבצים בתיקייה" : "חזרה על כל הסרטונים בתיקייה";
         List<String> opts = Arrays.asList(
-                (currentMode == AudioPlayerManager.REPEAT_OFF ? "✓  " : "") + "ללא חזרה",
-                (currentMode == AudioPlayerManager.REPEAT_ONE ? "✓  " : "") + itemLabel,
-                (currentMode == AudioPlayerManager.REPEAT_FOLDER ? "✓  " : "") + folderLabel
+                "ללא חזרה" + (currentMode == AudioPlayerManager.REPEAT_OFF ? "  (פעיל)" : ""),
+                itemLabel + (currentMode == AudioPlayerManager.REPEAT_ONE ? "  (פעיל)" : ""),
+                folderLabel + (currentMode == AudioPlayerManager.REPEAT_FOLDER ? "  (פעיל)" : "")
         );
         ThemedDialogHelper.showThemedMenu(this, title, "בחר אופן חזרה בסיום הניגון:", opts, cb::onRepeatChosen);
     }
@@ -3907,6 +3938,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         tvSub.setPadding(0, dp(4), 0, dp(8));
         card.addView(tvSub);
 
+        final TextView tvBreadcrumb = new TextView(this);
+        tvBreadcrumb.setTextColor(accent);
+        tvBreadcrumb.setTextSize(12.5f);
+        tvBreadcrumb.setTypeface(Typeface.DEFAULT_BOLD);
+        tvBreadcrumb.setPadding(0, 0, 0, dp(8));
+        tvBreadcrumb.setTextDirection(View.TEXT_DIRECTION_LTR);
+        card.addView(tvBreadcrumb);
+
         ScrollView scroll = new ScrollView(this);
         final LinearLayout entriesList = new LinearLayout(this);
         entriesList.setOrientation(LinearLayout.VERTICAL);
@@ -3937,69 +3976,167 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         host.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        final String[] currentArchiveFolder = new String[]{""};
+        final List<ArchiveUtils.ArchiveEntryInfo> allEntries = new ArrayList<>();
+        final boolean[] needsPwdState = new boolean[]{false};
+        final boolean isZip = MediaFormatHelper.isZipContainer(targetFile.getName());
+        final Runnable[] renderFolder = new Runnable[1];
         final Runnable[] reloadArchive = new Runnable[1];
+
+        archiveNavigateUpHandler = () -> {
+            if (!currentArchiveFolder[0].isEmpty()) {
+                String trimmed = currentArchiveFolder[0].endsWith("/")
+                        ? currentArchiveFolder[0].substring(0, currentArchiveFolder[0].length() - 1)
+                        : currentArchiveFolder[0];
+                int lastSlash = trimmed.lastIndexOf('/');
+                currentArchiveFolder[0] = lastSlash >= 0 ? trimmed.substring(0, lastSlash + 1) : "";
+                renderFolder[0].run();
+            } else {
+                archiveNavigateUpHandler = null;
+                proceedCloseOrNavigateBack();
+            }
+        };
+
+        renderFolder[0] = () -> {
+            entriesList.removeAllViews();
+            String folderPath = currentArchiveFolder[0];
+            tvBreadcrumb.setText(folderPath.isEmpty() ? "/ (שורש הארכיון)" : ("/" + folderPath));
+            List<ArchiveUtils.ArchiveTreeNode> nodes = ArchiveUtils.listTreeChildren(allEntries, folderPath);
+            tvSub.setText("סה״כ " + allEntries.size() + " פריטים בארכיון • "
+                    + nodes.size() + " בתיקייה זו • " + StorageUtils.formatSize(targetFile.length())
+                    + (needsPwdState[0] ? " • מוגן בסיסמה" : ""));
+
+            if (!folderPath.isEmpty()) {
+                LinearLayout upRow = new LinearLayout(this);
+                upRow.setOrientation(LinearLayout.HORIZONTAL);
+                upRow.setGravity(Gravity.CENTER_VERTICAL);
+                upRow.setPadding(dp(10), dp(9), dp(10), dp(9));
+                GradientDrawable upBg = new GradientDrawable();
+                upBg.setCornerRadius(dp(10));
+                upBg.setColor(ThemeHelper.getBgColor(this, theme));
+                upRow.setBackground(upBg);
+                LinearLayout.LayoutParams upLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                upLp.bottomMargin = dp(6);
+                upRow.setLayoutParams(upLp);
+
+                ImageView ivUp = new ImageView(this);
+                ivUp.setImageResource(R.drawable.ic_arrow_back);
+                ivUp.setColorFilter(accent);
+                upRow.addView(ivUp, new LinearLayout.LayoutParams(dp(20), dp(20)));
+
+                TextView tvUp = new TextView(this);
+                tvUp.setText(".. (חזרה לתיקייה הקודמת)");
+                tvUp.setTextColor(accent);
+                tvUp.setTextSize(13f);
+                tvUp.setTypeface(Typeface.DEFAULT_BOLD);
+                LinearLayout.LayoutParams tvUpLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                tvUpLp.setMarginStart(dp(8));
+                upRow.addView(tvUp, tvUpLp);
+
+                upRow.setOnClickListener(v -> archiveNavigateUpHandler.run());
+                entriesList.addView(upRow);
+            }
+
+            for (ArchiveUtils.ArchiveTreeNode node : nodes) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(10), dp(9), dp(10), dp(9));
+
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(dp(10));
+                bg.setColor(ThemeHelper.getBgColor(this, theme));
+                row.setBackground(bg);
+
+                LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                rLp.bottomMargin = dp(5);
+                row.setLayoutParams(rLp);
+
+                ImageView ivIcon = new ImageView(this);
+                if (node.directory) {
+                    ivIcon.setImageResource(R.drawable.ic_folder);
+                    ivIcon.setColorFilter(accent);
+                } else {
+                    ivIcon.setImageResource(FileThumbnailLoader.resolveFallbackDrawable(node.displayName.toLowerCase(Locale.ROOT)));
+                    ivIcon.clearColorFilter();
+                }
+                row.addView(ivIcon, new LinearLayout.LayoutParams(dp(22), dp(22)));
+
+                TextView tvName = new TextView(this);
+                tvName.setText(node.displayName);
+                tvName.setTextColor(textPrimary);
+                tvName.setTextSize(13.5f);
+                tvName.setTypeface(node.directory ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                tvName.setMaxLines(1);
+                tvName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                LinearLayout.LayoutParams nLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                nLp.setMarginStart(dp(8));
+                nLp.setMarginEnd(dp(8));
+                row.addView(tvName, nLp);
+
+                if (node.encrypted) {
+                    ImageView ivLock = new ImageView(this);
+                    ivLock.setImageResource(R.drawable.ic_lock);
+                    ivLock.setColorFilter(textSecondary);
+                    LinearLayout.LayoutParams lkLp = new LinearLayout.LayoutParams(dp(15), dp(15));
+                    lkLp.setMarginEnd(dp(6));
+                    row.addView(ivLock, lkLp);
+                }
+
+                if (node.directory) {
+                    TextView tvDirHint = new TextView(this);
+                    tvDirHint.setText("תיקייה");
+                    tvDirHint.setTextColor(textSecondary);
+                    tvDirHint.setTextSize(11f);
+                    row.addView(tvDirHint);
+                    row.setOnClickListener(v -> {
+                        currentArchiveFolder[0] = node.fullPath;
+                        scroll.scrollTo(0, 0);
+                        renderFolder[0].run();
+                    });
+                } else {
+                    if (node.size >= 0) {
+                        TextView tvSize = new TextView(this);
+                        tvSize.setText(StorageUtils.formatSize(node.size));
+                        tvSize.setTextColor(textSecondary);
+                        tvSize.setTextSize(11f);
+                        row.addView(tvSize);
+                    }
+                    final ArchiveUtils.ArchiveEntryInfo entryRef = node.entryInfo != null
+                            ? node.entryInfo
+                            : new ArchiveUtils.ArchiveEntryInfo(node.fullPath, node.size, node.compressedSize, false, node.encrypted);
+                    row.setOnClickListener(v -> openArchiveEntry(entryRef, () -> openArchiveEntry(entryRef, null)));
+                    if (isZip && !node.encrypted) {
+                        row.setOnLongClickListener(v -> {
+                            ThemedDialogHelper.showCustomDialog(this, "מחיקה מהארכיון",
+                                    "האם למחוק את \"" + node.displayName + "\" מתוך ה-ZIP?", null,
+                                    "מחק", () -> executor.execute(() -> {
+                                        try {
+                                            ArchiveUtils.deleteZipEntry(targetFile, entryRef.name);
+                                            uiHandler.post(reloadArchive[0]);
+                                        } catch (Exception e) {
+                                            uiHandler.post(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                                        }
+                                    }), "ביטול", null, true);
+                            return true;
+                        });
+                    }
+                }
+                entriesList.addView(row);
+            }
+        };
+
         reloadArchive[0] = () -> executor.execute(() -> {
             try {
-                List<ArchiveUtils.ArchiveEntryInfo> entries = ArchiveUtils.listArchiveEntries(targetFile);
+                List<ArchiveUtils.ArchiveEntryInfo> fetched = ArchiveUtils.listArchiveEntries(targetFile);
                 boolean needsPwd = ArchiveUtils.archiveRequiresPassword(targetFile);
-                boolean isZip = MediaFormatHelper.isZipContainer(targetFile.getName());
-
                 uiHandler.post(() -> {
-                    entriesList.removeAllViews();
-                    tvSub.setText("נמצאו " + entries.size() + " פריטים • " + StorageUtils.formatSize(targetFile.length())
-                            + (needsPwd ? " • מוגן בסיסמה 🔒" : "")
-                            + (isZip ? "\nלחץ על קובץ לפתיחה/עריכה, לחיצה ארוכה למחיקה" : ""));
-
-                    for (ArchiveUtils.ArchiveEntryInfo item : entries) {
-                        LinearLayout row = new LinearLayout(this);
-                        row.setOrientation(LinearLayout.HORIZONTAL);
-                        row.setGravity(Gravity.CENTER_VERTICAL);
-                        row.setPadding(dp(10), dp(8), dp(10), dp(8));
-
-                        GradientDrawable bg = new GradientDrawable();
-                        bg.setCornerRadius(dp(8));
-                        bg.setColor(ThemeHelper.getBgColor(this, theme));
-                        row.setBackground(bg);
-
-                        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                        rLp.bottomMargin = dp(4);
-                        row.setLayoutParams(rLp);
-
-                        TextView tvName = new TextView(this);
-                        tvName.setText((item.directory ? "📁 " : "📄 ") + item.name + (item.encrypted ? " 🔒" : ""));
-                        tvName.setTextColor(textPrimary);
-                        tvName.setTextSize(13f);
-                        row.addView(tvName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-                        if (!item.directory && item.size >= 0) {
-                            TextView tvSize = new TextView(this);
-                            tvSize.setText(StorageUtils.formatSize(item.size));
-                            tvSize.setTextColor(textSecondary);
-                            tvSize.setTextSize(11f);
-                            row.addView(tvSize);
-                        }
-
-                        if (!item.directory) {
-                            row.setOnClickListener(v -> openArchiveEntry(item, () -> openArchiveEntry(item, null)));
-                            if (isZip && !item.encrypted) {
-                                row.setOnLongClickListener(v -> {
-                                    ThemedDialogHelper.showCustomDialog(this, "מחיקה מהארכיון",
-                                            "האם למחוק את \"" + item.name + "\" מתוך ה-ZIP?", null,
-                                            "מחק", () -> executor.execute(() -> {
-                                                try {
-                                                    ArchiveUtils.deleteZipEntry(targetFile, item.name);
-                                                    uiHandler.post(reloadArchive[0]);
-                                                } catch (Exception e) {
-                                                    uiHandler.post(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                                                }
-                                            }), "ביטול", null, true);
-                                    return true;
-                                });
-                            }
-                        }
-                        entriesList.addView(row);
-                    }
+                    allEntries.clear();
+                    allEntries.addAll(fetched);
+                    needsPwdState[0] = needsPwd;
+                    renderFolder[0].run();
                 });
             } catch (Exception e) {
                 uiHandler.post(() -> tvSub.setText("שגיאה בקריאת הארכיון: " + e.getMessage()));
@@ -4169,6 +4306,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         if (pdfDescriptor != null) {
             try { pdfDescriptor.close(); } catch (Exception ignored) {}
         }
+        photoCache.evictAll();
         executor.shutdownNow();
     }
 }

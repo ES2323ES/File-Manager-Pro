@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.Layout;
 import android.text.TextWatcher;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
@@ -16,6 +17,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
@@ -58,6 +60,7 @@ public class CodeEditorActivity extends AppCompatActivity {
     private CodeSyntaxHighlighter.Language currentLang = CodeSyntaxHighlighter.Language.PLAIN;
     private Charset currentCharset = StandardCharsets.UTF_8;
     private boolean wordWrap = true;
+    private float currentFontSp = 14.5f;
     private boolean previewMarkdown = false;
     private boolean dirty = false;
     private boolean suppressHistory = false;
@@ -67,6 +70,7 @@ public class CodeEditorActivity extends AppCompatActivity {
 
     private EditText editorView;
     private LineNumberGutterView gutterView;
+    private FrameLayout editorSlot;
     private HorizontalScrollView editorHScroll;
     private ScrollView editorVScroll;
     private WebView markdownWebView;
@@ -74,6 +78,7 @@ public class CodeEditorActivity extends AppCompatActivity {
     private TextView tvStatsBar;
     private TextView tvLangChip;
     private TextView tvEncChip;
+    private ImageButton btnWrapToggle;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -115,6 +120,7 @@ public class CodeEditorActivity extends AppCompatActivity {
         }
 
         wordWrap = PrefsManager.isTextWrapEnabled(this);
+        currentFontSp = PrefsManager.getTextFontSizeSp(this);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -125,7 +131,7 @@ public class CodeEditorActivity extends AppCompatActivity {
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(topBg);
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
         topBar.setPadding(16, 14, 16, 14);
 
         ImageButton btnBack = makeIconBtn(R.drawable.ic_arrow_back, textPrimary, v -> handleBackAttempt());
@@ -147,7 +153,8 @@ public class CodeEditorActivity extends AppCompatActivity {
             topBar.addView(makeIconBtn(R.drawable.ic_redo, textPrimary, v -> redo()));
         }
         topBar.addView(makeIconBtn(R.drawable.ic_search, textPrimary, v -> showFindReplaceDialog()));
-        topBar.addView(makeIconBtn(R.drawable.ic_wrap, accent, v -> toggleWordWrap()));
+        btnWrapToggle = makeIconBtn(R.drawable.ic_wrap, wordWrap ? accent : textSecondary, v -> toggleWordWrap(accent, textSecondary));
+        topBar.addView(btnWrapToggle);
 
         if (!readOnlyMode) {
             TextView btnSave = new TextView(this);
@@ -201,8 +208,26 @@ public class CodeEditorActivity extends AppCompatActivity {
         metaScroll.addView(metaRow);
         root.addView(metaScroll);
 
+        // גלאי זום צביטה ב-2 אצבעות ברמת המכולה כדי שה-ScrollView/EditText לא יחטפו את המחווה
+        ScaleGestureDetector pinchDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                float factor = detector.getScaleFactor();
+                if (Math.abs(factor - 1f) < 0.002f) return true;
+                currentFontSp = Math.max(9f, Math.min(32f, currentFontSp * factor));
+                editorView.setTextSize(TypedValue.COMPLEX_UNIT_SP, currentFontSp);
+                editorView.post(() -> gutterView.syncFromEditor(editorView));
+                return true;
+            }
+
+            @Override
+            public void onScaleEnd(ScaleGestureDetector detector) {
+                PrefsManager.setTextFontSizeSp(CodeEditorActivity.this, currentFontSp);
+            }
+        });
+
         // גוף העורך (שמאל לימין לקוד נקי + מספרי שורות מסונכרנים)
-        editorVScroll = new ScrollView(this);
+        editorVScroll = new PinchAwareScrollView(this, pinchDetector);
         editorVScroll.setFillViewport(true);
 
         LinearLayout codeContainer = new LinearLayout(this);
@@ -217,38 +242,21 @@ public class CodeEditorActivity extends AppCompatActivity {
         editorView.setBackgroundColor(Color.TRANSPARENT);
         editorView.setTextColor(textPrimary);
         editorView.setTypeface(Typeface.MONOSPACE);
-        editorView.setTextSize(PrefsManager.getTextFontSizeSp(this));
+        editorView.setTextSize(TypedValue.COMPLEX_UNIT_SP, currentFontSp);
         editorView.setGravity(Gravity.TOP | Gravity.START);
         editorView.setPadding(16, 16, 18, 80);
-        editorView.setHorizontallyScrolling(!wordWrap);
         if (readOnlyMode) {
             editorView.setKeyListener(null);
             editorView.setTextIsSelectable(true);
         }
 
-        // זום אצבעות לגודל הגופן (סעיף 11)
-        ScaleGestureDetector pinchDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            @Override
-            public boolean onScale(ScaleGestureDetector detector) {
-                float cur = PrefsManager.getTextFontSizeSp(CodeEditorActivity.this);
-                float next = Math.max(9f, Math.min(30f, cur * detector.getScaleFactor()));
-                PrefsManager.setTextFontSizeSp(CodeEditorActivity.this, next);
-                editorView.setTextSize(next);
-                gutterView.syncFromEditor(editorView);
-                return true;
-            }
-        });
-        editorView.setOnTouchListener((v, ev) -> {
-            pinchDetector.onTouchEvent(ev);
-            return false;
-        });
-
         editorHScroll = new HorizontalScrollView(this);
         editorHScroll.setFillViewport(true);
-        editorHScroll.addView(editorView, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        codeContainer.addView(editorHScroll, new LinearLayout.LayoutParams(
+
+        editorSlot = new FrameLayout(this);
+        codeContainer.addView(editorSlot, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        applyWordWrapLayout();
 
         editorVScroll.addView(codeContainer, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -404,12 +412,42 @@ public class CodeEditorActivity extends AppCompatActivity {
         suppressHistory = false;
     }
 
-    private void toggleWordWrap() {
-        wordWrap = !wordWrap;
-        PrefsManager.setTextWrapEnabled(this, wordWrap);
-        editorView.setHorizontallyScrolling(!wordWrap);
+    private void applyWordWrapLayout() {
+        int selStart = editorView.getSelectionStart();
+        int selEnd = editorView.getSelectionEnd();
+        if (editorView.getParent() instanceof ViewGroup) {
+            ((ViewGroup) editorView.getParent()).removeView(editorView);
+        }
+        if (editorHScroll.getParent() instanceof ViewGroup) {
+            ((ViewGroup) editorHScroll.getParent()).removeView(editorHScroll);
+        }
+        editorSlot.removeAllViews();
+
+        if (wordWrap) {
+            editorView.setHorizontallyScrolling(false);
+            editorSlot.addView(editorView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        } else {
+            editorView.setHorizontallyScrolling(true);
+            editorHScroll.addView(editorView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            editorSlot.addView(editorHScroll, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+        if (selStart >= 0 && selEnd >= selStart && selEnd <= editorView.length()) {
+            editorView.setSelection(selStart, selEnd);
+        }
         editorView.requestLayout();
         editorView.post(() -> gutterView.syncFromEditor(editorView));
+    }
+
+    private void toggleWordWrap(int accent, int textSecondary) {
+        wordWrap = !wordWrap;
+        PrefsManager.setTextWrapEnabled(this, wordWrap);
+        if (btnWrapToggle != null) {
+            btnWrapToggle.setColorFilter(wordWrap ? accent : textSecondary);
+        }
+        applyWordWrapLayout();
         Toast.makeText(this, wordWrap ? "גלישת שורות מופעלת" : "גלישה אופקית ללא שבירה", Toast.LENGTH_SHORT).show();
     }
 
@@ -599,6 +637,43 @@ public class CodeEditorActivity extends AppCompatActivity {
             for (LinePos lp : positions) {
                 canvas.drawText(String.valueOf(lp.num), rightX, lp.y, textPaint);
             }
+        }
+    }
+
+    private static class PinchAwareScrollView extends ScrollView {
+        private final ScaleGestureDetector pinchDetector;
+        private boolean pinching = false;
+
+        PinchAwareScrollView(CodeEditorActivity ctx, ScaleGestureDetector pinchDetector) {
+            super(ctx);
+            this.pinchDetector = pinchDetector;
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent ev) {
+            if (pinchDetector != null) {
+                pinchDetector.onTouchEvent(ev);
+            }
+            int action = ev.getActionMasked();
+            boolean inProgress = pinchDetector != null && pinchDetector.isInProgress();
+            if (ev.getPointerCount() >= 2 || inProgress) {
+                if (!pinching) {
+                    pinching = true;
+                    MotionEvent cancel = MotionEvent.obtain(ev);
+                    cancel.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(cancel);
+                    cancel.recycle();
+                }
+                requestDisallowInterceptTouchEvent(true);
+                return true;
+            }
+            if (pinching) {
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    pinching = false;
+                }
+                return true;
+            }
+            return super.dispatchTouchEvent(ev);
         }
     }
 }

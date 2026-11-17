@@ -147,23 +147,44 @@ public class ZoomableImageView extends AppCompatImageView {
 
     @Override
     public void setImageBitmap(Bitmap bm) {
+        stopPriorAnimation();
         super.setImageBitmap(bm);
         Drawable d = getDrawable();
         if (d != null) {
             d.setFilterBitmap(true);
             d.setDither(false);
         }
-        post(this::fitImageToCenter);
+        applyFitNowOrPost();
     }
 
     @Override
     public void setImageDrawable(Drawable drawable) {
+        stopPriorAnimation();
         super.setImageDrawable(drawable);
         if (drawable != null) {
             drawable.setFilterBitmap(true);
             drawable.setDither(false);
         }
-        post(this::fitImageToCenter);
+        applyFitNowOrPost();
+    }
+
+    private void stopPriorAnimation() {
+        Drawable prev = getDrawable();
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
+                && prev instanceof android.graphics.drawable.AnimatedImageDrawable) {
+            try {
+                ((android.graphics.drawable.AnimatedImageDrawable) prev).stop();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void applyFitNowOrPost() {
+        if (getWidth() > 0 && getHeight() > 0) {
+            fitImageToCenter();
+        } else {
+            post(this::fitImageToCenter);
+        }
     }
 
     @Override

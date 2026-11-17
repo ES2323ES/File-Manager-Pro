@@ -14,6 +14,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -21,8 +22,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -58,6 +62,82 @@ public class ArchiveUtils {
             this.directory = directory;
             this.encrypted = encrypted;
         }
+    }
+
+    public static class ArchiveTreeNode {
+        public final String displayName;
+        public final String fullPath;
+        public final boolean directory;
+        public final long size;
+        public final long compressedSize;
+        public final boolean encrypted;
+        public final ArchiveEntryInfo entryInfo;
+
+        public ArchiveTreeNode(String displayName, String fullPath, boolean directory,
+                               long size, long compressedSize, boolean encrypted, ArchiveEntryInfo entryInfo) {
+            this.displayName = displayName;
+            this.fullPath = fullPath;
+            this.directory = directory;
+            this.size = size;
+            this.compressedSize = compressedSize;
+            this.encrypted = encrypted;
+            this.entryInfo = entryInfo;
+        }
+    }
+
+    public static String normalizeTreeFolder(String folder) {
+        if (folder == null) return "";
+        String f = folder.replace('\\', '/').trim();
+        while (f.startsWith("/")) f = f.substring(1);
+        if (!f.isEmpty() && !f.endsWith("/")) f += "/";
+        return f;
+    }
+
+    public static List<ArchiveTreeNode> listTreeChildren(List<ArchiveEntryInfo> entries, String currentFolder) {
+        String prefix = normalizeTreeFolder(currentFolder);
+        Map<String, ArchiveTreeNode> dirs = new LinkedHashMap<>();
+        List<ArchiveTreeNode> files = new ArrayList<>();
+        if (entries == null) return Collections.emptyList();
+
+        for (ArchiveEntryInfo e : entries) {
+            if (e == null || e.name == null) continue;
+            String norm = e.name.replace('\\', '/');
+            while (norm.startsWith("/")) norm = norm.substring(1);
+            if (norm.isEmpty() || !norm.startsWith(prefix)) continue;
+
+            String rest = norm.substring(prefix.length());
+            if (rest.isEmpty() || "/".equals(rest)) continue;
+
+            int slashIdx = rest.indexOf('/');
+            if (slashIdx >= 0) {
+                String dirName = rest.substring(0, slashIdx);
+                if (dirName.isEmpty()) continue;
+                String dirPath = prefix + dirName + "/";
+                ArchiveTreeNode existing = dirs.get(dirPath);
+                boolean isExactDirEntry = (slashIdx == rest.length() - 1) && e.directory;
+                if (existing == null || isExactDirEntry) {
+                    dirs.put(dirPath, new ArchiveTreeNode(
+                            dirName,
+                            dirPath,
+                            true,
+                            0L,
+                            0L,
+                            e.encrypted || (existing != null && existing.encrypted),
+                            isExactDirEntry ? e : (existing != null ? existing.entryInfo : null)
+                    ));
+                }
+            } else if (!e.directory) {
+                files.add(new ArchiveTreeNode(rest, e.name, false, e.size, e.compressedSize, e.encrypted, e));
+            }
+        }
+
+        List<ArchiveTreeNode> dirList = new ArrayList<>(dirs.values());
+        Collections.sort(dirList, (a, b) -> StorageUtils.compareHebrewFirst(a.displayName, b.displayName));
+        Collections.sort(files, (a, b) -> StorageUtils.compareHebrewFirst(a.displayName, b.displayName));
+        List<ArchiveTreeNode> out = new ArrayList<>(dirList.size() + files.size());
+        out.addAll(dirList);
+        out.addAll(files);
+        return out;
     }
 
     public static boolean isSafeEntryName(String name) {
@@ -153,7 +233,7 @@ public class ArchiveUtils {
         for (ArchiveEntryInfo info : detailed) {
             String label = info.name + (info.directory ? " (תיקייה)" :
                     (info.size >= 0 ? "  •  " + StorageUtils.formatSize(info.size) : ""))
-                    + (info.encrypted ? " 🔒" : "");
+                    + (info.encrypted ? " (מוצפן)" : "");
             out.add(label);
         }
         return out;
@@ -362,166 +442,265 @@ public class ArchiveUtils {
 
     // ==================== Zip Central Directory & ZipCrypto Engine ====================
 
-    private static List<ArchiveEntryInfo> listZipCentralDirectory(File zipFile) throws IOException {
-        byte[] data = readAllBytes(new FileInputStream(zipFile));
+    private static final long MAX_IN_MEMORY_ENTRY_BYTES = 48L * 1024L * 1024L;
+
+    private static byte[] readCentralDirectoryBytes(RandomAccessFile raf) throws IOException {
+        long fileLen = raf.length();
+        if (fileLen < 22L) {
+            throw new IOException("קובץ ZIP אינו תקין");
+        }
+        int tailLen = (int) Math.min(fileLen, 65557L);
+        byte[] tail = new byte[tailLen];
+        raf.seek(fileLen - tailLen);
+        raf.readFully(tail);
+
         int eocdOffset = -1;
-        for (int i = Math.max(0, data.length - 65557); i <= data.length - 22; i++) {
-            if (data[i] == 0x50 && data[i + 1] == 0x4b && data[i + 2] == 0x05 && data[i + 3] == 0x06) {
-                eocdOffset = i;
+        for (int i = tailLen - 22; i >= 0; i--) {
+            if (tail[i] == 0x50 && tail[i + 1] == 0x4b && tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {
+                int commentLen = (tail[i + 20] & 0xFF) | ((tail[i + 21] & 0xFF) << 8);
+                if (i + 22 + commentLen == tailLen) {
+                    eocdOffset = i;
+                    break;
+                }
+                if (eocdOffset < 0) {
+                    eocdOffset = i;
+                }
             }
         }
         if (eocdOffset < 0) {
             throw new IOException("קובץ ZIP אינו תקין");
         }
-        ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-        int cdSize = bb.getInt(eocdOffset + 12);
-        int cdOffset = bb.getInt(eocdOffset + 16);
-        List<ArchiveEntryInfo> result = new ArrayList<>();
-        int pos = cdOffset;
-        int end = Math.min(data.length, cdOffset + cdSize);
-        while (pos + 46 <= end) {
-            if (bb.getInt(pos) != 0x02014b50) break;
-            int flags = bb.getShort(pos + 8) & 0xFFFF;
-            long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
-            long uncompSize = bb.getInt(pos + 24) & 0xFFFFFFFFL;
-            int nameLen = bb.getShort(pos + 28) & 0xFFFF;
-            int extraLen = bb.getShort(pos + 30) & 0xFFFF;
-            int commentLen = bb.getShort(pos + 32) & 0xFFFF;
-            if (pos + 46 + nameLen > data.length) break;
-            String name = new String(data, pos + 46, nameLen, StandardCharsets.UTF_8);
-            boolean encrypted = (flags & 0x0001) != 0;
-            boolean dir = name.endsWith("/");
-            result.add(new ArchiveEntryInfo(name, uncompSize, compSize, dir, encrypted));
-            pos += 46 + nameLen + extraLen + commentLen;
+        ByteBuffer eocd = ByteBuffer.wrap(tail).order(ByteOrder.LITTLE_ENDIAN);
+        long cdSize = eocd.getInt(eocdOffset + 12) & 0xFFFFFFFFL;
+        long cdOffset = eocd.getInt(eocdOffset + 16) & 0xFFFFFFFFL;
+        if (cdSize > 128L * 1024L * 1024L || cdOffset + cdSize > fileLen) {
+            throw new IOException("מבנה אינדקס הארכיון חורג מגודל הקובץ");
         }
-        return result;
+        byte[] cdBytes = new byte[(int) cdSize];
+        raf.seek(cdOffset);
+        raf.readFully(cdBytes);
+        return cdBytes;
+    }
+
+    private static List<ArchiveEntryInfo> listZipCentralDirectory(File zipFile) throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(zipFile, "r")) {
+            byte[] cdBytes = readCentralDirectoryBytes(raf);
+            ByteBuffer bb = ByteBuffer.wrap(cdBytes).order(ByteOrder.LITTLE_ENDIAN);
+            List<ArchiveEntryInfo> result = new ArrayList<>();
+            int pos = 0;
+            int end = cdBytes.length;
+            while (pos + 46 <= end) {
+                if (bb.getInt(pos) != 0x02014b50) break;
+                int flags = bb.getShort(pos + 8) & 0xFFFF;
+                long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
+                long uncompSize = bb.getInt(pos + 24) & 0xFFFFFFFFL;
+                int nameLen = bb.getShort(pos + 28) & 0xFFFF;
+                int extraLen = bb.getShort(pos + 30) & 0xFFFF;
+                int commentLen = bb.getShort(pos + 32) & 0xFFFF;
+                if (pos + 46 + nameLen > end) break;
+                String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                boolean encrypted = (flags & 0x0001) != 0;
+                boolean dir = name.endsWith("/");
+                result.add(new ArchiveEntryInfo(name, uncompSize, compSize, dir, encrypted));
+                pos += 46 + nameLen + extraLen + commentLen;
+            }
+            return result;
+        }
     }
 
     private static int extractRawZipWithOptionalPassword(File zipFile, File destDir, String canonicalDestDir, String password) throws IOException {
-        byte[] fileBytes = readAllBytes(new FileInputStream(zipFile));
-        int eocd = -1;
-        for (int i = Math.max(0, fileBytes.length - 65557); i <= fileBytes.length - 22; i++) {
-            if (fileBytes[i] == 0x50 && fileBytes[i + 1] == 0x4b && fileBytes[i + 2] == 0x05 && fileBytes[i + 3] == 0x06) {
-                eocd = i;
-            }
-        }
-        if (eocd < 0) throw new IOException("קובץ ZIP פגום");
-        ByteBuffer bb = ByteBuffer.wrap(fileBytes).order(ByteOrder.LITTLE_ENDIAN);
-        int cdSize = bb.getInt(eocd + 12);
-        int cdOffset = bb.getInt(eocd + 16);
-        int pos = cdOffset;
-        int end = Math.min(fileBytes.length, cdOffset + cdSize);
         int extracted = 0;
+        try (RandomAccessFile raf = new RandomAccessFile(zipFile, "r")) {
+            byte[] cdBytes = readCentralDirectoryBytes(raf);
+            ByteBuffer bb = ByteBuffer.wrap(cdBytes).order(ByteOrder.LITTLE_ENDIAN);
+            int pos = 0;
+            int end = cdBytes.length;
 
-        while (pos + 46 <= end) {
-            if (bb.getInt(pos) != 0x02014b50) break;
-            int flags = bb.getShort(pos + 8) & 0xFFFF;
-            int method = bb.getShort(pos + 10) & 0xFFFF;
-            long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
-            int compSize = bb.getInt(pos + 20);
-            int nameLen = bb.getShort(pos + 28) & 0xFFFF;
-            int extraLen = bb.getShort(pos + 30) & 0xFFFF;
-            int commentLen = bb.getShort(pos + 32) & 0xFFFF;
-            int localHeaderOffset = bb.getInt(pos + 42);
-            String name = new String(fileBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
-            pos += 46 + nameLen + extraLen + commentLen;
+            while (pos + 46 <= end) {
+                if (bb.getInt(pos) != 0x02014b50) break;
+                int flags = bb.getShort(pos + 8) & 0xFFFF;
+                int method = bb.getShort(pos + 10) & 0xFFFF;
+                long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
+                long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
+                int nameLen = bb.getShort(pos + 28) & 0xFFFF;
+                int extraLen = bb.getShort(pos + 30) & 0xFFFF;
+                int commentLen = bb.getShort(pos + 32) & 0xFFFF;
+                long localHeaderOffset = bb.getInt(pos + 42) & 0xFFFFFFFFL;
+                if (pos + 46 + nameLen > end) break;
+                String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                pos += 46 + nameLen + extraLen + commentLen;
 
-            File outFile = safeResolve(destDir, canonicalDestDir, name);
-            if (name.endsWith("/")) {
-                outFile.mkdirs();
-                continue;
+                File outFile = safeResolve(destDir, canonicalDestDir, name);
+                if (name.endsWith("/")) {
+                    outFile.mkdirs();
+                    continue;
+                }
+                File parent = outFile.getParentFile();
+                if (parent != null && !parent.exists()) parent.mkdirs();
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile))) {
+                    decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, bos, -1L);
+                }
+                extracted++;
             }
-            byte[] plain = decodeLocalZipEntry(fileBytes, localHeaderOffset, flags, method, crc, compSize, password);
-            File parent = outFile.getParentFile();
-            if (parent != null && !parent.exists()) parent.mkdirs();
-            try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                fos.write(plain);
-            }
-            extracted++;
         }
         return extracted;
     }
 
     private static byte[] readRawZipEntryBytes(File zipFile, String targetName, String password) throws IOException {
-        byte[] fileBytes = readAllBytes(new FileInputStream(zipFile));
-        int eocd = -1;
-        for (int i = Math.max(0, fileBytes.length - 65557); i <= fileBytes.length - 22; i++) {
-            if (fileBytes[i] == 0x50 && fileBytes[i + 1] == 0x4b && fileBytes[i + 2] == 0x05 && fileBytes[i + 3] == 0x06) {
-                eocd = i;
-            }
-        }
-        if (eocd < 0) throw new IOException("קובץ ZIP פגום");
-        ByteBuffer bb = ByteBuffer.wrap(fileBytes).order(ByteOrder.LITTLE_ENDIAN);
-        int cdSize = bb.getInt(eocd + 12);
-        int cdOffset = bb.getInt(eocd + 16);
-        int pos = cdOffset;
-        int end = Math.min(fileBytes.length, cdOffset + cdSize);
+        try (RandomAccessFile raf = new RandomAccessFile(zipFile, "r")) {
+            byte[] cdBytes = readCentralDirectoryBytes(raf);
+            ByteBuffer bb = ByteBuffer.wrap(cdBytes).order(ByteOrder.LITTLE_ENDIAN);
+            int pos = 0;
+            int end = cdBytes.length;
 
-        while (pos + 46 <= end) {
-            if (bb.getInt(pos) != 0x02014b50) break;
-            int flags = bb.getShort(pos + 8) & 0xFFFF;
-            int method = bb.getShort(pos + 10) & 0xFFFF;
-            long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
-            int compSize = bb.getInt(pos + 20);
-            int nameLen = bb.getShort(pos + 28) & 0xFFFF;
-            int extraLen = bb.getShort(pos + 30) & 0xFFFF;
-            int commentLen = bb.getShort(pos + 32) & 0xFFFF;
-            int localHeaderOffset = bb.getInt(pos + 42);
-            String name = new String(fileBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
-            pos += 46 + nameLen + extraLen + commentLen;
-            if (name.equals(targetName)) {
-                return decodeLocalZipEntry(fileBytes, localHeaderOffset, flags, method, crc, compSize, password);
+            while (pos + 46 <= end) {
+                if (bb.getInt(pos) != 0x02014b50) break;
+                int flags = bb.getShort(pos + 8) & 0xFFFF;
+                int method = bb.getShort(pos + 10) & 0xFFFF;
+                long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
+                long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
+                int nameLen = bb.getShort(pos + 28) & 0xFFFF;
+                int extraLen = bb.getShort(pos + 30) & 0xFFFF;
+                int commentLen = bb.getShort(pos + 32) & 0xFFFF;
+                long localHeaderOffset = bb.getInt(pos + 42) & 0xFFFFFFFFL;
+                if (pos + 46 + nameLen > end) break;
+                String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                pos += 46 + nameLen + extraLen + commentLen;
+                if (name.equals(targetName)) {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, baos, MAX_IN_MEMORY_ENTRY_BYTES);
+                    return baos.toByteArray();
+                }
             }
         }
         throw new IOException("הפריט לא נמצא: " + targetName);
     }
 
-    private static byte[] decodeLocalZipEntry(byte[] data, int localOffset, int flags, int method,
-                                              long expectedCrc, int compSize, String password) throws IOException {
-        ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-        if (bb.getInt(localOffset) != 0x04034b50) {
+    private static void decodeLocalZipEntryToStream(RandomAccessFile raf, long localOffset, int flags, int method,
+                                                    long expectedCrc, long compSize, String password,
+                                                    OutputStream out, long maxOutBytes) throws IOException {
+        byte[] lh = new byte[30];
+        raf.seek(localOffset);
+        raf.readFully(lh);
+        ByteBuffer bb = ByteBuffer.wrap(lh).order(ByteOrder.LITTLE_ENDIAN);
+        if (bb.getInt(0) != 0x04034b50) {
             throw new IOException("רשומת ZIP פגומה");
         }
-        int lNameLen = bb.getShort(localOffset + 26) & 0xFFFF;
-        int lExtraLen = bb.getShort(localOffset + 28) & 0xFFFF;
-        int dataStart = localOffset + 30 + lNameLen + lExtraLen;
-        boolean encrypted = (flags & 0x0001) != 0;
-        byte[] payload = Arrays.copyOfRange(data, dataStart, dataStart + compSize);
+        int lNameLen = bb.getShort(26) & 0xFFFF;
+        int lExtraLen = bb.getShort(28) & 0xFFFF;
+        long dataStart = localOffset + 30L + lNameLen + lExtraLen;
+        if (dataStart + compSize > raf.length()) {
+            throw new IOException("גודל רשומת ZIP חורג מגבולות הקובץ");
+        }
 
+        boolean encrypted = (flags & 0x0001) != 0;
+        long payloadLen = compSize;
+        ZipCryptoCipher cipher = null;
+
+        raf.seek(dataStart);
         if (encrypted) {
             if (password == null || password.isEmpty()) {
                 throw new IOException("הארכיון מוגן בסיסמה — נדרשת סיסמה");
             }
-            if ((flags & 0x0008) == 0 && payload.length < 12) {
+            if (payloadLen < 12) {
                 throw new IOException("נתוני הצפנה לא תקינים");
             }
-            ZipCryptoCipher cipher = new ZipCryptoCipher(password.getBytes(StandardCharsets.UTF_8));
-            byte[] header = new byte[12];
+            cipher = new ZipCryptoCipher(password.getBytes(StandardCharsets.UTF_8));
+            byte[] encHdr = new byte[12];
+            raf.readFully(encHdr);
+            byte[] decHdr = new byte[12];
             for (int i = 0; i < 12; i++) {
-                header[i] = cipher.decryptByte(payload[i]);
+                decHdr[i] = cipher.decryptByte(encHdr[i]);
             }
             int expectedCheck = (int) ((expectedCrc >>> 24) & 0xFF);
-            if ((flags & 0x0008) == 0 && (header[11] & 0xFF) != expectedCheck) {
+            if ((flags & 0x0008) == 0 && (decHdr[11] & 0xFF) != expectedCheck) {
                 throw new IOException("סיסמה שגויה");
             }
-            byte[] decrypted = new byte[payload.length - 12];
-            for (int i = 12; i < payload.length; i++) {
-                decrypted[i - 12] = cipher.decryptByte(payload[i]);
-            }
-            payload = decrypted;
+            payloadLen -= 12L;
         }
 
+        InputStream rawBounded = new BoundedRafInputStream(raf, payloadLen);
+        InputStream plainStream = cipher != null ? new ZipCryptoInputStream(rawBounded, cipher) : rawBounded;
+
         if (method == 0) {
-            return payload;
+            copyStreamBounded(plainStream, out, maxOutBytes);
         } else if (method == 8) {
             Inflater inflater = new Inflater(true);
-            try (InflaterInputStream iis = new InflaterInputStream(new ByteArrayInputStream(payload), inflater)) {
-                return readAllBytes(iis);
+            try (InflaterInputStream iis = new InflaterInputStream(plainStream, inflater, 16 * 1024)) {
+                copyStreamBounded(iis, out, maxOutBytes);
             } finally {
                 inflater.end();
             }
         } else {
             throw new IOException("שיטת דחיסה לא נתמכת: " + method);
+        }
+    }
+
+    private static void copyStreamBounded(InputStream is, OutputStream os, long maxBytes) throws IOException {
+        byte[] buf = new byte[16 * 1024];
+        long total = 0L;
+        int r;
+        while ((r = is.read(buf)) != -1) {
+            if (maxBytes > 0 && total + r > maxBytes) {
+                throw new IOException("הקובץ בתוך הארכיון גדול מדי לתצוגה ישירה — יש לחלץ אותו תחילה");
+            }
+            os.write(buf, 0, r);
+            total += r;
+        }
+    }
+
+    private static class BoundedRafInputStream extends InputStream {
+        private final RandomAccessFile raf;
+        private long remaining;
+
+        BoundedRafInputStream(RandomAccessFile raf, long length) {
+            this.raf = raf;
+            this.remaining = Math.max(0L, length);
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (remaining <= 0) return -1;
+            int b = raf.read();
+            if (b >= 0) remaining--;
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (remaining <= 0) return -1;
+            int toRead = (int) Math.min(len, remaining);
+            int r = raf.read(b, off, toRead);
+            if (r > 0) remaining -= r;
+            return r;
+        }
+    }
+
+    private static class ZipCryptoInputStream extends InputStream {
+        private final InputStream in;
+        private final ZipCryptoCipher cipher;
+
+        ZipCryptoInputStream(InputStream in, ZipCryptoCipher cipher) {
+            this.in = in;
+            this.cipher = cipher;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = in.read();
+            if (b < 0) return -1;
+            return cipher.decryptByte((byte) b) & 0xFF;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int r = in.read(b, off, len);
+            if (r > 0) {
+                for (int i = 0; i < r; i++) {
+                    b[off + i] = cipher.decryptByte(b[off + i]);
+                }
+            }
+            return r;
         }
     }
 
