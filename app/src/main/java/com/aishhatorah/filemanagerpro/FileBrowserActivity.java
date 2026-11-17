@@ -199,23 +199,18 @@ public class FileBrowserActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(bgColor);
+        ThemeHelper.applyWallpaperBackdrop(this, root, theme);
 
-        // סרגל כותרת עליון מינימליסטי עם המבורגר (סעיף 4)
+        // סרגל כותרת עליון מעוגל כלפי מעלה (ללא תמונת רקע בתוכו)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        topBar.setPadding(dp(8), dp(8), dp(8), dp(8));
+        topBar.setPadding(dp(8), dp(8), dp(8), dp(10));
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
-        ImageButton btnBack = new ImageButton(this);
-        btnBack.setImageResource(R.drawable.ic_arrow_back);
-        btnBack.setColorFilter(accent);
-        btnBack.setBackgroundColor(Color.TRANSPARENT);
-        btnBack.setContentDescription("חזרה");
-        btnBack.setPadding(dp(8), dp(8), dp(8), dp(8));
-        btnBack.setOnClickListener(v -> navigateUpOrFinish());
-        topBar.addView(btnBack, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> navigateUpOrFinish());
+        topBar.addView(btnBack);
 
         tvHeaderTitle = new TextView(this);
         tvHeaderTitle.setText(title);
@@ -229,42 +224,28 @@ public class FileBrowserActivity extends AppCompatActivity {
         titleLp.setMarginEnd(dp(4));
         topBar.addView(tvHeaderTitle, titleLp);
 
-        ImageButton btnQuickSearch = new ImageButton(this);
-        btnQuickSearch.setImageResource(R.drawable.ic_search);
-        btnQuickSearch.setColorFilter(accent);
-        btnQuickSearch.setBackgroundColor(Color.TRANSPARENT);
-        btnQuickSearch.setContentDescription("חיפוש");
-        btnQuickSearch.setPadding(dp(8), dp(8), dp(8), dp(8));
-        btnQuickSearch.setOnClickListener(v -> toggleSearchBar(!searchBarOpen));
-        topBar.addView(btnQuickSearch, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        ImageButton btnQuickSearch = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_search, accent, "חיפוש", 40, 8, v -> toggleSearchBar(!searchBarOpen));
+        topBar.addView(btnQuickSearch);
 
-        ImageButton btnHamburger = new ImageButton(this);
-        btnHamburger.setImageResource(R.drawable.ic_menu_hamburger);
-        btnHamburger.setColorFilter(accent);
-        btnHamburger.setBackgroundColor(Color.TRANSPARENT);
-        btnHamburger.setContentDescription("תפריט");
-        btnHamburger.setPadding(dp(8), dp(8), dp(8), dp(8));
-        btnHamburger.setOnClickListener(v -> showHamburgerMenu());
-        topBar.addView(btnHamburger, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        ImageButton btnHamburger = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_menu_hamburger, accent, "תפריט", 40, 8, v -> showHamburgerMenu());
+        topBar.addView(btnHamburger);
 
         root.addView(topBar);
 
-        View topDiv = new View(this);
-        topDiv.setBackgroundColor(divider);
-        root.addView(topDiv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
-
-        // סרגל Breadcrumbs אינטראקטיבי לחיץ (סעיף 38)
+        // סרגל Breadcrumbs אינטראקטיבי לחיץ
         breadcrumbScroll = new HorizontalScrollView(this);
         breadcrumbScroll.setHorizontalScrollBarEnabled(false);
         breadcrumbScroll.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        breadcrumbScroll.setPadding(dp(12), dp(5), dp(12), dp(5));
+        breadcrumbScroll.setPadding(dp(12), dp(6), dp(12), dp(5));
         breadcrumbContainer = new LinearLayout(this);
         breadcrumbContainer.setOrientation(LinearLayout.HORIZONTAL);
         breadcrumbContainer.setGravity(Gravity.CENTER_VERTICAL);
         breadcrumbScroll.addView(breadcrumbContainer);
         root.addView(breadcrumbScroll);
 
-        // תיבת חיפוש נפתחת עם שמירת חיפושים אחרונים (סעיפים י, יא)
+        // תיבת חיפוש נפתחת עם שמירת חיפושים אחרונים
         searchContainer = new LinearLayout(this);
         searchContainer.setOrientation(LinearLayout.VERTICAL);
         searchContainer.setPadding(dp(10), dp(4), dp(10), dp(6));
@@ -280,11 +261,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         etSearch.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         etSearch.setTextColor(textPrimary);
         etSearch.setTextSize(ThemeHelper.spScaled(this, 13.5f));
-        GradientDrawable searchBg = new GradientDrawable();
-        searchBg.setCornerRadius(dp(10));
-        searchBg.setColor(cardColor);
-        searchBg.setStroke(Math.max(1, dp(1)), divider);
-        etSearch.setBackground(searchBg);
+        etSearch.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 12f, true, false));
         etSearch.setPadding(dp(12), dp(8), dp(12), dp(8));
         etSearch.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -323,17 +300,17 @@ public class FileBrowserActivity extends AppCompatActivity {
         });
         searchInputRow.addView(btnRunSearch, new LinearLayout.LayoutParams(dp(38), dp(38)));
 
-        Button btnCloseSearch = new Button(this);
-        btnCloseSearch.setText("✕");
-        btnCloseSearch.setTextColor(textSecondary);
+        ImageButton btnCloseSearch = new ImageButton(this);
+        btnCloseSearch.setImageResource(R.drawable.ic_close);
+        btnCloseSearch.setColorFilter(textSecondary);
         btnCloseSearch.setBackgroundColor(Color.TRANSPARENT);
-        btnCloseSearch.setMinWidth(0);
-        btnCloseSearch.setMinimumWidth(0);
+        btnCloseSearch.setPadding(dp(8), dp(8), dp(8), dp(8));
+        btnCloseSearch.setContentDescription("סגור חיפוש");
         btnCloseSearch.setOnClickListener(v -> {
             etSearch.setText("");
             toggleSearchBar(false);
         });
-        searchInputRow.addView(btnCloseSearch);
+        searchInputRow.addView(btnCloseSearch, new LinearLayout.LayoutParams(dp(38), dp(38)));
         searchContainer.addView(searchInputRow);
 
         HorizontalScrollView recentScroll = new HorizontalScrollView(this);
@@ -418,9 +395,14 @@ public class FileBrowserActivity extends AppCompatActivity {
         clipboardBar.addView(btnCancelClip);
         root.addView(clipboardBar);
 
-        // מסגרת רשימה + פס הרצה מהיר בצד ימין + חיווי טעינה (סעיף 18)
+        // מסגרת רשימה שקופה-זכוכית קריאה + פס הרצה מהיר בצד ימין + חיווי טעינה
         FrameLayout listStageFrame = new FrameLayout(this);
         listStageFrame.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        if (ThemeHelper.hasWallpaper(this)) {
+            boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+            listStageFrame.setBackgroundColor(androidx.core.graphics.ColorUtils.setAlphaComponent(
+                    bgColor, isDark ? 128 : 148));
+        }
 
         swipeRefresh = new SwipeRefreshLayout(this);
         swipeRefresh.setColorSchemeColors(accent, Color.parseColor("#0284C7"));
@@ -537,11 +519,15 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void styleTabChip(Button b, boolean active) {
+        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
         GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(10));
-        gd.setColor(active ? accent : cardColor);
-        gd.setStroke(Math.max(1, dp(1)), active ? accent : divider);
+        gd.setCornerRadius(dp(12));
+        gd.setColor(active
+                ? accent
+                : androidx.core.graphics.ColorUtils.setAlphaComponent(cardColor, isDark ? 185 : 210));
         b.setBackground(gd);
+        b.setStateListAnimator(null);
+        b.setElevation(0f);
         b.setTextColor(active ? (theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE) : textPrimary);
     }
 
@@ -816,9 +802,10 @@ public class FileBrowserActivity extends AppCompatActivity {
                         executePasteHere();
                     } else if (chosen.startsWith("ניקוי רשימת")) {
                         PrefsManager.setRecentClearedTimestamp(this, System.currentTimeMillis());
-                        FileScanCache.invalidate();
-                        loadFilesForCurrentMode(true);
-                        Toast.makeText(this, "הרשימה נוקתה", Toast.LENGTH_SHORT).show();
+                        FileScanCache.clearRecentCacheNow();
+                        allLoadedFiles.clear();
+                        filterCurrentList(etSearch.getText().toString());
+                        Toast.makeText(this, "רשימת הקבצים החדשים נוקתה", Toast.LENGTH_SHORT).show();
                     } else if (chosen.startsWith("רוקן את כל")) {
                         confirmEmptyRecycleBinTwoStep();
                     }
@@ -1041,14 +1028,16 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private boolean isEffectiveLinearCategoryView() {
-        if (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode)) {
+        if (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode) || MODE_AUDIO.equals(currentMode)) {
             return PrefsManager.isCategoryLinearView(this, currentMode);
         }
         return !PrefsManager.isCategoryLinearView(this, currentMode);
     }
 
     private boolean isGroupedMediaCategoryMode() {
-        return (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))
+        return (MODE_IMAGES.equals(currentMode)
+                || MODE_VIDEOS.equals(currentMode)
+                || MODE_AUDIO.equals(currentMode))
                 && !isEffectiveLinearCategoryView();
     }
 
@@ -1214,7 +1203,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                     File[] children = currentDir.listFiles();
                     if (children != null) {
                         for (File f : children) {
-                            if (MODE_RECYCLE_BIN.equals(currentMode) && "trash_manifest.json".equals(f.getName())) {
+                            if (MODE_RECYCLE_BIN.equals(currentMode)
+                                    && ("trash_manifest.json".equals(f.getName()) || ".nomedia".equals(f.getName()))) {
                                 continue;
                             }
                             if (!showHidden && f.getName().startsWith(".") && !MODE_RECYCLE_BIN.equals(currentMode)) {
@@ -1234,15 +1224,22 @@ public class FileBrowserActivity extends AppCompatActivity {
                             String lower = f.getName().toLowerCase(Locale.ROOT);
                             if (MODE_IMAGES.equals(currentMode) && MediaFormatHelper.isImageFile(lower)) {
                                 result.add(f);
+                            } else if (MODE_AUDIO.equals(currentMode) && MediaFormatHelper.isAudioFile(lower)) {
+                                result.add(f);
                             } else if (MODE_VIDEOS.equals(currentMode) && MediaFormatHelper.isVideoFile(lower)) {
                                 result.add(f);
                             }
                         }
                     }
                 } else {
-                    StorageUtils.CategoryIndexSnapshot snap = quickSnap != null
-                            ? quickSnap
-                            : FileScanCache.getSnapshot(this, showHidden, fromUserPullToRefresh);
+                    StorageUtils.CategoryIndexSnapshot snap;
+                    if (fromUserPullToRefresh) {
+                        snap = FileScanCache.refreshSingleCategory(this, currentMode, showHidden);
+                    } else if (quickSnap != null) {
+                        snap = quickSnap;
+                    } else {
+                        snap = FileScanCache.getSnapshot(this, showHidden, false);
+                    }
                     cachedSizesByPath.putAll(snap.sizeByPath);
                     cachedModifiedByPath.putAll(snap.modifiedByPath);
                     List<File> allMediaFiles = FileScanCache.extractCategoryFiles(snap, currentMode);
@@ -1261,9 +1258,14 @@ public class FileBrowserActivity extends AppCompatActivity {
                     result.addAll(foldersByPath.values());
                 }
             } else if (isIndexedCat) {
-                StorageUtils.CategoryIndexSnapshot snap = quickSnap != null
-                        ? quickSnap
-                        : FileScanCache.getSnapshot(this, showHidden, fromUserPullToRefresh);
+                StorageUtils.CategoryIndexSnapshot snap;
+                if (fromUserPullToRefresh) {
+                    snap = FileScanCache.refreshSingleCategory(this, currentMode, showHidden);
+                } else if (quickSnap != null) {
+                    snap = quickSnap;
+                } else {
+                    snap = FileScanCache.getSnapshot(this, showHidden, false);
+                }
                 cachedSizesByPath.putAll(snap.sizeByPath);
                 cachedModifiedByPath.putAll(snap.modifiedByPath);
                 result.addAll(FileScanCache.extractCategoryFiles(snap, currentMode));
@@ -1279,6 +1281,9 @@ public class FileBrowserActivity extends AppCompatActivity {
 
             sortFileList(result);
 
+            final String refreshedMsg = (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode) || activeMediaFolder != null)
+                    ? "התיקייה רועננה"
+                    : "הקטגוריה רועננה";
             runOnUiThread(() -> {
                 loadingSpinner.setVisibility(View.GONE);
                 allLoadedFiles.clear();
@@ -1287,7 +1292,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 updateClipboardBar();
                 if (fromUserPullToRefresh) {
                     swipeRefresh.setRefreshing(false);
-                    Toast.makeText(this, "כל הקבצים רועננו בהצלחה", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, refreshedMsg, Toast.LENGTH_SHORT).show();
                 }
             });
         });
@@ -1387,8 +1392,9 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (metricMap != null) {
                 String p = f.getAbsolutePath();
                 if (sortMode == PrefsManager.SORT_SIZE) {
+                    long diskLen = (!dir && f.exists()) ? f.length() : -1L;
                     Long cached = cachedSizesByPath.get(p);
-                    metricMap.put(f, cached != null ? cached : f.length());
+                    metricMap.put(f, diskLen >= 0L ? diskLen : (cached != null ? cached : 0L));
                 } else if (sortMode == PrefsManager.SORT_DATE) {
                     Long cached = cachedModifiedByPath.get(p);
                     metricMap.put(f, cached != null ? cached : f.lastModified());
@@ -1625,6 +1631,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         Runnable run = () -> {
             exitMultiSelectMode();
             final int opId = (int) (System.currentTimeMillis() % 10000);
+            FileOperationNotificationHelper.begin(opId);
             Toast.makeText(this, "מוחק " + sel.size() + " פריטים...", Toast.LENGTH_SHORT).show();
             executor.execute(() -> {
                 int done = 0;
@@ -1660,6 +1667,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         final boolean isMove = clipboardIsMove;
         final File dst = currentDir;
         final int opId = (int) (System.currentTimeMillis() % 10000);
+        FileOperationNotificationHelper.begin(opId);
         final String actionVerb = isMove ? "הועברו" : "הועתקו";
         final String dialogTitle = isMove ? "העברת קבצים" : "העתקת קבצים";
 
@@ -1908,6 +1916,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                             : Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                     final File targetArchive = StorageUtils.uniqueDestinationFile(parent, fullFileName);
                     final int opId = (int) (System.currentTimeMillis() % 10000);
+                    FileOperationNotificationHelper.begin(opId);
 
                     exitMultiSelectMode();
                     Toast.makeText(this, "דוחס קבצים...", Toast.LENGTH_SHORT).show();
@@ -2352,8 +2361,14 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (f.isDirectory() && isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
                 h.ivIcon.setTag(null);
                 h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                h.ivIcon.setImageResource(MODE_VIDEOS.equals(currentMode) ? R.drawable.ic_video : R.drawable.ic_images);
-                h.ivIcon.setColorFilter(accent);
+                h.ivIcon.clearColorFilter();
+                if (MODE_VIDEOS.equals(currentMode)) {
+                    h.ivIcon.setImageResource(R.drawable.ic_video);
+                } else if (MODE_AUDIO.equals(currentMode)) {
+                    h.ivIcon.setImageResource(R.drawable.ic_audio);
+                } else {
+                    h.ivIcon.setImageResource(R.drawable.ic_images);
+                }
             } else {
                 FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
             }
@@ -2363,7 +2378,10 @@ public class FileBrowserActivity extends AppCompatActivity {
                 if (isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
                     Integer matched = categoryFolderCounts.get(path);
                     int count = matched != null ? matched : 0;
-                    String unit = MODE_IMAGES.equals(currentMode) ? "תמונות" : "סירטונים";
+                    String unit;
+                    if (MODE_IMAGES.equals(currentMode)) unit = "תמונות";
+                    else if (MODE_AUDIO.equals(currentMode)) unit = "קובצי שמע";
+                    else unit = "סירטונים";
                     h.tvMeta.setText(isGrid
                             ? (count + " " + unit)
                             : (count + " " + unit + " • " + df.format(new Date(f.lastModified()))));
@@ -2380,8 +2398,9 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             } else {
                 String p = f.getAbsolutePath();
+                long diskLen = f.exists() ? f.length() : -1L;
                 Long sz = cachedSizesByPath.get(p);
-                long fileLen = sz != null ? sz : f.length();
+                long fileLen = diskLen >= 0L ? diskLen : (sz != null ? sz : 0L);
                 Long md = cachedModifiedByPath.get(p);
                 long modMs = md != null ? md : f.lastModified();
                 h.tvMeta.setText(isGrid

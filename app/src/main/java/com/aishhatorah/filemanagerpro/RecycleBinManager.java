@@ -53,6 +53,14 @@ public class RecycleBinManager {
 
     private static void ensureNoMedia(File dir) {
         try {
+            File parent = dir.getParentFile();
+            if (parent != null && parent.exists()) {
+                File parentNm = new File(parent, ".nomedia");
+                if (!parentNm.exists()) parentNm.createNewFile();
+                File innerNm = new File(dir, ".nomedia");
+                if (innerNm.exists()) innerNm.delete();
+                return;
+            }
             File nm = new File(dir, ".nomedia");
             if (!nm.exists()) nm.createNewFile();
         } catch (Exception ignored) {

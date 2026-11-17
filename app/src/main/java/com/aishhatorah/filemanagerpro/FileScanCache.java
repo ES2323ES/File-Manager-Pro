@@ -83,6 +83,28 @@ public final class FileScanCache {
         return Collections.emptyList();
     }
 
+    public static void clearRecentCacheNow() {
+        synchronized (LOCK) {
+            if (cachedSnapshot != null) {
+                cachedSnapshot.recent.clear();
+                cachedSnapshot.summary.recentCount = 0;
+                cachedSnapshot.summary.recentBytes = 0L;
+            }
+        }
+    }
+
+    public static StorageUtils.CategoryIndexSnapshot refreshSingleCategory(
+            Context context, String mode, boolean showHidden) {
+        if (context == null) return new StorageUtils.CategoryIndexSnapshot();
+        synchronized (LOCK) {
+            if (cachedSnapshot == null || cachedIncludeHidden != showHidden) {
+                return getSnapshot(context, showHidden, true);
+            }
+            StorageUtils.querySingleCategoryIntoSnapshot(context, cachedSnapshot, mode, showHidden);
+            return cachedSnapshot;
+        }
+    }
+
     public static void invalidate() {
         dirty = true;
         lastUpdatedAt = 0L;

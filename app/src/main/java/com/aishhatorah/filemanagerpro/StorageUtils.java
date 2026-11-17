@@ -309,8 +309,7 @@ public class StorageUtils {
                 File f = new File(path);
                 if (!f.exists() || f.isDirectory()) continue;
 
-                long len = colSize >= 0 ? Math.max(0L, c.getLong(colSize)) : f.length();
-                if (len == 0L) len = f.length();
+                long len = f.length();
                 if (modMs <= 0L) modMs = f.lastModified();
 
                 snapshot.sizeByPath.put(path, len);
@@ -346,6 +345,200 @@ public class StorageUtils {
         } catch (Throwable ignored) {
         }
         return rowCount;
+    }
+
+    /**
+     * רענון ממוקד לקטגוריה בודדת בלבד (תמונות/שמע/וידאו/מסמכים/אפליקציות/חדשים)
+     * מבלי לסרוק את כל המכשיר ושאר הקטגוריות.
+     */
+    public static void querySingleCategoryIntoSnapshot(
+            Context context,
+            CategoryIndexSnapshot snapshot,
+            String mode,
+            boolean includeHidden
+    ) {
+        if (context == null || snapshot == null || mode == null) return;
+        ContentResolver cr = context.getContentResolver();
+        if (cr == null) return;
+
+        long sevenDaysAgo = System.currentTimeMillis() - (7L * 24L * 3600L * 1000L);
+        long recentCutoff = Math.max(sevenDaysAgo, PrefsManager.getRecentClearedTimestamp(context));
+
+        List<File> freshFiles = new ArrayList<>();
+        long totalBytes = 0L;
+        Set<String> seen = new HashSet<>();
+
+        Uri queryUri;
+        String selection = MediaStore.MediaColumns.DATA + " IS NOT NULL";
+        String[] selectionArgs = null;
+
+        if (FileBrowserActivity.MODE_IMAGES.equals(mode)) {
+            queryUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        } else if (FileBrowserActivity.MODE_AUDIO.equals(mode)) {
+            queryUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
+        } else if (FileBrowserActivity.MODE_VIDEOS.equals(mode)) {
+            queryUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+        } else if (FileBrowserActivity.MODE_APPS.equals(mode)) {
+            queryUri = MediaStore.Files.getContentUri("external");
+            selection = MediaStore.Files.FileColumns.DATA + " LIKE ?";
+            selectionArgs = new String[]{"%.apk%"};
+        } else if (FileBrowserActivity.MODE_RECENT.equals(mode)) {
+            queryUri = MediaStore.Files.getContentUri("external");
+            selection = MediaStore.Files.FileColumns.DATA + " IS NOT NULL AND "
+                    + MediaStore.Files.FileColumns.DATE_MODIFIED + " >= ?";
+            selectionArgs = new String[]{String.valueOf(recentCutoff / 1000L)};
+        } else {
+            queryUri = MediaStore.Files.getContentUri("external");
+        }
+
+        String[] projection = new String[]{
+                MediaStore.MediaColumns.DATA,
+                MediaStore.MediaColumns.DATE_MODIFIED
+        };
+        String sortOrder = MediaStore.MediaColumns.DATE_MODIFIED + " DESC";
+
+        try (Cursor c = cr.query(queryUri, projection, selection, selectionArgs, sortOrder)) {
+            if (c != null) {
+                int colPath = c.getColumnIndex(MediaStore.MediaColumns.DATA);
+                int colMod = c.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED);
+                if (colPath >= 0) {
+                    while (c.moveToNext()) {
+                        String path = c.getString(colPath);
+                        if (path == null || path.isEmpty()) continue;
+                        if (path.contains("/.FileManagerPro_Trash/")) continue;
+                        if (isExcludedAndroidSystemPath(path)) continue;
+                        if (!includeHidden && containsHiddenSegment(path)) continue;
+
+                        int slash = path.lastIndexOf('/');
+                        String fileName = slash >= 0 ? path.substring(slash + 1) : path;
+                        if (fileName.isEmpty() || (!includeHidden && fileName.startsWith("."))) continue;
+
+                        String lower = fileName.toLowerCase(Locale.ROOT);
+                        if (FileBrowserActivity.MODE_DOCUMENTS.equals(mode) && !MediaFormatHelper.isDocumentFile(lower)) {
+                            continue;
+                        }
+                        if (FileBrowserActivity.MODE_APPS.equals(mode) && !MediaFormatHelper.isInstallableAppPackage(lower)) {
+                            continue;
+                        }
+                        if (FileBrowserActivity.MODE_IMAGES.equals(mode) && !MediaFormatHelper.isImageFile(lower)) {
+                            continue;
+                        }
+                        if (FileBrowserActivity.MODE_AUDIO.equals(mode) && !MediaFormatHelper.isAudioFile(lower)) {
+                            continue;
+                        }
+                        if (FileBrowserActivity.MODE_VIDEOS.equals(mode) && !MediaFormatHelper.isVideoFile(lower)) {
+                            continue;
+                        }
+                        if (FileBrowserActivity.MODE_RECENT.equals(mode) && freshFiles.size() >= 2500) {
+                            break;
+                        }
+                        if (!seen.add(path)) continue;
+
+                        File f = new File(path);
+                        if (!f.exists() || f.isDirectory()) continue;
+
+                        long len = f.length();
+                        long modSec = colMod >= 0 ? c.getLong(colMod) : 0L;
+                        long modMs = modSec > 0 ? modSec * 1000L : f.lastModified();
+                        if (FileBrowserActivity.MODE_RECENT.equals(mode) && modMs < recentCutoff) {
+                            continue;
+                        }
+
+                        snapshot.sizeByPath.put(path, len);
+                        snapshot.modifiedByPath.put(path, modMs);
+                        freshFiles.add(f);
+                        totalBytes += len;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        // השלמה מהירה של תיקיית הורדות עבור קטגוריית קבצים חדשים או חבילות התקנה
+        if (FileBrowserActivity.MODE_APPS.equals(mode) || FileBrowserActivity.MODE_RECENT.equals(mode)
+                || FileBrowserActivity.MODE_DOCUMENTS.equals(mode)) {
+            File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (dl != null && dl.exists() && dl.isDirectory()) {
+                collectSingleCategoryInDir(dl, mode, freshFiles, seen, snapshot, includeHidden, recentCutoff, 0, 2);
+                totalBytes = 0L;
+                for (File f : freshFiles) {
+                    Long sz = snapshot.sizeByPath.get(f.getAbsolutePath());
+                    totalBytes += sz != null ? sz : f.length();
+                }
+            }
+        }
+
+        if (FileBrowserActivity.MODE_IMAGES.equals(mode)) {
+            snapshot.images.clear();
+            snapshot.images.addAll(freshFiles);
+            snapshot.summary.imagesBytes = totalBytes;
+            snapshot.summary.imagesCount = freshFiles.size();
+        } else if (FileBrowserActivity.MODE_AUDIO.equals(mode)) {
+            snapshot.audio.clear();
+            snapshot.audio.addAll(freshFiles);
+            snapshot.summary.audioBytes = totalBytes;
+            snapshot.summary.audioCount = freshFiles.size();
+        } else if (FileBrowserActivity.MODE_VIDEOS.equals(mode)) {
+            snapshot.videos.clear();
+            snapshot.videos.addAll(freshFiles);
+            snapshot.summary.videosBytes = totalBytes;
+            snapshot.summary.videosCount = freshFiles.size();
+        } else if (FileBrowserActivity.MODE_DOCUMENTS.equals(mode)) {
+            snapshot.documents.clear();
+            snapshot.documents.addAll(freshFiles);
+            snapshot.summary.documentsBytes = totalBytes;
+            snapshot.summary.documentsCount = freshFiles.size();
+        } else if (FileBrowserActivity.MODE_APPS.equals(mode)) {
+            snapshot.apps.clear();
+            snapshot.apps.addAll(freshFiles);
+            snapshot.summary.appsBytes = totalBytes;
+            snapshot.summary.appsCount = freshFiles.size();
+        } else if (FileBrowserActivity.MODE_RECENT.equals(mode)) {
+            snapshot.recent.clear();
+            snapshot.recent.addAll(freshFiles);
+            snapshot.summary.recentBytes = totalBytes;
+            snapshot.summary.recentCount = freshFiles.size();
+        }
+    }
+
+    private static void collectSingleCategoryInDir(
+            File dir,
+            String mode,
+            List<File> out,
+            Set<String> seen,
+            CategoryIndexSnapshot snapshot,
+            boolean includeHidden,
+            long recentCutoff,
+            int depth,
+            int maxDepth
+    ) {
+        if (dir == null || !dir.exists() || depth > maxDepth) return;
+        File[] children = dir.listFiles();
+        if (children == null) return;
+        for (File f : children) {
+            if (!includeHidden && f.getName().startsWith(".")) continue;
+            if (f.isDirectory()) {
+                collectSingleCategoryInDir(f, mode, out, seen, snapshot, includeHidden, recentCutoff, depth + 1, maxDepth);
+            } else {
+                String path = f.getAbsolutePath();
+                if (!seen.add(path)) continue;
+                String lower = f.getName().toLowerCase(Locale.ROOT);
+                boolean match = false;
+                if (FileBrowserActivity.MODE_APPS.equals(mode)) {
+                    match = MediaFormatHelper.isInstallableAppPackage(lower);
+                } else if (FileBrowserActivity.MODE_DOCUMENTS.equals(mode)) {
+                    match = MediaFormatHelper.isDocumentFile(lower);
+                } else if (FileBrowserActivity.MODE_RECENT.equals(mode)) {
+                    match = f.lastModified() >= recentCutoff && !lower.startsWith(".") && out.size() < 2500;
+                }
+                if (match) {
+                    long len = f.length();
+                    snapshot.sizeByPath.put(path, len);
+                    snapshot.modifiedByPath.put(path, f.lastModified());
+                    out.add(f);
+                }
+            }
+        }
     }
 
     private static boolean isExcludedAndroidSystemPath(String path) {
@@ -573,7 +766,7 @@ public class StorageUtils {
         double kb = bytes / 1024.0;
         if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb);
         double mb = kb / 1024.0;
-        if (mb < 1024) return String.format(Locale.US, "%.1f MB", mb);
+        if (mb < 1024) return String.format(Locale.US, "%.2f MB", mb);
         double gb = mb / 1024.0;
         return String.format(Locale.US, "%.2f GB", gb);
     }
