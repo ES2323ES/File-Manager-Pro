@@ -111,7 +111,7 @@ import java.util.zip.GZIPInputStream;
 import com.aishhatorah.filemanagerpro.AudioPaletteHelper.AudioAdaptivePalette;
 
 /**
- * מציג ונגן המדיה המובנה של File Manager Pro 0.3.4:
+ * מציג ונגן המדיה המובנה של File Manager Pro 0.3.5:
  * - תצוגת Edge-to-Edge מלאה לתמונות ווידאו מאחורי סרגלים שקופים (סעיף 25)
  * - מצב מחוות אוטומטי מול מצב כפתורים קלאסי בווידאו ותמונות (סעיפים 29, 30, 44)
  * - לחיצה ארוכה בצד ימין 2x קדימה ובצד שמאל 2x אחורה בווידאו (סעיף 44)
@@ -532,10 +532,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewCompat.setOnApplyWindowInsetsListener(stageRoot, (v, insets) -> {
                     Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
                     if (activeImageTopOverlay != null) {
-                        activeImageTopOverlay.setPadding(dp(12) + sys.left, sys.top + dp(6), dp(12) + sys.right, dp(16));
+                        activeImageTopOverlay.setPadding(dp(12) + sys.left, sys.top + dp(8), dp(12) + sys.right, dp(8));
                     }
                     if (activeMediaBottomPanel != null) {
-                        activeMediaBottomPanel.setPadding(dp(12) + sys.left, dp(18), dp(12) + sys.right, sys.bottom + dp(14));
+                        activeMediaBottomPanel.setPadding(dp(12) + sys.left, dp(10), dp(12) + sys.right, sys.bottom + dp(10));
                     }
                     return insets;
                 });
@@ -966,11 +966,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         activeImageNextFloat = btnFloatNext;
 
         FrameLayout topOverlay = new FrameLayout(this);
-        GradientDrawable topScrim = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{Color.argb(175, 8, 12, 22), Color.argb(110, 8, 12, 22), Color.TRANSPARENT});
-        topOverlay.setBackground(topScrim);
-        topOverlay.setPadding(dp(12), dp(26), dp(12), dp(16));
+        topOverlay.setClickable(true);
+        topOverlay.setBackgroundColor(Color.argb(172, 24, 34, 54));
+        topOverlay.setPadding(dp(12), dp(26), dp(12), dp(8));
 
         ImageButton btnImgBack = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(44), Color.WHITE);
         btnImgBack.setContentDescription("חזרה");
@@ -991,11 +989,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bottomActionsRow.setOrientation(LinearLayout.HORIZONTAL);
         bottomActionsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bottomActionsRow.setGravity(Gravity.CENTER);
-        GradientDrawable bottomScrim = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{Color.TRANSPARENT, Color.argb(115, 8, 12, 22), Color.argb(180, 8, 12, 22)});
-        bottomActionsRow.setBackground(bottomScrim);
-        bottomActionsRow.setPadding(dp(12), dp(18), dp(12), dp(20));
+        bottomActionsRow.setClickable(true);
+        bottomActionsRow.setBackgroundColor(Color.argb(172, 24, 34, 54));
+        bottomActionsRow.setPadding(dp(12), dp(10), dp(12), dp(14));
         activeMediaBottomPanel = bottomActionsRow;
 
         final ImageButton btnProImageEditor = createCleanBorderlessIconButton(R.drawable.ic_edit_pencil, dp(46), Color.WHITE);

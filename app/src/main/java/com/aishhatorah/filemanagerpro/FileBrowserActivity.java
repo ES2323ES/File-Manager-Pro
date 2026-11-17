@@ -46,6 +46,7 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.cardview.widget.CardView;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -647,7 +648,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         actionsRow.addView(createMultiActionChip("העתק", R.drawable.ic_copy, v -> multiCopy(false)));
         actionsRow.addView(createMultiActionChip("העבר", R.drawable.ic_cut, v -> multiCopy(true)));
         actionsRow.addView(createMultiActionChip("שתף", R.drawable.ic_share, v -> multiShare()));
-        actionsRow.addView(createMultiActionChip("דחיסה", R.drawable.ic_zip_archive, v -> promptMultiFormatCompress(getSelectedFilesList())));
+        actionsRow.addView(createMultiActionChip("דחיסה", R.drawable.ic_compress_chip, v -> promptMultiFormatCompress(getSelectedFilesList())));
         actionsRow.addView(createMultiActionChip("שינוי שם אצווה", R.drawable.ic_edit_pencil, v -> promptBatchRename(getSelectedFilesList())));
         actionsRow.addView(createMultiActionChip("מחק", R.drawable.ic_delete, v -> multiDelete()));
 
@@ -663,10 +664,13 @@ public class FileBrowserActivity extends AppCompatActivity {
         b.setTextSize(11.5f);
         b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setTextColor(textPrimary);
-        b.setCompoundDrawablesRelativeWithIntrinsicBounds(iconRes, 0, 0, 0);
-        Drawable[] ds = b.getCompoundDrawablesRelative();
-        if (ds[0] != null) {
-            ds[0].mutate().setTint(accent);
+        Drawable d = ContextCompat.getDrawable(this, iconRes);
+        if (d != null) {
+            d = d.mutate();
+            int iconSz = dp(17);
+            d.setBounds(0, 0, iconSz, iconSz);
+            d.setTint(accent);
+            b.setCompoundDrawablesRelative(d, null, null, null);
         }
         b.setCompoundDrawablePadding(dp(4));
         GradientDrawable gd = new GradientDrawable();
