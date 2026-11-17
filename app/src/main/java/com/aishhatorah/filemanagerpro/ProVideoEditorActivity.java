@@ -59,8 +59,11 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     private int rotationDegrees = 0;
     private boolean muteAudio = false;
     private float previewSpeed = 1.0f;
+    private VideoCompressor.QualityPreset selectedPreset = VideoCompressor.QualityPreset.ORIGINAL;
 
     private TextView tvRangeSummary;
+    private TextView tvCompressionEstimate;
+    private final Button[] presetButtons = new Button[4];
     private RangeWaveformTrimView rangeTrimView;
     private Button btnExport;
     private Button btnShareOutput;
@@ -225,6 +228,46 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         muteRow.addView(swMute);
         tools.addView(muteRow);
 
+        TextView tvCompressHeader = new TextView(this);
+        tvCompressHeader.setText("הפחתת משקל ודחיסת איכות הווידאו:");
+        tvCompressHeader.setTextColor(textPrimary);
+        tvCompressHeader.setTextSize(13f);
+        tvCompressHeader.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCompressHeader.setPadding(0, 10, 0, 8);
+        tools.addView(tvCompressHeader);
+
+        HorizontalScrollView presetScroll = new HorizontalScrollView(this);
+        presetScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        VideoCompressor.QualityPreset[] presets = VideoCompressor.QualityPreset.values();
+        for (int i = 0; i < presets.length; i++) {
+            final VideoCompressor.QualityPreset preset = presets[i];
+            Button chip = ThemedDialogHelper.createThemedButton(this, preset.labelHe, theme, preset == selectedPreset, false);
+            chip.setTextSize(12f);
+            chip.setPadding(22, 14, 22, 14);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMarginEnd(10);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(v -> {
+                selectedPreset = preset;
+                refreshPresetChipStyles(theme);
+                updateSummaryLabel();
+            });
+            presetButtons[i] = chip;
+            presetRow.addView(chip);
+        }
+        presetScroll.addView(presetRow);
+        tools.addView(presetScroll);
+
+        tvCompressionEstimate = new TextView(this);
+        tvCompressionEstimate.setTextColor(accent);
+        tvCompressionEstimate.setTextSize(12.5f);
+        tvCompressionEstimate.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCompressionEstimate.setPadding(0, 10, 0, 6);
+        tools.addView(tvCompressionEstimate);
+
         btnShareOutput = ThemedDialogHelper.createThemedButton(this, "שיתוף הקובץ הערוך", theme, false, false);
         LinearLayout.LayoutParams shLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -249,10 +292,22 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         toolsScroll.addView(tools);
         root.addView(toolsScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 620));
+                ViewGroup.LayoutParams.MATCH_PARENT, 700));
 
         setContentView(root);
         setupTexturePreview();
+    }
+
+    private void refreshPresetChipStyles(int theme) {
+        VideoCompressor.QualityPreset[] presets = VideoCompressor.QualityPreset.values();
+        for (int i = 0; i < presets.length; i++) {
+            Button chip = presetButtons[i];
+            if (chip == null) continue;
+            Button styled = ThemedDialogHelper.createThemedButton(
+                    this, presets[i].labelHe, theme, presets[i] == selectedPreset, false);
+            chip.setBackground(styled.getBackground());
+            chip.setTextColor(styled.getTextColors());
+        }
     }
 
     private void addChip(LinearLayout row, String label, int theme, Runnable onClick) {
@@ -301,6 +356,20 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         tvRangeSummary.setText(String.format(Locale.US,
                 "טווח: %s – %s  •  סיבוב: %d°  •  %s  •  %.1fx",
                 formatClock(trimStartMs), formatClock(trimEndMs), rotationDegrees, soundTxt, previewSpeed));
+        if (tvCompressionEstimate != null && sourceVideo != null) {
+            long origBytes = sourceVideo.length();
+            long clipMs = Math.max(500L, (long) trimEndMs - (long) trimStartMs);
+            long estBytes = VideoCompressor.estimateCompressedBytes(
+                    clipMs, selectedPreset, origBytes, durationMs, muteAudio, previewSpeed);
+            int savedPct = origBytes > 0
+                    ? Math.max(0, (int) Math.round(((origBytes - estBytes) * 100.0) / origBytes))
+                    : 0;
+            String origStr = StorageUtils.formatSize(origBytes);
+            String estStr = StorageUtils.formatSize(estBytes);
+            tvCompressionEstimate.setText(selectedPreset == VideoCompressor.QualityPreset.ORIGINAL
+                    ? ("משקל מקורי: " + origStr + "  •  ייצוא מהיר ללא דחיסה (~" + estStr + ")")
+                    : ("משקל מקורי: " + origStr + "  •  אחרי הפחתה: ~" + estStr + " (חיסכון " + savedPct + "%)"));
+        }
     }
 
     private String formatClock(int ms) {
@@ -332,26 +401,69 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
     private void exportEditedVideo() {
         btnExport.setEnabled(false);
-        Toast.makeText(this, "מייצא סרטון ערוך באיכות מלאה...", Toast.LENGTH_SHORT).show();
+        final VideoCompressor.QualityPreset preset = selectedPreset;
+        final boolean compress = preset != VideoCompressor.QualityPreset.ORIGINAL;
+        Toast.makeText(this,
+                compress ? "דוחס ומפחית משקל וידאו..." : "מייצא סרטון ערוך באיכות מלאה...",
+                Toast.LENGTH_SHORT).show();
 
         final long startUs = trimStartMs * 1000L;
         final long endUs = Math.max(startUs + 500_000L, trimEndMs * 1000L);
         final int rot = rotationDegrees;
         final boolean dropAudio = muteAudio;
+        final float speedVal = previewSpeed;
 
         executor.execute(() -> {
+            File outDir = sourceVideo.getParentFile();
+            if (outDir == null || !outDir.canWrite()) {
+                outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
+            }
+            if (!outDir.exists()) outDir.mkdirs();
+
+            String base = sourceVideo.getName().replaceAll("\\.[^.]+$", "");
+            String suffix = compress ? "_דחוס.mp4" : "_ערוך.mp4";
+            File outFile = StorageUtils.uniqueDestinationFile(outDir, base + suffix);
+
+            if (compress) {
+                try {
+                    VideoCompressor.compressVideo(
+                            sourceVideo,
+                            outFile,
+                            startUs,
+                            endUs,
+                            rot,
+                            dropAudio,
+                            speedVal,
+                            preset,
+                            pct -> runOnUiThread(() -> btnExport.setText("דוחס " + pct + "%"))
+                    );
+                    final File saved = outFile;
+                    long origLen = Math.max(1L, sourceVideo.length());
+                    long newLen = saved.length();
+                    int savedPct = Math.max(0, (int) Math.round(((origLen - newLen) * 100.0) / origLen));
+                    runOnUiThread(() -> {
+                        btnExport.setText("ייצא ושמור");
+                        btnExport.setEnabled(true);
+                        lastExportedFile = saved;
+                        btnShareOutput.setVisibility(View.VISIBLE);
+                        Toast.makeText(this,
+                                "נשמר: " + saved.getName() + " (" + StorageUtils.formatSize(newLen) + ", חיסכון " + savedPct + "%)",
+                                Toast.LENGTH_LONG).show();
+                    });
+                } catch (Exception e) {
+                    if (outFile.exists()) outFile.delete();
+                    runOnUiThread(() -> {
+                        btnExport.setText("ייצא ושמור");
+                        btnExport.setEnabled(true);
+                        Toast.makeText(this, "שגיאה בדחיסה: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    });
+                }
+                return;
+            }
+
             MediaExtractor extractor = new MediaExtractor();
             MediaMuxer muxer = null;
             try {
-                File outDir = sourceVideo.getParentFile();
-                if (outDir == null || !outDir.canWrite()) {
-                    outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
-                }
-                if (!outDir.exists()) outDir.mkdirs();
-
-                String base = sourceVideo.getName().replaceAll("\\.[^.]+$", "");
-                File outFile = StorageUtils.uniqueDestinationFile(outDir, base + "_ערוך.mp4");
-
                 extractor.setDataSource(sourceVideo.getAbsolutePath());
                 int trackCount = extractor.getTrackCount();
                 muxer = new MediaMuxer(outFile.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -407,6 +519,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                     Toast.makeText(this, "הסרטון הערוך נשמר: " + saved.getName(), Toast.LENGTH_LONG).show();
                 });
             } catch (Exception e) {
+                if (outFile.exists()) outFile.delete();
                 runOnUiThread(() -> {
                     btnExport.setEnabled(true);
                     Toast.makeText(this, "שגיאה בייצוא הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show();
