@@ -42,6 +42,8 @@ import java.util.Map;
 public class SettingsActivity extends AppCompatActivity {
 
     private static final int REQ_PICK_WALLPAPER = 4102;
+    private ScrollView activeScroll;
+    private int savedScrollY = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -123,6 +125,9 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void renderSettingsUi() {
+        if (activeScroll != null) {
+            savedScrollY = activeScroll.getScrollY();
+        }
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
 
@@ -159,6 +164,7 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(topBar);
 
         ScrollView scroll = new ScrollView(this);
+        activeScroll = scroll;
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(dp(14), dp(10), dp(14), dp(26));
@@ -611,6 +617,10 @@ public class SettingsActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+        final int targetScroll = savedScrollY;
+        if (targetScroll > 0) {
+            scroll.post(() -> scroll.scrollTo(0, targetScroll));
+        }
     }
 
     private void showDefaultOpenManagerDialog(Map<String, String> savedDefaults) {

@@ -14,6 +14,7 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -599,26 +600,9 @@ public class ThemeHelper {
         if (sb == null) return;
         float d = sb.getResources().getDisplayMetrics().density;
         int trackH = Math.max(4, Math.round(8f * d));
-        float cornerR = 999f;
+        int trackBgColor = ColorUtils.setAlphaComponent(accent, 65);
 
-        GradientDrawable trackBg = new GradientDrawable();
-        trackBg.setCornerRadius(cornerR);
-        trackBg.setColor(ColorUtils.setAlphaComponent(accent, 65));
-
-        GradientDrawable trackFill = new GradientDrawable();
-        trackFill.setCornerRadius(cornerR);
-        trackFill.setColor(accent);
-        ClipDrawable clipFill = new ClipDrawable(trackFill, Gravity.START, ClipDrawable.HORIZONTAL);
-
-        LayerDrawable layers = new LayerDrawable(new Drawable[]{trackBg, clipFill});
-        layers.setId(0, android.R.id.background);
-        layers.setId(1, android.R.id.progress);
-        layers.setLayerHeight(0, trackH);
-        layers.setLayerHeight(1, trackH);
-        layers.setLayerGravity(0, Gravity.CENTER_VERTICAL);
-        layers.setLayerGravity(1, Gravity.CENTER_VERTICAL);
-
-        sb.setProgressDrawable(layers);
+        sb.setProgressDrawable(new StickSeekTrackDrawable(trackBgColor, accent, trackH));
         sb.setProgressTintList(null);
         sb.setProgressBackgroundTintList(null);
         sb.setSecondaryProgressTintList(null);
@@ -627,7 +611,8 @@ public class ThemeHelper {
         stickThumb.setShape(GradientDrawable.RECTANGLE);
         stickThumb.setCornerRadius(999f);
         stickThumb.setColor(accent);
-        int thumbW = Math.max(4, Math.round(5.5f * d));
+        int rawW = Math.max(6, Math.round(5.5f * d));
+        int thumbW = (rawW % 2 == 0) ? rawW : rawW + 1;
         int thumbH = Math.max(18, Math.round(24f * d));
         stickThumb.setSize(thumbW, thumbH);
 
@@ -638,6 +623,53 @@ public class ThemeHelper {
         sb.setMinimumHeight(Math.round(34f * d));
         int hPad = Math.round(10f * d);
         sb.setPadding(hPad, Math.round(4f * d), hPad, Math.round(4f * d));
+    }
+
+    private static class StickSeekTrackDrawable extends Drawable {
+        private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private final int trackHeightPx;
+
+        StickSeekTrackDrawable(int trackColor, int fillColor, int trackHeightPx) {
+            this.trackPaint.setColor(trackColor);
+            this.trackPaint.setStyle(Paint.Style.FILL);
+            this.fillPaint.setColor(fillColor);
+            this.fillPaint.setStyle(Paint.Style.FILL);
+            this.trackHeightPx = Math.max(2, trackHeightPx);
+        }
+
+        @Override
+        protected boolean onLevelChange(int level) {
+            invalidateSelf();
+            return true;
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            Rect b = getBounds();
+            if (b.width() <= 0 || b.height() <= 0) return;
+            float cy = b.exactCenterY();
+            float halfH = trackHeightPx * 0.5f;
+            float radius = halfH;
+
+            rect.set(b.left, cy - halfH, b.right, cy + halfH);
+            canvas.drawRoundRect(rect, radius, radius, trackPaint);
+
+            float fraction = Math.max(0f, Math.min(1f, getLevel() / 10000f));
+            if (fraction > 0f) {
+                float fillEnd = b.left + (b.width() * fraction);
+                rect.set(b.left, cy - halfH, Math.max(b.left + trackHeightPx * 0.5f, fillEnd), cy + halfH);
+                canvas.drawRoundRect(rect, radius, radius, fillPaint);
+            }
+        }
+
+        @Override public void setAlpha(int alpha) { trackPaint.setAlpha(alpha); fillPaint.setAlpha(alpha); }
+        @Override public void setColorFilter(@Nullable ColorFilter colorFilter) {
+            trackPaint.setColorFilter(colorFilter);
+            fillPaint.setColorFilter(colorFilter);
+        }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
     public static void styleHorizontalProgressBar(ProgressBar pb, int accent) {
