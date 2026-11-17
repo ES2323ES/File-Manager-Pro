@@ -22,6 +22,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -113,11 +114,12 @@ public class ProImageEditorActivity extends AppCompatActivity {
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
-        topBar.setPadding(24, 20, 24, 20);
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
+        topBar.setPadding(ThemeHelper.dpScaled(this, 10), ThemeHelper.dpScaled(this, 8),
+                ThemeHelper.dpScaled(this, 12), ThemeHelper.dpScaled(this, 10));
 
-        Button btnBack = ThemedDialogHelper.createThemedButton(this, "סגור", theme, false, false);
-        btnBack.setOnClickListener(v -> finish());
+        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> finish());
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);

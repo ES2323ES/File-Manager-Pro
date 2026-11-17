@@ -17,6 +17,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -68,25 +69,26 @@ public class AudioCutterActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(bg);
+        ThemeHelper.applyWallpaperBackdrop(this, root, theme);
 
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        topBar.setPadding(24, 22, 24, 22);
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
+        topBar.setPadding(ThemeHelper.dpScaled(this, 10), ThemeHelper.dpScaled(this, 8),
+                ThemeHelper.dpScaled(this, 12), ThemeHelper.dpScaled(this, 10));
 
-        Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
-        btnBack.setOnClickListener(v -> finish());
+        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> finish());
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
         tvTitle.setText("חותך אודיו");
-        tvTitle.setTextSize(17.5f);
+        tvTitle.setTextSize(ThemeHelper.spScaled(this, 17f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpTitle.setMarginStart(16);
+        lpTitle.setMarginStart(ThemeHelper.dpScaled(this, 8));
         topBar.addView(tvTitle, lpTitle);
         root.addView(topBar);
 
@@ -98,10 +100,7 @@ public class AudioCutterActivity extends AppCompatActivity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(32, 32, 32, 32);
-        GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(24f);
-        shape.setColor(cardBg);
-        card.setBackground(shape);
+        card.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 20f, false, false));
 
         tvSelectedFile = new TextView(this);
         tvSelectedFile.setText("לא נבחר קובץ אודיו עדיין");

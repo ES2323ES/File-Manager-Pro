@@ -12,6 +12,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -21,6 +22,7 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.cardview.widget.CardView;
+import androidx.core.graphics.ColorUtils;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -43,6 +45,10 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
     private HeavyAdapter adapter;
     private AudioPlayerManager.PlaybackListener miniAudioListener;
 
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -50,34 +56,35 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
 
-        int bgColor = ThemeHelper.getBgColor(theme);
-        int cardColor = ThemeHelper.getCardColor(theme);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(theme);
-        int accent = ThemeHelper.getAccentColor(theme);
+        int bgColor = ThemeHelper.getBgColor(this, theme);
+        int cardColor = ThemeHelper.getCardColor(this, theme);
+        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        int textSecondary = ThemeHelper.getSecondaryTextColor(this, theme);
+        int accent = ThemeHelper.getAccentColor(this, theme);
+        boolean dark = ThemeHelper.isDarkSurface(this, theme);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(bgColor);
+        ThemeHelper.applyWallpaperBackdrop(this, root, theme);
 
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(ThemeHelper.getTopBarColor(theme));
-        topBar.setPadding(24, 22, 24, 22);
+        topBar.setPadding(dp(10), dp(8), dp(12), dp(10));
+        ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
-        Button btnBack = ThemedDialogHelper.createThemedButton(this, "חזרה", theme, false, false);
-        btnBack.setOnClickListener(v -> finish());
+        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> finish());
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
         tvTitle.setText("ניתוח — הקבצים הגדולים ביותר");
-        tvTitle.setTextSize(17f);
+        tvTitle.setTextSize(ThemeHelper.spScaled(this, 16.5f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setTextColor(textPrimary);
         LinearLayout.LayoutParams lpTitle = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpTitle.setMarginStart(14);
+        lpTitle.setMarginStart(dp(6));
         topBar.addView(tvTitle, lpTitle);
 
         Button btnRescan = ThemedDialogHelper.createThemedButton(this, "סרוק שוב", theme, true, false);
@@ -87,9 +94,9 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         root.addView(topBar);
 
         tvStatusSummary = new TextView(this);
-        tvStatusSummary.setTextColor(textSecondary);
-        tvStatusSummary.setTextSize(13f);
-        tvStatusSummary.setPadding(32, 20, 32, 14);
+        tvStatusSummary.setTextColor(ThemeHelper.hasWallpaper(this) ? textPrimary : textSecondary);
+        tvStatusSummary.setTextSize(ThemeHelper.spScaled(this, 13f));
+        tvStatusSummary.setPadding(dp(16), dp(10), dp(16), dp(8));
         root.addView(tvStatusSummary);
 
         scanSpinner = new ProgressBar(this);
@@ -98,6 +105,9 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
         rv.setItemAnimator(null);
+        if (ThemeHelper.hasWallpaper(this)) {
+            rv.setBackgroundColor(ColorUtils.setAlphaComponent(bgColor, dark ? 136 : 156));
+        }
         final int divColor = ThemeHelper.getDividerColor(this, theme);
         final float density = getResources().getDisplayMetrics().density;
         rv.addItemDecoration(new RecyclerView.ItemDecoration() {
