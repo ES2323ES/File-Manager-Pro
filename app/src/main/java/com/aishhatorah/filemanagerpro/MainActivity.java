@@ -249,13 +249,13 @@ public class MainActivity extends AppCompatActivity {
         btnSettings.setColorFilter(accent);
         swipeRefreshHome.setColorSchemeColors(accent);
 
-        ThemeHelper.styleGlassCardView(this, cardStorageSummary, theme, 16f, false);
+        ThemeHelper.styleGlassCardView(this, cardStorageSummary, theme, 18f, true);
         tvInternalSummaryTitle.setTextColor(textPrimary);
         tvInternalSummaryStats.setTextColor(textSecondary);
         tvSdSummaryTitle.setTextColor(textPrimary);
         tvSdSummaryStats.setTextColor(textSecondary);
-        progressInternal.setProgressTintList(accentState);
-        progressSd.setProgressTintList(accentState);
+        ThemeHelper.styleHorizontalProgressBar(progressInternal, accent);
+        ThemeHelper.styleHorizontalProgressBar(progressSd, accent);
 
         refreshQuickAccessBanner(theme, textPrimary, textSecondary, accent);
         refreshStorageSummaryAnd96Alert(theme, textPrimary, textSecondary, accent);
@@ -391,10 +391,10 @@ public class MainActivity extends AppCompatActivity {
                 ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
                 pb.setMax(100);
                 pb.setProgress((int) Math.round(usb.usedPercent));
-                pb.setProgressTintList(ColorStateList.valueOf(accent));
+                ThemeHelper.styleHorizontalProgressBar(pb, accent);
                 LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, Math.round(5 * d));
-                pbLp.topMargin = Math.round(4 * d);
+                        ViewGroup.LayoutParams.MATCH_PARENT, Math.round(6 * d));
+                pbLp.topMargin = Math.round(5 * d);
                 row.addView(pb, pbLp);
 
                 row.setOnClickListener(v -> {
@@ -526,13 +526,13 @@ public class MainActivity extends AppCompatActivity {
         int cols = widthDp >= 780f ? 5 : (widthDp >= 520f ? 4 : 3);
         boolean showLabels = PrefsManager.isShowHomeCategoryLabels(this);
 
-        int tileHeightPx = ThemeHelper.dpScaled(this, compact ? 86 : (tablet ? 116 : 98));
+        int tileHeightPx = ThemeHelper.dpScaled(this, compact ? 94 : (tablet ? 126 : 108));
         int iconSizePx = ThemeHelper.dpScaled(this, showLabels
-                ? (compact ? 32 : (tablet ? 44 : 38))
-                : (compact ? 38 : (tablet ? 50 : 44)));
-        float titleSp = ThemeHelper.spScaled(this, compact ? 10f : (tablet ? 12.5f : 11f));
+                ? (compact ? 38 : (tablet ? 54 : 46))
+                : (compact ? 46 : (tablet ? 62 : 54)));
+        float titleSp = ThemeHelper.spScaled(this, compact ? 10.5f : (tablet ? 13f : 11.5f));
         float subSp = ThemeHelper.spScaled(this, compact ? 9f : (tablet ? 11f : 10f));
-        int tileMarginPx = Math.round((compact ? 3f : 4f) * d);
+        int tileMarginPx = Math.round((compact ? 3.5f : 4.5f) * d);
 
         for (int i = 0; i < ordered.size(); i += cols) {
             LinearLayout rowLayout = new LinearLayout(this);
@@ -542,7 +542,7 @@ public class MainActivity extends AppCompatActivity {
 
             LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            rowLp.bottomMargin = Math.round(2f * d);
+            rowLp.bottomMargin = Math.round(3f * d);
             rowLayout.setLayoutParams(rowLp);
 
             for (int c = 0; c < cols; c++) {
@@ -556,7 +556,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 HomeCategory item = ordered.get(idx);
                 CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, rowLayout, false);
-                ThemeHelper.styleGlassCardView(this, tile, theme, 16f, false);
+                ThemeHelper.styleGlassCardView(this, tile, theme, 18f, false);
                 LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(0, tileHeightPx, 1f);
                 tileLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
                 tile.setLayoutParams(tileLp);

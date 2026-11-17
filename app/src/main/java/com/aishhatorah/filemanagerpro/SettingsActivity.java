@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -187,23 +188,29 @@ public class SettingsActivity extends AppCompatActivity {
                 PrefsManager.THEME_TEAL,
                 PrefsManager.THEME_SYSTEM
         };
-        for (int rowStart = 0; rowStart < themeIds.length; rowStart += 4) {
+        for (int rowStart = 0; rowStart < themeIds.length; rowStart += 3) {
             LinearLayout tRow = new LinearLayout(this);
             tRow.setOrientation(LinearLayout.HORIZONTAL);
-            int end = Math.min(themeIds.length, rowStart + 4);
+            tRow.setWeightSum(3f);
+            int end = Math.min(themeIds.length, rowStart + 3);
             for (int i = rowStart; i < end; i++) {
                 final int tId = themeIds[i];
-                Button b = createOptionButton(
-                        ThemeHelper.getThemeNameHe(tId).replace(" (AMOLED)", "").replace(" (דינאמי)", ""),
-                        theme == tId, accent, dark, () -> {
+                View cardItem = createEqualThemeCard(
+                        tId,
+                        ThemeHelper.getThemeNameHe(tId),
+                        theme == tId,
+                        accent,
+                        divider,
+                        dark,
+                        () -> {
                             PrefsManager.setThemeMode(this, tId);
                             renderSettingsUi();
                         });
-                tRow.addView(b);
+                tRow.addView(cardItem);
             }
             LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (rowStart > 0) trLp.topMargin = dp(6);
+            if (rowStart > 0) trLp.topMargin = dp(8);
             themeCard.addView(tRow, trLp);
         }
 
@@ -268,13 +275,34 @@ public class SettingsActivity extends AppCompatActivity {
 
         // סקאלת גודל תצוגה
         float currentScale = PrefsManager.getUiScale(this);
+        LinearLayout scaleHeaderRow = new LinearLayout(this);
+        scaleHeaderRow.setOrientation(LinearLayout.HORIZONTAL);
+        scaleHeaderRow.setGravity(Gravity.CENTER_VERTICAL);
+        scaleHeaderRow.setPadding(0, dp(14), 0, dp(4));
+
         TextView tvScaleLabel = new TextView(this);
         tvScaleLabel.setText(String.format(Locale.US, "גודל תצוגה וטקסט באפליקציה: %.0f%%", currentScale * 100f));
         tvScaleLabel.setTextColor(textPrimary);
         tvScaleLabel.setTextSize(ThemeHelper.spScaled(this, 13f));
         tvScaleLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        tvScaleLabel.setPadding(0, dp(14), 0, dp(4));
-        themeCard.addView(tvScaleLabel);
+        scaleHeaderRow.addView(tvScaleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        boolean isScaleDefault = Math.abs(currentScale - 1.0f) < 0.015f;
+        ImageButton btnResetScale = ThemeHelper.createBorderlessSvgButton(
+                this,
+                R.drawable.ic_reset,
+                isScaleDefault ? textSecondary : accent,
+                "איפוס לגודל ברירת המחדל",
+                32,
+                6,
+                v -> {
+                    PrefsManager.setUiScale(this, 1.0f);
+                    Toast.makeText(this, "גודל הטקסט והתצוגה אופס לברירת המחדל (100%)", Toast.LENGTH_SHORT).show();
+                    renderSettingsUi();
+                });
+        btnResetScale.setAlpha(isScaleDefault ? 0.5f : 1.0f);
+        scaleHeaderRow.addView(btnResetScale);
+        themeCard.addView(scaleHeaderRow);
 
         SeekBar sbScale = new SeekBar(this);
         ThemeHelper.applySeekBarTint(sbScale, accent);
@@ -360,6 +388,34 @@ public class SettingsActivity extends AppCompatActivity {
                 renderSettingsUi();
             }));
         }
+
+        int curBlur = PrefsManager.getWallpaperBlurRadius(this);
+        TextView tvBlurLabel = new TextView(this);
+        tvBlurLabel.setText("עוצמת טשטוש תמונת הרקע: " + (curBlur == 0 ? "ללא טשטוש (0%)" : Math.round((curBlur / 28f) * 100f) + "%"));
+        tvBlurLabel.setTextColor(textPrimary);
+        tvBlurLabel.setTextSize(ThemeHelper.spScaled(this, 13f));
+        tvBlurLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvBlurLabel.setPadding(0, dp(12), 0, dp(4));
+        homeCard.addView(tvBlurLabel);
+
+        SeekBar sbBlur = new SeekBar(this);
+        ThemeHelper.applySeekBarTint(sbBlur, accent);
+        sbBlur.setMax(28);
+        sbBlur.setProgress(curBlur);
+        sbBlur.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                tvBlurLabel.setText("עוצמת טשטוש תמונת הרקע: " + (progress == 0 ? "ללא טשטוש (0%)" : Math.round((progress / 28f) * 100f) + "%"));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                PrefsManager.setWallpaperBlurRadius(SettingsActivity.this, seekBar.getProgress());
+                ThemeHelper.invalidateWallpaperCache();
+                ThemeHelper.applyWallpaperBackdrop(SettingsActivity.this, root, theme);
+            }
+        });
+        homeCard.addView(sbBlur);
 
         addSwitchRow(homeCard,
                 "הצגת שמות קטגוריות במסך הבית",
@@ -669,6 +725,76 @@ public class SettingsActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(6);
         card.setLayoutParams(lp);
+        return card;
+    }
+
+    private View createEqualThemeCard(
+            int themeId,
+            String label,
+            boolean active,
+            int activeAccent,
+            int divider,
+            boolean dark,
+            Runnable onClick
+    ) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER);
+        card.setPadding(dp(6), dp(8), dp(6), dp(8));
+
+        int previewBg = ThemeHelper.getBgColor(this, themeId);
+        int previewAccent = ThemeHelper.getAccentColor(themeId);
+        boolean previewDark = ThemeHelper.isDarkSurface(this, themeId);
+
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setCornerRadius(dp(14));
+        cardBg.setColor(active
+                ? ColorUtils.setAlphaComponent(activeAccent, dark ? 52 : 28)
+                : ColorUtils.setAlphaComponent(previewBg, 220));
+        cardBg.setStroke(dp(active ? 2 : 1), active ? activeAccent : ColorUtils.setAlphaComponent(divider, 180));
+        card.setBackground(cardBg);
+
+        LinearLayout swatchRow = new LinearLayout(this);
+        swatchRow.setOrientation(LinearLayout.HORIZONTAL);
+        swatchRow.setGravity(Gravity.CENTER);
+
+        View dotPrimary = new View(this);
+        GradientDrawable d1 = new GradientDrawable();
+        d1.setShape(GradientDrawable.OVAL);
+        d1.setColor(previewBg);
+        d1.setStroke(dp(1), previewDark ? Color.argb(120, 255, 255, 255) : Color.argb(90, 15, 23, 42));
+        dotPrimary.setBackground(d1);
+        LinearLayout.LayoutParams lpD1 = new LinearLayout.LayoutParams(dp(16), dp(16));
+        lpD1.setMarginEnd(dp(4));
+        swatchRow.addView(dotPrimary, lpD1);
+
+        View dotAccent = new View(this);
+        GradientDrawable d2 = new GradientDrawable();
+        d2.setShape(GradientDrawable.OVAL);
+        d2.setColor(previewAccent);
+        dotAccent.setBackground(d2);
+        swatchRow.addView(dotAccent, new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+        card.addView(swatchRow);
+
+        TextView tvName = new TextView(this);
+        tvName.setText(label);
+        tvName.setTextSize(ThemeHelper.spScaled(this, 11.5f));
+        tvName.setTypeface(Typeface.DEFAULT_BOLD);
+        tvName.setSingleLine(true);
+        tvName.setEllipsize(TextUtils.TruncateAt.END);
+        tvName.setGravity(Gravity.CENTER);
+        tvName.setTextColor(active ? ThemeHelper.getPrimaryTextColor(this, PrefsManager.getThemeMode(this))
+                : ThemeHelper.getPrimaryTextColor(this, themeId));
+        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nameLp.topMargin = dp(6);
+        card.addView(tvName, nameLp);
+
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(0, dp(68), 1f);
+        cardLp.setMargins(dp(4), 0, dp(4), 0);
+        card.setLayoutParams(cardLp);
+        card.setOnClickListener(v -> onClick.run());
         return card;
     }
 
