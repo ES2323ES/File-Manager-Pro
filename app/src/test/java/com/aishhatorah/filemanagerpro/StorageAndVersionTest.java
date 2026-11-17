@@ -46,8 +46,9 @@ public class StorageAndVersionTest {
 
     @Test
     public void versionHelperFormatsOfficialAndComparesSemver() {
-        assertEquals("0.3.4", UpdateChecker.formatOfficialVer("0.3.4"));
+        assertEquals("0.3.5", UpdateChecker.formatOfficialVer("0.3.5"));
+        assertTrue(UpdateChecker.compareSemver("0.3.5", "0.3.4") > 0);
+        assertEquals(0, UpdateChecker.compareSemver("0.3.5", "0.3.5"));
         assertTrue(UpdateChecker.compareSemver("0.3.4", "0.3.3") > 0);
-        assertEquals(0, UpdateChecker.compareSemver("0.3.4", "0.3.4"));
     }
 }
