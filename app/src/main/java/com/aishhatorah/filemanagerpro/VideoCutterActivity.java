@@ -185,15 +185,25 @@ public class VideoCutterActivity extends AppCompatActivity {
         vLp.topMargin = 16;
         card.addView(previewBox, vLp);
 
-        Button btnPick = createButton("בחירת סרטון מהמכשיר (MP4 / MTS / TS)", accent, v -> {
-            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            pick.addCategory(Intent.CATEGORY_OPENABLE);
-            pick.setType("*/*");
-            pick.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                    "video/*", "video/mp2ts", "video/mp2t", "application/octet-stream"
-            });
-            startActivityForResult(pick, REQ_PICK_VIDEO);
-        });
+        Button btnPick = createButton("בחירת סרטון מקטגוריית הסרטונים", accent, v ->
+                CategoryMediaPickerDialog.show(
+                        this,
+                        FileBrowserActivity.MODE_VIDEOS,
+                        "בחירת סרטון מהמכשיר",
+                        file -> {
+                            selectedVideoUri = Uri.fromFile(file);
+                            loadSelectedVideo(selectedVideoUri, file.getName(), file);
+                        },
+                        () -> {
+                            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                            pick.addCategory(Intent.CATEGORY_OPENABLE);
+                            pick.setType("*/*");
+                            pick.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                                    "video/*", "video/mp2ts", "video/mp2t", "application/octet-stream"
+                            });
+                            startActivityForResult(pick, REQ_PICK_VIDEO);
+                        }
+                ));
         card.addView(btnPick);
 
         tvVideoRange = new TextView(this);

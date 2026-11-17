@@ -109,12 +109,22 @@ public class AudioCutterActivity extends AppCompatActivity {
         tvSelectedFile.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(tvSelectedFile);
 
-        Button btnPick = createActionButton("בחירת קובץ שמע לחיתוך (M4A / AAC / MP4)", accent, v -> {
-            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            pick.addCategory(Intent.CATEGORY_OPENABLE);
-            pick.setType("audio/*");
-            startActivityForResult(pick, REQ_PICK_AUDIO);
-        });
+        Button btnPick = createActionButton("בחירת קובץ שמע לחיתוך מקטגוריית שמע", accent, v ->
+                CategoryMediaPickerDialog.show(
+                        this,
+                        FileBrowserActivity.MODE_AUDIO,
+                        "בחירת קובץ שמע מהמכשיר",
+                        file -> {
+                            selectedAudioUri = Uri.fromFile(file);
+                            loadAudioMetadata(selectedAudioUri, file.getName());
+                        },
+                        () -> {
+                            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                            pick.addCategory(Intent.CATEGORY_OPENABLE);
+                            pick.setType("audio/*");
+                            startActivityForResult(pick, REQ_PICK_AUDIO);
+                        }
+                ));
         card.addView(btnPick);
 
         tvRangeInfo = new TextView(this);
