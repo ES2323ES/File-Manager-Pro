@@ -4,19 +4,53 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.content.res.TypedArray;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.view.View;
 import android.view.Window;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.cardview.widget.CardView;
 import androidx.core.graphics.ColorUtils;
 
+import java.io.File;
+
 /**
- * מערכת ערכות נושא עם תמיכה בצבעי דגש מותאמים, מתגי כיבוי/הדלקה מסונכרנים וערכות נושא מורחבות.
+ * מערכת ערכות נושא עם עיצוב זכוכית מודרני, תמונת רקע מטושטשת, כותרות מעוגלות ואייקוני SVG נקיים.
  */
 public class ThemeHelper {
+
+    private static volatile String cachedWallKey = "";
+    private static volatile Bitmap cachedBlurredWall = null;
+
+    public static void invalidateWallpaperCache() {
+        cachedWallKey = "";
+        cachedBlurredWall = null;
+    }
+
+    public static boolean hasWallpaper(Context context) {
+        if (context == null) return false;
+        String path = PrefsManager.getHomeWallpaperPath(context);
+        if (path == null || path.isEmpty()) return false;
+        File f = new File(path);
+        return f.exists() && f.isFile() && f.length() > 0;
+    }
 
     public static int resolveEffectiveTheme(Context context, int theme) {
         if (theme != PrefsManager.THEME_SYSTEM) {
@@ -190,6 +224,349 @@ public class ThemeHelper {
         return theme != PrefsManager.THEME_LIGHT && theme != PrefsManager.THEME_SLATE;
     }
 
+    public static Drawable createCurvedTopBarBackground(Context context, int theme) {
+        float d = context != null ? context.getResources().getDisplayMetrics().density : 2f;
+        float r = 20f * d;
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(getTopBarColor(context, theme));
+        gd.setCornerRadii(new float[]{0f, 0f, 0f, 0f, r, r, r, r});
+        return gd;
+    }
+
+    public static void applyCurvedHeaderStyle(Context context, View topBar, int theme) {
+        if (topBar == null) return;
+        topBar.setBackground(createCurvedTopBarBackground(context, theme));
+        if (context != null) {
+            float d = context.getResources().getDisplayMetrics().density;
+            topBar.setElevation(6f * d);
+        }
+    }
+
+    public static int getGlassCardFillColor(Context context, int theme, boolean highOpacityForReading) {
+        int baseCard = getCardColor(context, theme);
+        boolean dark = isDarkSurface(context, theme);
+        boolean wall = hasWallpaper(context);
+        int alpha;
+        if (highOpacityForReading) {
+            alpha = wall ? (dark ? 222 : 230) : (dark ? 242 : 248);
+        } else if (wall) {
+            alpha = dark ? 156 : 168;
+        } else {
+            alpha = dark ? 216 : 230;
+        }
+        return ColorUtils.setAlphaComponent(baseCard, alpha);
+    }
+
+    public static GradientDrawable createGlassCardBackground(
+            Context context, int theme, float cornerDp, boolean highOpacityForReading, boolean withGlow) {
+        float d = context != null ? context.getResources().getDisplayMetrics().density : 2f;
+        boolean dark = isDarkSurface(context, theme);
+        int accent = getAccentColor(context, theme);
+        GradientDrawable gd = new GradientDrawable();
+        gd.setCornerRadius(cornerDp * d);
+        gd.setColor(getGlassCardFillColor(context, theme, highOpacityForReading));
+        int rimBase = withGlow
+                ? ColorUtils.blendARGB(dark ? Color.WHITE : accent, accent, 0.35f)
+                : (dark ? Color.WHITE : Color.WHITE);
+        int rimAlpha = withGlow ? (dark ? 82 : 120) : (dark ? 42 : 175);
+        gd.setStroke(Math.max(1, Math.round(1.1f * d)), ColorUtils.setAlphaComponent(rimBase, rimAlpha));
+        return gd;
+    }
+
+    public static void styleGlassCardView(Context context, CardView cardView, int theme, float cornerDp, boolean withGlow) {
+        if (cardView == null) return;
+        float d = context != null ? context.getResources().getDisplayMetrics().density : 2f;
+        cardView.setRadius(cornerDp * d);
+        cardView.setCardBackgroundColor(Color.TRANSPARENT);
+        cardView.setCardElevation(0f);
+        cardView.setBackground(createGlassCardBackground(context, theme, cornerDp, false, withGlow));
+    }
+
+    public static GradientDrawable createFloatingGlassDialogBackground(Context context, int theme) {
+        float d = context != null ? context.getResources().getDisplayMetrics().density : 2f;
+        boolean dark = isDarkSurface(context, theme);
+        int baseCard = getCardColor(context, theme);
+        int fill = ColorUtils.setAlphaComponent(baseCard, dark ? 230 : 236);
+        int rim = dark ? Color.argb(66, 255, 255, 255) : Color.argb(190, 255, 255, 255);
+        GradientDrawable gd = new GradientDrawable();
+        gd.setCornerRadius(24f * d);
+        gd.setColor(fill);
+        gd.setStroke(Math.max(2, Math.round(1.25f * d)), rim);
+        return gd;
+    }
+
+    public static void applyWallpaperBackdrop(Context context, View targetView, int theme) {
+        if (context == null || targetView == null) return;
+        int bg = getBgColor(context, theme);
+        String path = PrefsManager.getHomeWallpaperPath(context);
+        if (path == null || path.isEmpty()) {
+            targetView.setBackgroundColor(bg);
+            return;
+        }
+        File f = new File(path);
+        if (!f.exists() || !f.isFile()) {
+            targetView.setBackgroundColor(bg);
+            return;
+        }
+        String key = path + ":" + f.lastModified();
+        Bitmap blurred = cachedWallKey.equals(key) ? cachedBlurredWall : null;
+        if (blurred == null) {
+            blurred = decodeAndBlurWallpaper(path, 14);
+            if (blurred != null) {
+                cachedWallKey = key;
+                cachedBlurredWall = blurred;
+            }
+        }
+        if (blurred == null) {
+            targetView.setBackgroundColor(bg);
+            return;
+        }
+        boolean dark = isDarkSurface(context, theme);
+        int scrim = ColorUtils.setAlphaComponent(bg, dark ? 118 : 102);
+        targetView.setBackground(new CenterCropBlurredDrawable(blurred, scrim));
+    }
+
+    private static Bitmap decodeAndBlurWallpaper(String path, int radius) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(path, bounds);
+            int maxDim = Math.max(bounds.outWidth, bounds.outHeight);
+            int sample = 1;
+            while (maxDim / sample > 480) {
+                sample *= 2;
+            }
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            Bitmap decoded = BitmapFactory.decodeFile(path, opts);
+            if (decoded == null) return null;
+
+            float scale = Math.min(1f, 340f / Math.max(1, Math.max(decoded.getWidth(), decoded.getHeight())));
+            Bitmap scaled = scale < 0.99f
+                    ? Bitmap.createScaledBitmap(decoded,
+                            Math.max(1, Math.round(decoded.getWidth() * scale)),
+                            Math.max(1, Math.round(decoded.getHeight() * scale)),
+                            true)
+                    : decoded.copy(Bitmap.Config.ARGB_8888, true);
+            if (scaled != decoded) decoded.recycle();
+            if (scaled == null) return null;
+            return fastStackBlur(scaled, radius);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Bitmap fastStackBlur(Bitmap src, int radius) {
+        Bitmap bmp = src.isMutable() ? src : src.copy(Bitmap.Config.ARGB_8888, true);
+        if (radius < 1) return bmp;
+        int w = bmp.getWidth();
+        int h = bmp.getHeight();
+        int[] pix = new int[w * h];
+        bmp.getPixels(pix, 0, w, 0, 0, w, h);
+        int wm = w - 1;
+        int hm = h - 1;
+        int wh = w * h;
+        int div = radius + radius + 1;
+        int[] r = new int[wh];
+        int[] g = new int[wh];
+        int[] b = new int[wh];
+        int rsum, gsum, bsum, x, y, i, p, yp, yi, yw;
+        int[] vmin = new int[Math.max(w, h)];
+        int divsum = (div + 1) >> 1;
+        divsum *= divsum;
+        int[] dv = new int[256 * divsum];
+        for (i = 0; i < 256 * divsum; i++) dv[i] = (i / divsum);
+        yw = yi = 0;
+        int[][] stack = new int[div][3];
+        int stackpointer, stackstart, rbs, routsum, goutsum, boutsum, rinsum, ginsum, binsum;
+        int r1 = radius + 1;
+
+        for (y = 0; y < h; y++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            for (i = -radius; i <= radius; i++) {
+                p = pix[yi + Math.min(wm, Math.max(i, 0))];
+                int[] sir = stack[i + radius];
+                sir[0] = (p & 0xff0000) >> 16;
+                sir[1] = (p & 0x00ff00) >> 8;
+                sir[2] = (p & 0x0000ff);
+                rbs = r1 - Math.abs(i);
+                rsum += sir[0] * rbs;
+                gsum += sir[1] * rbs;
+                bsum += sir[2] * rbs;
+                if (i > 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+            }
+            stackpointer = radius;
+            for (x = 0; x < w; x++) {
+                r[yi] = dv[rsum];
+                g[yi] = dv[gsum];
+                b[yi] = dv[bsum];
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+                stackstart = stackpointer - radius + div;
+                int[] sir = stack[stackstart % div];
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+                if (y == 0) vmin[x] = Math.min(x + radius + 1, wm);
+                p = pix[yw + vmin[x]];
+                sir[0] = (p & 0xff0000) >> 16;
+                sir[1] = (p & 0x00ff00) >> 8;
+                sir[2] = (p & 0x0000ff);
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[stackpointer];
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+                yi++;
+            }
+            yw += w;
+        }
+        for (x = 0; x < w; x++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            yp = -radius * w;
+            for (i = -radius; i <= radius; i++) {
+                yi = Math.max(0, yp) + x;
+                int[] sir = stack[i + radius];
+                sir[0] = r[yi];
+                sir[1] = g[yi];
+                sir[2] = b[yi];
+                rbs = r1 - Math.abs(i);
+                rsum += r[yi] * rbs;
+                gsum += g[yi] * rbs;
+                bsum += b[yi] * rbs;
+                if (i > 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+                if (i < hm) yp += w;
+            }
+            yi = x;
+            stackpointer = radius;
+            for (y = 0; y < h; y++) {
+                pix[yi] = (0xff000000) | (dv[rsum] << 16) | (dv[gsum] << 8) | dv[bsum];
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+                stackstart = stackpointer - radius + div;
+                int[] sir = stack[stackstart % div];
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+                if (x == 0) vmin[y] = Math.min(y + r1, hm) * w;
+                p = x + vmin[y];
+                sir[0] = r[p];
+                sir[1] = g[p];
+                sir[2] = b[p];
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[stackpointer];
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+                yi += w;
+            }
+        }
+        bmp.setPixels(pix, 0, w, 0, 0, w, h);
+        return bmp;
+    }
+
+    private static class CenterCropBlurredDrawable extends Drawable {
+        private final Bitmap bitmap;
+        private final int scrimColor;
+        private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        private final Rect srcRect = new Rect();
+
+        CenterCropBlurredDrawable(Bitmap bitmap, int scrimColor) {
+            this.bitmap = bitmap;
+            this.scrimColor = scrimColor;
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            Rect dst = getBounds();
+            if (dst.width() <= 0 || dst.height() <= 0 || bitmap == null || bitmap.isRecycled()) return;
+            float viewRatio = (float) dst.width() / (float) dst.height();
+            float bmpRatio = (float) bitmap.getWidth() / (float) Math.max(1, bitmap.getHeight());
+            int sx = 0, sy = 0, sw = bitmap.getWidth(), sh = bitmap.getHeight();
+            if (bmpRatio > viewRatio) {
+                sw = Math.max(1, Math.round(bitmap.getHeight() * viewRatio));
+                sx = (bitmap.getWidth() - sw) / 2;
+            } else if (bmpRatio < viewRatio) {
+                sh = Math.max(1, Math.round(bitmap.getWidth() / viewRatio));
+                sy = (bitmap.getHeight() - sh) / 2;
+            }
+            srcRect.set(sx, sy, sx + sw, sy + sh);
+            canvas.drawBitmap(bitmap, srcRect, dst, paint);
+            canvas.drawColor(scrimColor);
+        }
+
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
+        @Override public void setColorFilter(@Nullable ColorFilter colorFilter) { paint.setColorFilter(colorFilter); }
+        @Override public int getOpacity() { return PixelFormat.OPAQUE; }
+    }
+
+    public static ImageButton createBorderlessSvgButton(
+            Context context,
+            int iconRes,
+            int tintColor,
+            String contentDescription,
+            int sizeDp,
+            int padDp,
+            View.OnClickListener listener
+    ) {
+        ImageButton btn = new ImageButton(context);
+        btn.setImageResource(iconRes);
+        if (tintColor != 0) btn.setColorFilter(tintColor);
+        btn.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        btn.setContentDescription(contentDescription);
+        try {
+            TypedArray ta = context.obtainStyledAttributes(new int[]{android.R.attr.selectableItemBackgroundBorderless});
+            Drawable ripple = ta.getDrawable(0);
+            ta.recycle();
+            btn.setBackground(ripple != null ? ripple : null);
+        } catch (Throwable ignored) {
+            btn.setBackgroundColor(Color.TRANSPARENT);
+        }
+        int padPx = dpScaled(context, padDp);
+        btn.setPadding(padPx, padPx, padPx, padPx);
+        int szPx = dpScaled(context, sizeDp);
+        btn.setLayoutParams(new android.view.ViewGroup.LayoutParams(szPx, szPx));
+        btn.setOnClickListener(listener);
+        return btn;
+    }
+
     public static void applySwitchTint(Context context, Switch sw, int theme) {
         if (sw == null) return;
         int accent = getAccentColor(context, theme);
@@ -221,12 +598,18 @@ public class ThemeHelper {
     public static void applyWindowStatusBar(Activity activity, int theme) {
         Window window = activity.getWindow();
         if (window == null) return;
-        int accent = getAccentColor(activity, theme);
+        int topColor = getTopBarColor(activity, theme);
         boolean dark = isDarkSurface(activity, theme);
-        if (dark) {
-            window.setStatusBarColor(getTopBarColor(activity, theme));
-        } else {
-            window.setStatusBarColor(accent);
+        window.setStatusBarColor(topColor);
+        View decor = window.getDecorView();
+        if (decor != null) {
+            int vis = decor.getSystemUiVisibility();
+            if (!dark && ColorUtils.calculateLuminance(topColor) > 0.5) {
+                vis |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                vis &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            decor.setSystemUiVisibility(vis);
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             window.setNavigationBarColor(getBgColor(activity, theme));

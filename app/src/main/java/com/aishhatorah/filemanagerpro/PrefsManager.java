@@ -240,6 +240,22 @@ public class PrefsManager {
         prefs(context).edit().putBoolean(key, linear).apply();
     }
 
+    public static String getHomeWallpaperPath(Context context) {
+        return prefs(context).getString("home_wallpaper_path", "");
+    }
+
+    public static void setHomeWallpaperPath(Context context, String path) {
+        prefs(context).edit().putString("home_wallpaper_path", path == null ? "" : path).apply();
+    }
+
+    public static boolean isShowHomeCategoryLabels(Context context) {
+        return prefs(context).getBoolean("show_home_category_labels", true);
+    }
+
+    public static void setShowHomeCategoryLabels(Context context, boolean show) {
+        prefs(context).edit().putBoolean("show_home_category_labels", show).apply();
+    }
+
     // עורך טקסט וקוד (סעיפים 11, 23)
     public static boolean isTextWrapEnabled(Context context) {
         return prefs(context).getBoolean("text_editor_wrap", true);

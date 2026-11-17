@@ -7,21 +7,24 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import androidx.core.graphics.ColorUtils;
+
 import java.util.List;
 
 /**
- * סעיפים ז, 3, 6, 7, 8: התאמה אוטומטית מלאה לכל גודלי המסכים, תמיכה בגודל תצוגה מדורג,
- * ערכות נושא דינאמיות (כולל שחור עמוק / מערכת / צבע מותאם), ועיצוב מינימליסטי נקי.
+ * דיאלוגים צפים בסגנון זכוכית מודרני עם רקע מטושטש/מעומעם וכפתורים נקיים ללא מסגרות כבדות.
  */
 public class ThemedDialogHelper {
 
@@ -37,6 +40,19 @@ public class ThemedDialogHelper {
         Window window = dialog.getWindow();
         if (window != null) {
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams wlp = window.getAttributes();
+            if (wlp != null) {
+                wlp.dimAmount = 0.44f;
+                window.setAttributes(wlp);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                    window.setBackgroundBlurRadius(30);
+                } catch (Throwable ignored) {
+                }
+            }
             DisplayMetrics dm = activity.getResources().getDisplayMetrics();
             int maxWidth = dp(activity, 500);
             int targetWidth = Math.min(Math.round(dm.widthPixels * 0.94f), maxWidth);
@@ -49,12 +65,7 @@ public class ThemedDialogHelper {
     }
 
     public static GradientDrawable createDialogBackground(Context context, int theme) {
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(28f);
-        bg.setColor(ThemeHelper.getCardColor(context, theme));
-        int divider = ThemeHelper.getDividerColor(context, theme);
-        bg.setStroke(2, divider);
-        return bg;
+        return ThemeHelper.createFloatingGlassDialogBackground(context, theme);
     }
 
     public static Button createThemedButton(Activity activity, String text, int theme, boolean filledPrimary, boolean destructive) {
@@ -66,7 +77,7 @@ public class ThemedDialogHelper {
 
         int accent = ThemeHelper.getAccentColor(activity, theme);
         GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(activity, 10));
+        shape.setCornerRadius(dp(activity, 14));
 
         if (destructive) {
             int danger = Color.parseColor("#DC2626");
@@ -74,21 +85,20 @@ public class ThemedDialogHelper {
                 shape.setColor(danger);
                 btn.setTextColor(Color.WHITE);
             } else {
-                shape.setColor(Color.argb(24, 220, 38, 38));
-                shape.setStroke(Math.max(2, dp(activity, 1)), danger);
+                shape.setColor(Color.TRANSPARENT);
                 btn.setTextColor(ThemeHelper.isDarkSurface(activity, theme) ? Color.parseColor("#F87171") : danger);
             }
         } else if (filledPrimary) {
             shape.setColor(accent);
             btn.setTextColor(theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE);
         } else {
-            shape.setColor(Color.argb(ThemeHelper.isDarkSurface(activity, theme) ? 28 : 16,
-                    Color.red(accent), Color.green(accent), Color.blue(accent)));
-            shape.setStroke(Math.max(2, dp(activity, 1)), accent);
+            shape.setColor(ColorUtils.setAlphaComponent(accent, ThemeHelper.isDarkSurface(activity, theme) ? 26 : 16));
             btn.setTextColor(accent);
         }
 
         btn.setBackground(shape);
+        btn.setStateListAnimator(null);
+        btn.setElevation(0f);
         btn.setMinHeight(0);
         btn.setMinimumHeight(0);
         btn.setPadding(dp(activity, 14), dp(activity, 10), dp(activity, 14), dp(activity, 10));
@@ -163,7 +173,7 @@ public class ThemedDialogHelper {
             LinearLayout.LayoutParams negLp = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             if (positiveLabel != null && !positiveLabel.isEmpty()) {
-                negLp.setMarginEnd(dp(activity, 6));
+                negLp.setMarginEnd(dp(activity, 8));
             }
             btnNeg.setLayoutParams(negLp);
             btnNeg.setOnClickListener(v -> {
@@ -202,8 +212,7 @@ public class ThemedDialogHelper {
         int theme = PrefsManager.getThemeMode(activity);
         int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
         int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
-        int divider = ThemeHelper.getDividerColor(activity, theme);
-        int bgSubtle = ThemeHelper.getBgColor(activity, theme);
+        int accent = ThemeHelper.getAccentColor(activity, theme);
         boolean dark = ThemeHelper.isDarkSurface(activity, theme);
 
         ScrollView scroll = new ScrollView(activity);
@@ -253,14 +262,15 @@ public class ThemedDialogHelper {
                     : textPrimary);
 
             GradientDrawable itemShape = new GradientDrawable();
-            itemShape.setCornerRadius(dp(activity, 10));
-            itemShape.setColor(bgSubtle);
-            itemShape.setStroke(Math.max(1, dp(activity, 1)),
-                    isDanger ? Color.argb(90, 220, 38, 38) : divider);
+            itemShape.setCornerRadius(dp(activity, 12));
+            itemShape.setColor(isDanger
+                    ? Color.argb(dark ? 34 : 20, 220, 38, 38)
+                    : ColorUtils.setAlphaComponent(accent, dark ? 24 : 12));
             itemBtn.setBackground(itemShape);
+            itemBtn.setStateListAnimator(null);
             itemBtn.setMinHeight(0);
             itemBtn.setMinimumHeight(0);
-            itemBtn.setPadding(dp(activity, 13), dp(activity, 10), dp(activity, 13), dp(activity, 10));
+            itemBtn.setPadding(dp(activity, 14), dp(activity, 11), dp(activity, 14), dp(activity, 11));
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
