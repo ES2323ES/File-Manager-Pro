@@ -158,11 +158,51 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         });
         tools.addView(rangeTrimView);
 
+        TextView tvCompressHeader = new TextView(this);
+        tvCompressHeader.setText("הפחתת משקל ודחיסת איכות הווידאו:");
+        tvCompressHeader.setTextColor(textPrimary);
+        tvCompressHeader.setTextSize(13f);
+        tvCompressHeader.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCompressHeader.setPadding(0, 14, 0, 8);
+        tools.addView(tvCompressHeader);
+
+        HorizontalScrollView presetScroll = new HorizontalScrollView(this);
+        presetScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        VideoCompressor.QualityPreset[] presets = VideoCompressor.QualityPreset.values();
+        for (int i = 0; i < presets.length; i++) {
+            final VideoCompressor.QualityPreset preset = presets[i];
+            Button chip = ThemedDialogHelper.createThemedButton(this, preset.labelHe, theme, preset == selectedPreset, false);
+            chip.setTextSize(12f);
+            chip.setPadding(22, 14, 22, 14);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMarginEnd(10);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(v -> {
+                selectedPreset = preset;
+                refreshPresetChipStyles(theme);
+                updateSummaryLabel();
+            });
+            presetButtons[i] = chip;
+            presetRow.addView(chip);
+        }
+        presetScroll.addView(presetRow);
+        tools.addView(presetScroll);
+
+        tvCompressionEstimate = new TextView(this);
+        tvCompressionEstimate.setTextColor(accent);
+        tvCompressionEstimate.setTextSize(12.5f);
+        tvCompressionEstimate.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCompressionEstimate.setPadding(0, 8, 0, 4);
+        tools.addView(tvCompressionEstimate);
+
         HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
         chipsScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout chipsRow = new LinearLayout(this);
         chipsRow.setOrientation(LinearLayout.HORIZONTAL);
-        chipsRow.setPadding(0, 16, 0, 10);
+        chipsRow.setPadding(0, 12, 0, 8);
 
         addChip(chipsRow, "נגן / השהה מקטע", theme, () -> {
             if (previewPlayer == null) return;
@@ -205,7 +245,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         LinearLayout muteRow = new LinearLayout(this);
         muteRow.setOrientation(LinearLayout.HORIZONTAL);
         muteRow.setGravity(Gravity.CENTER_VERTICAL);
-        muteRow.setPadding(0, 10, 0, 10);
+        muteRow.setPadding(0, 8, 0, 8);
 
         TextView tvMute = new TextView(this);
         tvMute.setText("הסר ערוץ שמע (ייצוא מושתק)");
@@ -228,50 +268,10 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         muteRow.addView(swMute);
         tools.addView(muteRow);
 
-        TextView tvCompressHeader = new TextView(this);
-        tvCompressHeader.setText("הפחתת משקל ודחיסת איכות הווידאו:");
-        tvCompressHeader.setTextColor(textPrimary);
-        tvCompressHeader.setTextSize(13f);
-        tvCompressHeader.setTypeface(Typeface.DEFAULT_BOLD);
-        tvCompressHeader.setPadding(0, 10, 0, 8);
-        tools.addView(tvCompressHeader);
-
-        HorizontalScrollView presetScroll = new HorizontalScrollView(this);
-        presetScroll.setHorizontalScrollBarEnabled(false);
-        LinearLayout presetRow = new LinearLayout(this);
-        presetRow.setOrientation(LinearLayout.HORIZONTAL);
-        VideoCompressor.QualityPreset[] presets = VideoCompressor.QualityPreset.values();
-        for (int i = 0; i < presets.length; i++) {
-            final VideoCompressor.QualityPreset preset = presets[i];
-            Button chip = ThemedDialogHelper.createThemedButton(this, preset.labelHe, theme, preset == selectedPreset, false);
-            chip.setTextSize(12f);
-            chip.setPadding(22, 14, 22, 14);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMarginEnd(10);
-            chip.setLayoutParams(lp);
-            chip.setOnClickListener(v -> {
-                selectedPreset = preset;
-                refreshPresetChipStyles(theme);
-                updateSummaryLabel();
-            });
-            presetButtons[i] = chip;
-            presetRow.addView(chip);
-        }
-        presetScroll.addView(presetRow);
-        tools.addView(presetScroll);
-
-        tvCompressionEstimate = new TextView(this);
-        tvCompressionEstimate.setTextColor(accent);
-        tvCompressionEstimate.setTextSize(12.5f);
-        tvCompressionEstimate.setTypeface(Typeface.DEFAULT_BOLD);
-        tvCompressionEstimate.setPadding(0, 10, 0, 6);
-        tools.addView(tvCompressionEstimate);
-
         btnShareOutput = ThemedDialogHelper.createThemedButton(this, "שיתוף הקובץ הערוך", theme, false, false);
         LinearLayout.LayoutParams shLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        shLp.topMargin = 14;
+        shLp.topMargin = 12;
         btnShareOutput.setLayoutParams(shLp);
         btnShareOutput.setVisibility(View.GONE);
         btnShareOutput.setOnClickListener(v -> {
@@ -292,7 +292,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         toolsScroll.addView(tools);
         root.addView(toolsScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 700));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.35f));
 
         setContentView(root);
         setupTexturePreview();

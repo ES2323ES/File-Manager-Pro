@@ -24,6 +24,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -85,8 +86,12 @@ public class VideoCutterActivity extends AppCompatActivity {
 
     private TextView tvSelectedVideo;
     private TextView tvVideoRange;
+    private TextView tvCompressionEstimate;
     private RangeWaveformTrimView rangeTrimView;
+    private VideoCompressor.QualityPreset selectedPreset = VideoCompressor.QualityPreset.ORIGINAL;
+    private final Button[] presetButtons = new Button[4];
     private Button btnCutVideo;
+    private Button btnOpenProEditor;
     private Button btnShareCutVideo;
 
     @Override
@@ -231,12 +236,72 @@ public class VideoCutterActivity extends AppCompatActivity {
             tvVideoRange.setText(String.format(Locale.US, "התחלה: %02d:%02d  •  סיום: %02d:%02d",
                     (startMs / 1000) / 60, (startMs / 1000) % 60,
                     (endMs / 1000) / 60, (endMs / 1000) % 60));
+            updateCompressionEstimateLabel();
         });
         card.addView(rangeTrimView);
 
-        btnCutVideo = createButton("חתוך סרטון ושמור לתיקיית הסרטונים", Color.parseColor("#0284C7"), v -> executeVideoCut());
+        TextView tvCompressHeader = new TextView(this);
+        tvCompressHeader.setText("הפחתת משקל ודחיסת איכות הווידאו:");
+        tvCompressHeader.setTextColor(textPrimary);
+        tvCompressHeader.setTextSize(13.5f);
+        tvCompressHeader.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCompressHeader.setPadding(0, 20, 0, 8);
+        card.addView(tvCompressHeader);
+
+        HorizontalScrollView presetScroll = new HorizontalScrollView(this);
+        presetScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        VideoCompressor.QualityPreset[] presets = VideoCompressor.QualityPreset.values();
+        for (int i = 0; i < presets.length; i++) {
+            final VideoCompressor.QualityPreset preset = presets[i];
+            Button chip = ThemedDialogHelper.createThemedButton(this, preset.labelHe, theme, preset == selectedPreset, false);
+            chip.setTextSize(12f);
+            chip.setPadding(22, 14, 22, 14);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMarginEnd(10);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(v -> {
+                selectedPreset = preset;
+                refreshPresetChipStyles(theme);
+                updateCompressionEstimateLabel();
+            });
+            presetButtons[i] = chip;
+            presetRow.addView(chip);
+        }
+        presetScroll.addView(presetRow);
+        card.addView(presetScroll);
+
+        tvCompressionEstimate = new TextView(this);
+        tvCompressionEstimate.setText("בחר סרטון כדי לראות חיסכון משוער במשקל");
+        tvCompressionEstimate.setTextColor(accent);
+        tvCompressionEstimate.setTextSize(12.5f);
+        tvCompressionEstimate.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCompressionEstimate.setPadding(0, 8, 0, 4);
+        card.addView(tvCompressionEstimate);
+
+        btnCutVideo = createButton("חתוך וייצא סרטון לתיקיית הסרטונים", Color.parseColor("#0284C7"), v -> executeVideoCut());
         btnCutVideo.setEnabled(false);
         card.addView(btnCutVideo);
+
+        btnOpenProEditor = ThemedDialogHelper.createThemedButton(this, "עורך וידאו מלא (סיבוב / מהירות / GIF)", theme, false, false);
+        LinearLayout.LayoutParams proLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        proLp.topMargin = 14;
+        btnOpenProEditor.setLayoutParams(proLp);
+        btnOpenProEditor.setEnabled(false);
+        btnOpenProEditor.setAlpha(0.55f);
+        btnOpenProEditor.setOnClickListener(v -> {
+            if (resolvedSourceFile != null && resolvedSourceFile.exists()) {
+                Intent ei = new Intent(this, ProVideoEditorActivity.class);
+                ei.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, resolvedSourceFile.getAbsolutePath());
+                startActivity(ei);
+            } else {
+                Toast.makeText(this, "בחר סרטון מהמכשיר כדי לפתוח בעורך המלא", Toast.LENGTH_SHORT).show();
+            }
+        });
+        card.addView(btnOpenProEditor);
 
         btnShareCutVideo = createButton("שיתוף הסרטון שנחתך", Color.parseColor("#0D9488"), v -> {
             if (lastCutVideoFile != null && lastCutVideoFile.exists()) {
@@ -263,6 +328,38 @@ public class VideoCutterActivity extends AppCompatActivity {
                 loadSelectedVideo(selectedVideoUri, initialFile.getName(), initialFile);
             }
         }
+    }
+
+    private void refreshPresetChipStyles(int theme) {
+        VideoCompressor.QualityPreset[] presets = VideoCompressor.QualityPreset.values();
+        for (int i = 0; i < presets.length; i++) {
+            Button chip = presetButtons[i];
+            if (chip == null) continue;
+            Button styled = ThemedDialogHelper.createThemedButton(
+                    this, presets[i].labelHe, theme, presets[i] == selectedPreset, false);
+            chip.setBackground(styled.getBackground());
+            chip.setTextColor(styled.getTextColors());
+        }
+    }
+
+    private void updateCompressionEstimateLabel() {
+        if (tvCompressionEstimate == null) return;
+        if (resolvedSourceFile == null || !resolvedSourceFile.exists() || durationMs <= 0L) {
+            tvCompressionEstimate.setText("הגדרת איכות: " + selectedPreset.labelHe);
+            return;
+        }
+        long origBytes = resolvedSourceFile.length();
+        long clipMs = Math.max(500L, endMs - startMs);
+        long estBytes = VideoCompressor.estimateCompressedBytes(
+                clipMs, selectedPreset, origBytes, durationMs, false, 1.0f);
+        int savedPct = origBytes > 0
+                ? Math.max(0, (int) Math.round(((origBytes - estBytes) * 100.0) / origBytes))
+                : 0;
+        String origStr = StorageUtils.formatSize(origBytes);
+        String estStr = StorageUtils.formatSize(estBytes);
+        tvCompressionEstimate.setText(selectedPreset == VideoCompressor.QualityPreset.ORIGINAL
+                ? ("משקל מקורי: " + origStr + "  •  ייצוא מהיר ללא דחיסה (~" + estStr + ")")
+                : ("משקל מקורי: " + origStr + "  •  אחרי הפחתה: ~" + estStr + " (חיסכון " + savedPct + "%)"));
     }
 
     private Button createButton(String text, int bgColor, View.OnClickListener l) {
@@ -436,6 +533,12 @@ public class VideoCutterActivity extends AppCompatActivity {
             tvVideoRange.setText(String.format(Locale.US, "התחלה: 00:00  •  סיום: %02d:%02d",
                     (endMs / 1000) / 60, (endMs / 1000) % 60));
         }
+        boolean canProEdit = resolvedSourceFile != null && resolvedSourceFile.exists();
+        if (btnOpenProEditor != null) {
+            btnOpenProEditor.setEnabled(canProEdit);
+            btnOpenProEditor.setAlpha(canProEdit ? 1.0f : 0.55f);
+        }
+        updateCompressionEstimateLabel();
         tvSelectedVideo.setText("סרטון נבחר: " + resolvedDisplayName + (isMtsOrTsSource ? " (MTS/TS)" : ""));
     }
 
@@ -541,8 +644,12 @@ public class VideoCutterActivity extends AppCompatActivity {
 
     private void executeVideoCut() {
         if (selectedVideoUri == null || endMs <= startMs) return;
+        final VideoCompressor.QualityPreset preset = selectedPreset;
+        final boolean compress = preset != VideoCompressor.QualityPreset.ORIGINAL;
         btnCutVideo.setEnabled(false);
-        Toast.makeText(this, isMtsOrTsSource ? "חותך וממיר קטע MTS ל-MP4..." : "חותך סרטון...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this,
+                compress ? "חותך ודוחס להפחתת משקל..." : (isMtsOrTsSource ? "חותך וממיר קטע MTS ל-MP4..." : "חותך סרטון..."),
+                Toast.LENGTH_SHORT).show();
 
         final long startUs = startMs * 1000L;
         final long endUs = (durationMs > 0L && endMs >= durationMs - 250L) ? Long.MAX_VALUE : (endMs * 1000L);
@@ -550,7 +657,95 @@ public class VideoCutterActivity extends AppCompatActivity {
         executor.execute(() -> {
             File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
             if (!moviesDir.exists()) moviesDir.mkdirs();
-            File outFile = new File(moviesDir, "VideoCut_" + System.currentTimeMillis() + ".mp4");
+            String prefix = compress ? "VideoCompact_" : "VideoCut_";
+            File outFile = new File(moviesDir, prefix + System.currentTimeMillis() + ".mp4");
+
+            if (compress) {
+                File tempSrcCopy = null;
+                File tempRemuxMp4 = null;
+                try {
+                    File compressInput = resolvedSourceFile;
+                    long compStartUs = startUs;
+                    long compEndUs = endUs == Long.MAX_VALUE
+                            ? Math.max(startUs + 500_000L, durationMs * 1000L)
+                            : endUs;
+
+                    if (compressInput == null || !compressInput.isFile()) {
+                        tempSrcCopy = new File(getCacheDir(), "cut_comp_src_" + System.currentTimeMillis() + ".mp4");
+                        try (InputStream in = getContentResolver().openInputStream(selectedVideoUri);
+                             FileOutputStream out = new FileOutputStream(tempSrcCopy)) {
+                            if (in == null) throw new IllegalStateException("לא ניתן לקרוא את קובץ המקור");
+                            byte[] buf = new byte[65536];
+                            int r;
+                            while ((r = in.read(buf)) > 0) out.write(buf, 0, r);
+                        }
+                        compressInput = tempSrcCopy;
+                    }
+
+                    if (isMtsOrTsSource) {
+                        tempRemuxMp4 = new File(getCacheDir(), "mts_pre_comp_" + System.currentTimeMillis() + ".mp4");
+                        TsToMp4Remuxer.remuxToMp4(
+                                compressInput,
+                                tempRemuxMp4,
+                                startUs,
+                                endUs,
+                                pct -> runOnUiThread(() -> btnCutVideo.setText("מכין MTS לדחיסה... " + pct + "%"))
+                        );
+                        compressInput = tempRemuxMp4;
+                        compStartUs = 0L;
+                        compEndUs = Math.max(500_000L, endMs - startMs) * 1000L;
+                    }
+
+                    final File finalSrcRef = resolvedSourceFile;
+                    VideoCompressor.compressVideo(
+                            compressInput,
+                            outFile,
+                            compStartUs,
+                            compEndUs,
+                            0,
+                            false,
+                            1.0f,
+                            preset,
+                            pct -> runOnUiThread(() -> btnCutVideo.setText("דוחס ומפחית משקל... " + pct + "%"))
+                    );
+
+                    long origLen = finalSrcRef != null && finalSrcRef.exists() ? finalSrcRef.length() : 0L;
+                    long newLen = outFile.length();
+                    String sizeInfo = origLen > 0
+                            ? ("\nמשקל חדש: " + StorageUtils.formatSize(newLen) + " (במקום " + StorageUtils.formatSize(origLen) + ")")
+                            : ("\nמשקל חדש: " + StorageUtils.formatSize(newLen));
+
+                    runOnUiThread(() -> {
+                        btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
+                        lastCutVideoFile = outFile;
+                        btnCutVideo.setEnabled(true);
+                        btnShareCutVideo.setEnabled(true);
+                        btnShareCutVideo.setAlpha(1.0f);
+                        ThemedDialogHelper.showCustomDialog(
+                                this,
+                                "הסרטון נדחס ונשמר בהצלחה",
+                                "הסרטון נשמר בתיקיית הסרטונים:\n" + outFile.getName() + sizeInfo,
+                                null,
+                                "שיתוף הסרטון",
+                                () -> shareVideoFile(outFile),
+                                "סגור",
+                                null,
+                                false
+                        );
+                    });
+                } catch (Exception e) {
+                    if (outFile.exists()) outFile.delete();
+                    runOnUiThread(() -> {
+                        btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
+                        btnCutVideo.setEnabled(true);
+                        Toast.makeText(this, "שגיאה בהפחתת משקל הווידאו: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    });
+                } finally {
+                    if (tempRemuxMp4 != null && tempRemuxMp4.exists()) tempRemuxMp4.delete();
+                    if (tempSrcCopy != null && tempSrcCopy.exists()) tempSrcCopy.delete();
+                }
+                return;
+            }
 
             if (isMtsOrTsSource && resolvedSourceFile != null && resolvedSourceFile.isFile()) {
                 try {
@@ -562,7 +757,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                             pct -> runOnUiThread(() -> btnCutVideo.setText("חותך סרטון MTS... " + pct + "%"))
                     );
                     runOnUiThread(() -> {
-                        btnCutVideo.setText("חתוך סרטון ושמור לתיקיית הסרטונים");
+                        btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
                         lastCutVideoFile = outFile;
                         btnCutVideo.setEnabled(true);
                         btnShareCutVideo.setEnabled(true);
@@ -585,7 +780,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                 } catch (Exception e) {
                     if (outFile.exists()) outFile.delete();
                     runOnUiThread(() -> {
-                        btnCutVideo.setText("חתוך סרטון ושמור לתיקיית הסרטונים");
+                        btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
                         btnCutVideo.setEnabled(true);
                         Toast.makeText(this, "שגיאה בחיתוך MTS: " + e.getMessage(), Toast.LENGTH_LONG).show();
                     });

@@ -2081,6 +2081,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         final String lowerName = file.getName().toLowerCase(Locale.ROOT);
         final boolean isZip = MediaFormatHelper.isZipOrArchiveFile(lowerName);
         final boolean isAppPkg = !file.isDirectory() && MediaFormatHelper.isInstallableAppPackage(lowerName);
+        final boolean isVideo = !file.isDirectory() && MediaFormatHelper.isVideoFile(lowerName);
 
         List<String> actions = new ArrayList<>();
         if (isAppPkg) {
@@ -2089,6 +2090,9 @@ public class FileBrowserActivity extends AppCompatActivity {
         } else if (!file.isDirectory()) {
             actions.add(isZip ? "פתיחה וניהול תוכן ארכיון" : "פתיחה");
             actions.add("פתיחה באמצעות...");
+            if (isVideo) {
+                actions.add("עורך וידאו והפחתת משקל");
+            }
         }
         if (!isDirectoryMode() && file.getParentFile() != null) {
             actions.add("פתח בתיקייה המקורית");
@@ -2126,6 +2130,12 @@ public class FileBrowserActivity extends AppCompatActivity {
                         case "פתיחה באמצעות...":
                             FileOpenWithHelper.showOpenAsDialog(this, file);
                             break;
+                        case "עורך וידאו והפחתת משקל": {
+                            Intent vei = new Intent(this, ProVideoEditorActivity.class);
+                            vei.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, file.getAbsolutePath());
+                            startActivity(vei);
+                            break;
+                        }
                         case "פתח בתיקייה המקורית": {
                             Intent jump = new Intent(this, FileBrowserActivity.class);
                             jump.putExtra(EXTRA_MODE, MODE_INTERNAL);
