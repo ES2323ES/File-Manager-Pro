@@ -53,8 +53,8 @@ jobs:
           mkdir -p dist-artifacts
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           cp "$APK_PATH" dist-artifacts/File-Manager-Pro.apk
-          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.4.apk
-          zip -r dist-artifacts/File-Manager-Pro-v0.3.4-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
+          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.5.apk
+          zip -r dist-artifacts/File-Manager-Pro-v0.3.5-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
 
       - name: Determine Release Tag (V1..V13...)
         id: calc_tag
@@ -67,7 +67,7 @@ jobs:
           else
             LATEST_TITLE=$(gh release list --limit 1 --json name --jq '.[0].name' 2>/dev/null || true)
             LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.4"; then
+            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.5"; then
               NEXT_TAG="$LATEST_TAG"
             else
               HIGHEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^V[0-9]+$' | sed 's/V//' | sort -nr | head -n 1 || true)
@@ -87,15 +87,15 @@ jobs:
           TAG: ${{ steps.calc_tag.outputs.tag }}
         run: |
           cat <<EOF > release-notes.md
-          ### חידושים ושיפורים בגירסה 0.3.4 (${TAG})
-          • **התאמת צבעים מלאה וערכות נושא מורחבות:** 12 ערכות נושא ו-16 צבעים לבחירה בהגדרות; סינכרון אייקוני תיקיות, מתגים, כניסה מהירה ואייקונים רלוונטיים לצבע שנבחר (תוך שמירה על לוגו האפליקציה המקורי)
-          • **רשימות נקיות, פסי הפרדה ומניעת חפיפה:** הסרת המלבנים סביב תיקיות והחלפתם בפסים דקים בכל תצוגות הרשימה והרשת, תיקון חפיפה בגלילה מהירה, ואייקוני וידאו ותמונה לתיקיות מקובצות
-          • **שיפורי מדיה, מחוות, חיפוש, העתקה והתראות:** עידון גלי פס ההתקדמות ופס ישר בעצירה, החלקת הרצה אופקית והחלקת החלפת שירים אנכית, שורה חכמה מותאמת לעטיפה, חיפוש מכל חלק בשם כולל חיפושים אחרונים, חלון התקדמות להעתקה והעברה, ואייקון האפליקציה בכל ההתראות
+          ### חידושים ושיפורים בגירסה 0.3.5 (${TAG})
+          • **רקע מותאם אישית, ממשק זכוכית וערכות נושא מאוזנות:** שליטה מדויקת בטשטוש ובהירות תמונת הרקע, כותרות זכוכית שקופה בכל המסכים, טבלת 12 ערכות נושא שוות גודל ב-3 שורות, וכפתור איפוס מהיר לגודל הטקסט תוך שמירת מיקום הגלילה
+          • **נגנים, פסי התקדמות ומסכי צפייה משודרגים:** פסי התקדמות עבים עם סמן עומד מיושר, גלים הנעים לאחור בנגני הווידאו והשמע, מציג תמונות על כל המסך עם אייקונים נקיים מעל רקע שקוף למחצה, התאמת כותרת הווידאו לשורת הסטטוס, תצוגות הרצה נקיות ללא אימוג'ים, ומציג PDF מוגדל עם חיצי דפדוף
+          • **הפחתת משקל וידאו, חותכי מדיה ובחירה מרובה:** אפשרויות הפחתת משקל וידאו בעורך ובחותך הווידאו, בחירת מדיה מתוך קטגוריות האפליקציה בחותכי האודיו והווידאו, מציג ארכיונים עם בקשת סיסמה אוטומטית ואייקון שיתוף, אייקון דחיסה אחיד בסרגל הבחירה המרובה, מנתח מבנה APK, ושיפורי יציבות בארכיונים ובסורק הקבצים
 
           ### הורדה ישירה
           - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
-          - **קובץ התקנה מתויג גירסה 0.3.4:** \`File-Manager-Pro-v0.3.4.apk\`
-          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.4-Source.zip\`
+          - **קובץ התקנה מתויג גירסה 0.3.5:** \`File-Manager-Pro-v0.3.5.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.5-Source.zip\`
 
           ### פיתוח והנדסה
           - **פיתוח והנדסה:** @אש התורה — [במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [בעוגן פליי](https://ogenplay.com/users/724ec656-a4a7-4d31-8ece-fa9938851704)
@@ -104,21 +104,21 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
             gh release edit "$TAG" \
-              --title "${TAG} — File Manager Pro v0.3.4" \
+              --title "${TAG} — File Manager Pro v0.3.5" \
               --notes-file release-notes.md \
               --draft=false \
               --prerelease=false
             gh release upload "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.4.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.4-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.3.5.apk \
+              dist-artifacts/File-Manager-Pro-v0.3.5-Source.zip \
               --clobber
           else
             gh release create "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.4.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.4-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.3.5.apk \
+              dist-artifacts/File-Manager-Pro-v0.3.5-Source.zip \
               --target "$GITHUB_SHA" \
-              --title "${TAG} — File Manager Pro v0.3.4" \
+              --title "${TAG} — File Manager Pro v0.3.5" \
               --notes-file release-notes.md
           fi
