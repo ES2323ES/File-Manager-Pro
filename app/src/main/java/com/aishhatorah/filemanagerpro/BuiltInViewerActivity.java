@@ -180,15 +180,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private TextView tvVideoCenterScrubTime = null;
     private ImageView ivVideoPreviewThumb = null;
     private boolean isInPipMode = false;
-    private final Runnable mtsBufferingWatchdog = () -> {
-        if (isFinishing() || isDestroyed() || !isVideoMode || exoPlayer == null) return;
-        if (!exoRemuxFallbackAttempted && !isRemuxingMtsPlayback && !awaitingInitialVideoPlay
-                && targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
-                && exoPlayer.getPlaybackState() == Player.STATE_BUFFERING
-                && exoPlayer.getPlayWhenReady()) {
-            startRemuxedMtsPlayback(targetFile, activeVideoSyncRunnable);
-        }
-    };
     private final List<File> videoPlaylist = new ArrayList<>();
     private int currentVideoIdx = 0;
     private ExoPlayer exoPlayer;
@@ -234,6 +225,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean hasAppliedVideoMatrix = false;
     private boolean isLandscapeLocked = false;
     private Runnable activeVideoSyncRunnable = null;
+    private final Runnable mtsBufferingWatchdog = () -> {
+        if (isFinishing() || isDestroyed() || !isVideoMode || exoPlayer == null) return;
+        if (!exoRemuxFallbackAttempted && !isRemuxingMtsPlayback && !awaitingInitialVideoPlay
+                && targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                && exoPlayer.getPlaybackState() == Player.STATE_BUFFERING
+                && exoPlayer.getPlayWhenReady()) {
+            startRemuxedMtsPlayback(targetFile, activeVideoSyncRunnable);
+        }
+    };
 
     // סעיף 44: מצב האצה/החזרה זמנית בלחיצה ארוכה על קצוות הווידאו
     private boolean isHold2xForwardActive = false;
