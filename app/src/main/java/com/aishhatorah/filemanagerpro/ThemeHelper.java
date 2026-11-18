@@ -229,6 +229,28 @@ public class ThemeHelper {
         return theme != PrefsManager.THEME_LIGHT && theme != PrefsManager.THEME_SLATE;
     }
 
+    public static int getOnAccentTextColor(int accentColor) {
+        return ColorUtils.calculateLuminance(accentColor) > 0.48
+                ? Color.parseColor("#0F172A")
+                : Color.WHITE;
+    }
+
+    public static void overrideOpenTransition(Activity activity) {
+        if (activity == null) return;
+        try {
+            activity.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static void overrideCloseTransition(Activity activity) {
+        if (activity == null) return;
+        try {
+            activity.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static Drawable createCurvedTopBarBackground(Context context, int theme) {
         float d = context != null ? context.getResources().getDisplayMetrics().density : 2f;
         float r = 20f * d;
@@ -597,12 +619,16 @@ public class ThemeHelper {
     }
 
     public static void applySeekBarTint(SeekBar sb, int accent) {
+        applySeekBarTint(sb, accent, true);
+    }
+
+    public static void applySeekBarTint(SeekBar sb, int accent, boolean showTickDots) {
         if (sb == null) return;
         float d = sb.getResources().getDisplayMetrics().density;
-        int trackH = Math.max(4, Math.round(8f * d));
+        int trackH = Math.max(5, Math.round(9f * d));
         int trackBgColor = ColorUtils.setAlphaComponent(accent, 65);
 
-        sb.setProgressDrawable(new StickSeekTrackDrawable(trackBgColor, accent, trackH));
+        sb.setProgressDrawable(new StickSeekTrackDrawable(trackBgColor, accent, trackH, showTickDots, d));
         sb.setProgressTintList(null);
         sb.setProgressBackgroundTintList(null);
         sb.setSecondaryProgressTintList(null);
@@ -611,9 +637,9 @@ public class ThemeHelper {
         stickThumb.setShape(GradientDrawable.RECTANGLE);
         stickThumb.setCornerRadius(999f);
         stickThumb.setColor(accent);
-        int rawW = Math.max(6, Math.round(5.5f * d));
+        int rawW = Math.max(6, Math.round(5.8f * d));
         int thumbW = (rawW % 2 == 0) ? rawW : rawW + 1;
-        int thumbH = Math.max(18, Math.round(24f * d));
+        int thumbH = Math.max(18, Math.round(25f * d));
         stickThumb.setSize(thumbW, thumbH);
 
         sb.setThumb(stickThumb);
@@ -628,15 +654,25 @@ public class ThemeHelper {
     private static class StickSeekTrackDrawable extends Drawable {
         private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint dotTrackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint dotFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final int trackHeightPx;
+        private final boolean showTickDots;
+        private final float density;
 
-        StickSeekTrackDrawable(int trackColor, int fillColor, int trackHeightPx) {
+        StickSeekTrackDrawable(int trackColor, int fillColor, int trackHeightPx, boolean showTickDots, float density) {
             this.trackPaint.setColor(trackColor);
             this.trackPaint.setStyle(Paint.Style.FILL);
             this.fillPaint.setColor(fillColor);
             this.fillPaint.setStyle(Paint.Style.FILL);
+            this.dotTrackPaint.setColor(ColorUtils.setAlphaComponent(fillColor, 145));
+            this.dotTrackPaint.setStyle(Paint.Style.FILL);
+            this.dotFillPaint.setColor(ColorUtils.setAlphaComponent(getOnAccentTextColor(fillColor), 165));
+            this.dotFillPaint.setStyle(Paint.Style.FILL);
             this.trackHeightPx = Math.max(2, trackHeightPx);
+            this.showTickDots = showTickDots;
+            this.density = Math.max(1f, density);
         }
 
         @Override
@@ -657,17 +693,32 @@ public class ThemeHelper {
             canvas.drawRoundRect(rect, radius, radius, trackPaint);
 
             float fraction = Math.max(0f, Math.min(1f, getLevel() / 10000f));
+            float fillEnd = b.left + (b.width() * fraction);
             if (fraction > 0f) {
-                float fillEnd = b.left + (b.width() * fraction);
                 rect.set(b.left, cy - halfH, Math.max(b.left + trackHeightPx * 0.5f, fillEnd), cy + halfH);
                 canvas.drawRoundRect(rect, radius, radius, fillPaint);
             }
+
+            if (showTickDots && b.width() > 20f * density) {
+                float dotR = Math.max(1.3f, 1.2f * density);
+                for (int step = 1; step < 20; step++) {
+                    float dx = b.left + b.width() * (step / 20f);
+                    canvas.drawCircle(dx, cy, dotR, dx <= fillEnd ? dotFillPaint : dotTrackPaint);
+                }
+            }
         }
 
-        @Override public void setAlpha(int alpha) { trackPaint.setAlpha(alpha); fillPaint.setAlpha(alpha); }
+        @Override public void setAlpha(int alpha) {
+            trackPaint.setAlpha(alpha);
+            fillPaint.setAlpha(alpha);
+            dotTrackPaint.setAlpha(alpha);
+            dotFillPaint.setAlpha(alpha);
+        }
         @Override public void setColorFilter(@Nullable ColorFilter colorFilter) {
             trackPaint.setColorFilter(colorFilter);
             fillPaint.setColorFilter(colorFilter);
+            dotTrackPaint.setColorFilter(colorFilter);
+            dotFillPaint.setColorFilter(colorFilter);
         }
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }

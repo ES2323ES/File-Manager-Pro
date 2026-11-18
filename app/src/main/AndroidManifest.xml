@@ -79,6 +79,74 @@
         </activity>
 
         <activity
+            android:name=".ExternalFileRouterActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/x-tar" />
+                <data android:mimeType="application/gzip" />
+                <data android:mimeType="application/x-gzip" />
+                <data android:mimeType="application/x-compressed-tar" />
+                <data android:mimeType="application/java-archive" />
+                <data android:mimeType="application/vnd.android.package-archive" />
+                <data android:mimeType="application/x-apks" />
+                <data android:mimeType="application/x-apk" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="application/javascript" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.ms-excel" />
+                <data android:mimeType="application/vnd.ms-powerpoint" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
+                <data android:mimeType="application/vnd.oasis.opendocument.text" />
+                <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet" />
+                <data android:mimeType="application/vnd.oasis.opendocument.presentation" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.svg" />
+                <data android:pathPattern=".*\\.svgz" />
+                <data android:pathPattern=".*\\.pdf" />
+                <data android:pathPattern=".*\\.zip" />
+                <data android:pathPattern=".*\\.tar" />
+                <data android:pathPattern=".*\\.gz" />
+                <data android:pathPattern=".*\\.tgz" />
+                <data android:pathPattern=".*\\.apk" />
+                <data android:pathPattern=".*\\.apks" />
+                <data android:pathPattern=".*\\.apkm" />
+                <data android:pathPattern=".*\\.xapk" />
+                <data android:pathPattern=".*\\.apkx" />
+                <data android:pathPattern=".*\\.mts" />
+                <data android:pathPattern=".*\\.m2ts" />
+                <data android:pathPattern=".*\\.bak" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".FileBrowserActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="true"
@@ -122,43 +190,10 @@
         <activity
             android:name=".BuiltInViewerActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
-            android:windowSoftInputMode="adjustResize|stateHidden">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="file" />
-                <data android:scheme="content" />
-                <data android:mimeType="*/*" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="file" />
-                <data android:scheme="content" />
-                <data android:mimeType="video/*" />
-                <data android:mimeType="audio/*" />
-                <data android:mimeType="image/*" />
-                <data android:mimeType="text/*" />
-                <data android:mimeType="application/pdf" />
-                <data android:mimeType="application/zip" />
-                <data android:mimeType="application/x-tar" />
-                <data android:mimeType="application/gzip" />
-                <data android:mimeType="application/x-gzip" />
-                <data android:mimeType="application/vnd.android.package-archive" />
-                <data android:mimeType="application/msword" />
-                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
-                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
-                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
-                <data android:mimeType="application/vnd.oasis.opendocument.text" />
-                <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet" />
-                <data android:mimeType="application/vnd.oasis.opendocument.presentation" />
-            </intent-filter>
-        </activity>
+            android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".CodeEditorActivity"

@@ -157,43 +157,61 @@ public class ArchiveUtils {
         return compressFiles(list, targetZipFile, "zip", null);
     }
 
+    public interface ArchiveProgressCallback {
+        void onProgress(String itemName, int done, int total);
+    }
+
     public static File compressFiles(List<File> sources, File targetFile, String format, String password) throws IOException {
+        return compressFiles(sources, targetFile, format, password, null);
+    }
+
+    public static File compressFiles(List<File> sources, File targetFile, String format, String password, ArchiveProgressCallback cb) throws IOException {
         if (sources == null || sources.isEmpty()) {
             throw new IOException("לא נבחרו קבצים לדחיסה");
         }
+        int totalFiles = 0;
+        for (File s : sources) {
+            totalFiles += StorageUtils.countTotalFileEntries(s);
+        }
+        totalFiles = Math.max(1, totalFiles);
+        final int totalCount = totalFiles;
+        final int[] doneCount = new int[]{0};
+
         String fmt = format == null ? "zip" : format.toLowerCase(Locale.ROOT);
         if ("tar".equals(fmt)) {
-            compressToTar(sources, targetFile, false);
+            compressToTar(sources, targetFile, false, cb, doneCount, totalCount);
             return targetFile;
         }
         if ("tar.gz".equals(fmt) || "tgz".equals(fmt)) {
-            compressToTar(sources, targetFile, true);
+            compressToTar(sources, targetFile, true, cb, doneCount, totalCount);
             return targetFile;
         }
         if ("gz".equals(fmt)) {
             File single = sources.get(0);
             if (single.isDirectory()) {
-                compressToTar(sources, targetFile, true);
+                compressToTar(sources, targetFile, true, cb, doneCount, totalCount);
                 return targetFile;
             }
+            if (cb != null) cb.onProgress(single.getName(), 0, 1);
             try (FileInputStream fis = new FileInputStream(single);
                  GZIPOutputStream gos = new GZIPOutputStream(new BufferedOutputStream(new FileOutputStream(targetFile)))) {
                 copyStream(fis, gos);
             }
+            if (cb != null) cb.onProgress(single.getName(), 1, 1);
             return targetFile;
         }
 
         boolean hasPwd = password != null && !password.isEmpty();
         if (hasPwd) {
-            writePasswordProtectedZip(sources, targetFile, password);
+            writePasswordProtectedZip(sources, targetFile, password, cb, totalCount);
         } else {
             try (ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(targetFile)))) {
                 for (File src : sources) {
                     if (src == null || !src.exists()) continue;
                     if (src.isDirectory()) {
-                        zipDirectoryRecursive(src, src.getName(), zos);
+                        zipDirectoryRecursive(src, src.getName(), zos, cb, doneCount, totalCount);
                     } else {
-                        zipSingleFile(src, src.getName(), zos);
+                        zipSingleFile(src, src.getName(), zos, cb, doneCount, totalCount);
                     }
                 }
             }
@@ -201,7 +219,8 @@ public class ArchiveUtils {
         return targetFile;
     }
 
-    private static void zipDirectoryRecursive(File folder, String parentEntryPath, ZipOutputStream zos) throws IOException {
+    private static void zipDirectoryRecursive(File folder, String parentEntryPath, ZipOutputStream zos,
+                                              ArchiveProgressCallback cb, int[] doneCount, int totalCount) throws IOException {
         File[] children = folder.listFiles();
         if (children == null || children.length == 0) {
             zos.putNextEntry(new ZipEntry(parentEntryPath + "/"));
@@ -211,20 +230,28 @@ public class ArchiveUtils {
         for (File child : children) {
             String entryName = parentEntryPath + "/" + child.getName();
             if (child.isDirectory()) {
-                zipDirectoryRecursive(child, entryName, zos);
+                zipDirectoryRecursive(child, entryName, zos, cb, doneCount, totalCount);
             } else {
-                zipSingleFile(child, entryName, zos);
+                zipSingleFile(child, entryName, zos, cb, doneCount, totalCount);
             }
         }
     }
 
-    private static void zipSingleFile(File file, String entryName, ZipOutputStream zos) throws IOException {
+    private static void zipSingleFile(File file, String entryName, ZipOutputStream zos,
+                                      ArchiveProgressCallback cb, int[] doneCount, int totalCount) throws IOException {
+        if (cb != null) {
+            cb.onProgress(file.getName(), doneCount[0], totalCount);
+        }
         zos.putNextEntry(new ZipEntry(entryName));
         try (FileInputStream fis = new FileInputStream(file);
              BufferedInputStream bis = new BufferedInputStream(fis)) {
             copyStream(bis, zos);
         }
         zos.closeEntry();
+        doneCount[0]++;
+        if (cb != null) {
+            cb.onProgress(file.getName(), doneCount[0], totalCount);
+        }
     }
 
     public static List<String> listZipEntries(File archiveFile) throws IOException {
@@ -282,20 +309,38 @@ public class ArchiveUtils {
     }
 
     public static int extractArchive(File archiveFile, File destinationDir, String password) throws IOException {
+        return extractArchive(archiveFile, destinationDir, password, null);
+    }
+
+    public static int extractArchive(File archiveFile, File destinationDir, String password, ArchiveProgressCallback cb) throws IOException {
         if (!destinationDir.exists() && !destinationDir.mkdirs()) {
             throw new IOException("לא ניתן ליצור תיקיית יעד לחילוץ");
         }
         String canonicalDestDir = destinationDir.getCanonicalPath();
         String name = archiveFile.getName().toLowerCase(Locale.ROOT);
 
+        int estTotal = 1;
+        if (cb != null) {
+            try {
+                List<ArchiveEntryInfo> preview = listArchiveEntries(archiveFile);
+                int fileEntries = 0;
+                for (ArchiveEntryInfo info : preview) {
+                    if (!info.directory) fileEntries++;
+                }
+                estTotal = Math.max(1, fileEntries);
+            } catch (Throwable ignored) {
+                estTotal = 1;
+            }
+        }
+
         if (MediaFormatHelper.isTarGzArchive(name)) {
             try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)))) {
-                return extractTarStream(is, destinationDir, canonicalDestDir);
+                return extractTarStream(is, destinationDir, canonicalDestDir, cb, estTotal);
             }
         }
         if (MediaFormatHelper.isTarArchive(name)) {
             try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile))) {
-                return extractTarStream(is, destinationDir, canonicalDestDir);
+                return extractTarStream(is, destinationDir, canonicalDestDir, cb, estTotal);
             }
         }
         if (MediaFormatHelper.isGzArchive(name)) {
@@ -306,16 +351,18 @@ public class ArchiveUtils {
             if (!isSafeEntryName(outName)) {
                 throw new SecurityException("שם קובץ לא חוקי בארכיון GZ");
             }
+            if (cb != null) cb.onProgress(outName, 0, 1);
             File outFile = safeResolve(destinationDir, canonicalDestDir, outName);
             try (GZIPInputStream gis = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)));
                  FileOutputStream fos = new FileOutputStream(outFile)) {
                 copyStream(gis, fos);
             }
+            if (cb != null) cb.onProgress(outName, 1, 1);
             return 1;
         }
 
         if ((password != null && !password.isEmpty()) || archiveRequiresPassword(archiveFile)) {
-            return extractRawZipWithOptionalPassword(archiveFile, destinationDir, canonicalDestDir, password);
+            return extractRawZipWithOptionalPassword(archiveFile, destinationDir, canonicalDestDir, password, cb, estTotal);
         }
 
         int extractedCount = 0;
@@ -326,12 +373,14 @@ public class ArchiveUtils {
                 if (entry.isDirectory()) {
                     outFile.mkdirs();
                 } else {
+                    if (cb != null) cb.onProgress(outFile.getName(), extractedCount, estTotal);
                     File parent = outFile.getParentFile();
                     if (parent != null && !parent.exists()) parent.mkdirs();
                     try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile))) {
                         copyStream(zis, bos);
                     }
                     extractedCount++;
+                    if (cb != null) cb.onProgress(outFile.getName(), extractedCount, estTotal);
                 }
                 zis.closeEntry();
             }
@@ -508,7 +557,8 @@ public class ArchiveUtils {
         }
     }
 
-    private static int extractRawZipWithOptionalPassword(File zipFile, File destDir, String canonicalDestDir, String password) throws IOException {
+    private static int extractRawZipWithOptionalPassword(File zipFile, File destDir, String canonicalDestDir,
+                                                         String password, ArchiveProgressCallback cb, int totalCount) throws IOException {
         int extracted = 0;
         try (RandomAccessFile raf = new RandomAccessFile(zipFile, "r")) {
             byte[] cdBytes = readCentralDirectoryBytes(raf);
@@ -535,12 +585,14 @@ public class ArchiveUtils {
                     outFile.mkdirs();
                     continue;
                 }
+                if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(1, totalCount));
                 File parent = outFile.getParentFile();
                 if (parent != null && !parent.exists()) parent.mkdirs();
                 try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile))) {
                     decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, bos, -1L);
                 }
                 extracted++;
+                if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(1, totalCount));
             }
         }
         return extracted;
@@ -704,11 +756,18 @@ public class ArchiveUtils {
         }
     }
 
-    private static void writePasswordProtectedZip(List<File> sources, File targetZip, String password) throws IOException {
+    private static void writePasswordProtectedZip(List<File> sources, File targetZip, String password,
+                                                  ArchiveProgressCallback cb, int totalHint) throws IOException {
         List<FileItem> items = new ArrayList<>();
         for (File f : sources) {
             collectItemsRecursive(f, "", items);
         }
+        int totalFiles = 0;
+        for (FileItem fi : items) {
+            if (!fi.isDir) totalFiles++;
+        }
+        totalFiles = Math.max(1, Math.max(totalHint, totalFiles));
+        int doneFiles = 0;
         byte[] pwdBytes = password.getBytes(StandardCharsets.UTF_8);
         SecureRandom rng = new SecureRandom();
         ByteArrayOutputStream centralDir = new ByteArrayOutputStream();
@@ -717,6 +776,9 @@ public class ArchiveUtils {
 
         try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(targetZip))) {
             for (FileItem item : items) {
+                if (!item.isDir && cb != null && item.file != null) {
+                    cb.onProgress(item.file.getName(), doneFiles, totalFiles);
+                }
                 byte[] nameBytes = item.entryName.getBytes(StandardCharsets.UTF_8);
                 byte[] rawData = item.isDir ? new byte[0] : readAllBytes(new FileInputStream(item.file));
                 CRC32 crc32 = new CRC32();
@@ -795,6 +857,12 @@ public class ArchiveUtils {
                 centralDir.write(cd.array());
                 centralDir.write(nameBytes);
                 entryCount++;
+                if (!item.isDir) {
+                    doneFiles++;
+                    if (cb != null && item.file != null) {
+                        cb.onProgress(item.file.getName(), doneFiles, totalFiles);
+                    }
+                }
             }
 
             byte[] cdBytes = centralDir.toByteArray();
@@ -891,27 +959,30 @@ public class ArchiveUtils {
 
     // ==================== USTAR TAR / TAR.GZ Engine ====================
 
-    private static void compressToTar(List<File> sources, File outFile, boolean gzip) throws IOException {
+    private static void compressToTar(List<File> sources, File outFile, boolean gzip,
+                                      ArchiveProgressCallback cb, int[] doneCount, int totalCount) throws IOException {
         try (OutputStream rawOut = new BufferedOutputStream(new FileOutputStream(outFile));
              OutputStream tarOut = gzip ? new GZIPOutputStream(rawOut) : rawOut) {
             for (File src : sources) {
                 if (src != null && src.exists()) {
-                    writeTarRecursive(src, src.getName(), tarOut);
+                    writeTarRecursive(src, src.getName(), tarOut, cb, doneCount, totalCount);
                 }
             }
             tarOut.write(new byte[1024]); // 2 empty 512B blocks EOF
         }
     }
 
-    private static void writeTarRecursive(File file, String entryPath, OutputStream out) throws IOException {
+    private static void writeTarRecursive(File file, String entryPath, OutputStream out,
+                                          ArchiveProgressCallback cb, int[] doneCount, int totalCount) throws IOException {
         if (file.isDirectory()) {
             String dirEntry = entryPath.endsWith("/") ? entryPath : entryPath + "/";
             out.write(buildTarHeader(dirEntry, 0L, true, file.lastModified() / 1000L));
             File[] kids = file.listFiles();
             if (kids != null) {
-                for (File k : kids) writeTarRecursive(k, entryPath + "/" + k.getName(), out);
+                for (File k : kids) writeTarRecursive(k, entryPath + "/" + k.getName(), out, cb, doneCount, totalCount);
             }
         } else {
+            if (cb != null) cb.onProgress(file.getName(), doneCount[0], totalCount);
             long len = file.length();
             out.write(buildTarHeader(entryPath, len, false, file.lastModified() / 1000L));
             try (FileInputStream fis = new FileInputStream(file)) {
@@ -921,6 +992,8 @@ public class ArchiveUtils {
             if (mod > 0) {
                 out.write(new byte[512 - mod]);
             }
+            doneCount[0]++;
+            if (cb != null) cb.onProgress(file.getName(), doneCount[0], totalCount);
         }
     }
 
@@ -973,7 +1046,8 @@ public class ArchiveUtils {
         return entries;
     }
 
-    private static int extractTarStream(InputStream is, File destDir, String canonicalDestDir) throws IOException {
+    private static int extractTarStream(InputStream is, File destDir, String canonicalDestDir,
+                                        ArchiveProgressCallback cb, int totalCount) throws IOException {
         int count = 0;
         byte[] hdr = new byte[512];
         while (readExact(is, hdr, 512) == 512) {
@@ -987,6 +1061,7 @@ public class ArchiveUtils {
             if (isDir) {
                 outFile.mkdirs();
             } else {
+                if (cb != null) cb.onProgress(outFile.getName(), count, Math.max(1, totalCount));
                 File parent = outFile.getParentFile();
                 if (parent != null && !parent.exists()) parent.mkdirs();
                 try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile))) {
@@ -995,6 +1070,7 @@ public class ArchiveUtils {
                 int mod = (int) (size % 512L);
                 if (mod > 0) skipFully(is, 512L - mod);
                 count++;
+                if (cb != null) cb.onProgress(outFile.getName(), count, Math.max(1, totalCount));
             }
         }
         return count;

@@ -55,7 +55,7 @@ public class AudioPlayerManager {
     private int currentIndex = -1;
     private Bitmap currentArtwork;
     private float playbackSpeed = 1.0f;
-    private int repeatMode = REPEAT_OFF;
+    private int repeatMode = REPEAT_FOLDER;
     private boolean prepared = false;
 
     private long sleepEndEpochMs = 0L;

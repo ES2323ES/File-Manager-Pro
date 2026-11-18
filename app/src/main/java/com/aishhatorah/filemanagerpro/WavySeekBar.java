@@ -29,6 +29,7 @@ public class WavySeekBar extends View {
     private final Paint wavePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tickDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path wavePath = new Path();
     private final RectF thumbRect = new RectF();
 
@@ -50,6 +51,7 @@ public class WavySeekBar extends View {
     private float wavePhase = 0f;
     private long lastWaveTickMs = 0L;
     private boolean thumbOnlyTouch = false;
+    private boolean showTickDots = true;
 
     private OnSeekBarChangeListener listener;
 
@@ -70,6 +72,9 @@ public class WavySeekBar extends View {
 
         thumbPaint.setStyle(Paint.Style.FILL);
         thumbPaint.setColor(Color.parseColor("#3B82F6"));
+
+        tickDotPaint.setStyle(Paint.Style.FILL);
+        tickDotPaint.setColor(Color.argb(140, 255, 255, 255));
     }
 
     private float dp(float val) {
@@ -119,6 +124,16 @@ public class WavySeekBar extends View {
         wavePaint.setColor(waveColor);
         trackPaint.setColor(trackColor);
         thumbPaint.setColor(thumbColor);
+        tickDotPaint.setColor(androidx.core.graphics.ColorUtils.setAlphaComponent(waveColor, 155));
+        invalidate();
+    }
+
+    public void setThumbOnlyTouch(boolean thumbOnly) {
+        this.thumbOnlyTouch = thumbOnly;
+    }
+
+    public void setShowTickDots(boolean showTickDots) {
+        this.showTickDots = showTickDots;
         invalidate();
     }
 
@@ -242,15 +257,22 @@ public class WavySeekBar extends View {
             }
         }
 
+        if (showTickDots && endX > startX) {
+            float dotR = Math.max(1.4f, dp(1.25f));
+            float span = endX - startX;
+            for (int step = 1; step < 20; step++) {
+                float dx = startX + span * (step / 20f);
+                if (dx > thumbX + dp(4f) && dx < endX - dp(2f)) {
+                    canvas.drawCircle(dx, centerY, dotR, tickDotPaint);
+                }
+            }
+        }
+
         // נקודת הראש בצורת מקל עומד עם קצוות מעוגלים
         float hw = userDragging ? thumbActiveHalfW : thumbHalfW;
         float hh = userDragging ? thumbActiveHalfH : thumbHalfH;
         thumbRect.set(thumbX - hw, centerY - hh, thumbX + hw, centerY + hh);
         canvas.drawRoundRect(thumbRect, hw, hw, thumbPaint);
-    }
-
-    public void setThumbOnlyTouch(boolean thumbOnly) {
-        this.thumbOnlyTouch = thumbOnly;
     }
 
     @Override

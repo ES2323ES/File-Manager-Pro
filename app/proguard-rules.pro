@@ -1,4 +1,4 @@
-# File Manager Pro R8 / ProGuard Configuration (v0.3.6)
+# File Manager Pro R8 / ProGuard Configuration (v0.3.7)
 -keep class com.aishhatorah.filemanagerpro.** { *; }
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*

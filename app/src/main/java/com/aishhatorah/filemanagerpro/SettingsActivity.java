@@ -150,7 +150,10 @@ public class SettingsActivity extends AppCompatActivity {
         ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
         ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
-                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> finish());
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> {
+                    finish();
+                    ThemeHelper.overrideCloseTransition(this);
+                });
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
@@ -279,7 +282,7 @@ public class SettingsActivity extends AppCompatActivity {
             themeCard.addView(swatchRow, srLp);
         }
 
-        // סקאלת גודל תצוגה
+        // סקאלת גודל תצוגה (ללא renderSettingsUi כדי למנוע קפיצת גלילה)
         float currentScale = PrefsManager.getUiScale(this);
         LinearLayout scaleHeaderRow = new LinearLayout(this);
         scaleHeaderRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -293,24 +296,28 @@ public class SettingsActivity extends AppCompatActivity {
         tvScaleLabel.setTypeface(Typeface.DEFAULT_BOLD);
         scaleHeaderRow.addView(tvScaleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        final SeekBar sbScale = new SeekBar(this);
         boolean isScaleDefault = Math.abs(currentScale - 1.0f) < 0.015f;
-        ImageButton btnResetScale = ThemeHelper.createBorderlessSvgButton(
+        final ImageButton btnResetScale = ThemeHelper.createBorderlessSvgButton(
                 this,
                 R.drawable.ic_reset,
                 isScaleDefault ? textSecondary : accent,
                 "איפוס לגודל ברירת המחדל",
                 32,
                 6,
-                v -> {
-                    PrefsManager.setUiScale(this, 1.0f);
-                    Toast.makeText(this, "גודל הטקסט והתצוגה אופס לברירת המחדל (100%)", Toast.LENGTH_SHORT).show();
-                    renderSettingsUi();
-                });
+                null);
         btnResetScale.setAlpha(isScaleDefault ? 0.5f : 1.0f);
+        btnResetScale.setOnClickListener(v -> {
+            PrefsManager.setUiScale(this, 1.0f);
+            sbScale.setProgress(15);
+            tvScaleLabel.setText("גודל תצוגה וטקסט באפליקציה: 100%");
+            btnResetScale.setColorFilter(textSecondary);
+            btnResetScale.setAlpha(0.5f);
+            Toast.makeText(this, "גודל הטקסט והתצוגה אופס לברירת המחדל (100%)", Toast.LENGTH_SHORT).show();
+        });
         scaleHeaderRow.addView(btnResetScale);
         themeCard.addView(scaleHeaderRow);
 
-        SeekBar sbScale = new SeekBar(this);
         ThemeHelper.applySeekBarTint(sbScale, accent);
         sbScale.setMax(40); // 0.85 .. 1.25
         sbScale.setProgress(Math.max(0, Math.min(40, Math.round((currentScale - 0.85f) * 100f))));
@@ -319,13 +326,18 @@ public class SettingsActivity extends AppCompatActivity {
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 float val = 0.85f + (progress / 100f);
                 tvScaleLabel.setText(String.format(Locale.US, "גודל תצוגה וטקסט באפליקציה: %.0f%%", val * 100f));
+                boolean defNow = Math.abs(val - 1.0f) < 0.015f;
+                btnResetScale.setColorFilter(defNow ? textSecondary : accent);
+                btnResetScale.setAlpha(defNow ? 0.5f : 1.0f);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
                 float val = 0.85f + (seekBar.getProgress() / 100f);
                 PrefsManager.setUiScale(SettingsActivity.this, val);
-                renderSettingsUi();
+                Toast.makeText(SettingsActivity.this,
+                        String.format(Locale.US, "גודל תצוגה נשמר: %.0f%%", val * 100f),
+                        Toast.LENGTH_SHORT).show();
             }
         });
         themeCard.addView(sbScale);
@@ -408,17 +420,17 @@ public class SettingsActivity extends AppCompatActivity {
         tvBlurLabel.setTypeface(Typeface.DEFAULT_BOLD);
         blurHeaderRow.addView(tvBlurLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        final boolean[] isBlurDefault = {curBlur == PrefsManager.DEFAULT_WALLPAPER_BLUR};
+        boolean isBlurDefault = (curBlur == PrefsManager.DEFAULT_WALLPAPER_BLUR);
         final SeekBar sbBlur = new SeekBar(this);
         final ImageButton btnResetBlur = ThemeHelper.createBorderlessSvgButton(
                 this,
                 R.drawable.ic_reset,
-                isBlurDefault[0] ? textSecondary : accent,
+                isBlurDefault ? textSecondary : accent,
                 "איפוס טשטוש לברירת המחדל",
                 32,
                 6,
                 null);
-        btnResetBlur.setAlpha(isBlurDefault[0] ? 0.5f : 1.0f);
+        btnResetBlur.setAlpha(isBlurDefault ? 0.5f : 1.0f);
         btnResetBlur.setOnClickListener(v -> {
             PrefsManager.setWallpaperBlurRadius(this, PrefsManager.DEFAULT_WALLPAPER_BLUR);
             ThemeHelper.invalidateWallpaperCache();
@@ -492,9 +504,6 @@ public class SettingsActivity extends AppCompatActivity {
         }));
         displayCard.addView(viewModeRow);
 
-        displayCard.addView(createSubtleButton("תצוגת רשת / רשימה לכל קטגוריה בנפרד", accent, dark,
-                v -> showPerCategoryLayoutDialog()));
-
         addSwitchRow(displayCard,
                 "הצגת קבצים מוסתרים",
                 "הצג קבצים ותיקיות שמתחילים בנקודה (.)",
@@ -516,31 +525,54 @@ public class SettingsActivity extends AppCompatActivity {
                 textPrimary, textSecondary,
                 checked -> PrefsManager.setShowFolderSizes(this, checked));
 
-        addSwitchRow(displayCard,
-                "סדר מיון עולה (א-ת / מהקטן לגדול)",
-                "כבה למיון בסדר יורד (הגדול או החדש ביותר ראשון)",
-                PrefsManager.isSortAscending(this),
-                textPrimary, textSecondary,
-                checked -> PrefsManager.setSortAscending(this, checked));
-
-        displayCard.addView(createSubtleButton("שינוי שדה מיון ברירת מחדל", accent, dark,
+        displayCard.addView(createSubtleButton("שינוי מיון ברירת מחדל (" + friendlySortSummary() + ")", accent, dark,
                 v -> showSortModeDialog()));
         body.addView(displayCard);
 
-        // 5. אפליקציות ברירת מחדל
+        // 5. אפליקציות ברירת מחדל (רשימה מוטמעת + X לכל פריט)
         addSectionTitle(body, "אפליקציות ברירת מחדל לסוגי קבצים", accent);
         LinearLayout defaultsCard = createSectionCard(theme);
         Map<String, String> savedDefaults = PrefsManager.getAllDefaultOpenActions(this);
-        TextView tvDefInfo = new TextView(this);
-        tvDefInfo.setText(savedDefaults.isEmpty()
-                ? "לא הוגדרו סיומות קבצים קבועות. ניתן לקבוע ברירת מחדל מתפריט 'פתיחה באמצעות'."
-                : "מוגדרות " + savedDefaults.size() + " סיומות קבצים עם פתיחה קבועה.");
-        tvDefInfo.setTextColor(textSecondary);
-        tvDefInfo.setTextSize(ThemeHelper.spScaled(this, 12.5f));
-        defaultsCard.addView(tvDefInfo);
-        if (!savedDefaults.isEmpty()) {
-            defaultsCard.addView(createSubtleButton("ניהול ואיפוס ברירות מחדל לסיומות", accent, dark,
-                    v -> showDefaultOpenManagerDialog(savedDefaults)));
+        if (savedDefaults.isEmpty()) {
+            TextView tvDefInfo = new TextView(this);
+            tvDefInfo.setText("לא הוגדרו סיומות קבצים קבועות.");
+            tvDefInfo.setTextColor(textSecondary);
+            tvDefInfo.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+            defaultsCard.addView(tvDefInfo);
+        } else {
+            List<String> sortedExts = new ArrayList<>(savedDefaults.keySet());
+            java.util.Collections.sort(sortedExts);
+            for (int idx = 0; idx < sortedExts.size(); idx++) {
+                final String ext = sortedExts.get(idx);
+                final String actName = friendlyActionName(savedDefaults.get(ext));
+                LinearLayout defRow = new LinearLayout(this);
+                defRow.setOrientation(LinearLayout.HORIZONTAL);
+                defRow.setGravity(Gravity.CENTER_VERTICAL);
+                defRow.setPadding(0, dp(6), 0, dp(6));
+
+                TextView tvItem = new TextView(this);
+                tvItem.setText("\u2066" + ext + "\u2069  •  " + actName);
+                tvItem.setTextColor(textPrimary);
+                tvItem.setTextSize(ThemeHelper.spScaled(this, 13f));
+                tvItem.setTypeface(Typeface.DEFAULT_BOLD);
+                defRow.addView(tvItem, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+                ImageButton btnRemoveDef = ThemeHelper.createBorderlessSvgButton(
+                        this, R.drawable.ic_close, dangerOrMutedTint(dark), "הסר", 30, 6, v -> {
+                            PrefsManager.setDefaultOpenAction(this, ext, null);
+                            Toast.makeText(this, "הוסרה ברירת המחדל לסיומת " + ext, Toast.LENGTH_SHORT).show();
+                            renderSettingsUi();
+                        });
+                defRow.addView(btnRemoveDef);
+                defaultsCard.addView(defRow);
+            }
+            if (sortedExts.size() > 1) {
+                defaultsCard.addView(createSubtleButton("איפוס כל ברירות המחדל", accent, dark, v -> {
+                    PrefsManager.clearAllDefaultOpenActions(this);
+                    Toast.makeText(this, "כל ברירות המחדל אופסו", Toast.LENGTH_SHORT).show();
+                    renderSettingsUi();
+                }));
+            }
         }
         body.addView(defaultsCard);
 
@@ -549,7 +581,10 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout analyzerCard = createSectionCard(theme);
 
         analyzerCard.addView(createSubtleButton("ניתוח — איתור הקבצים הכבדים ביותר", accent, dark,
-                v -> startActivity(new Intent(this, StorageAnalyzerActivity.class))));
+                v -> {
+                    startActivity(new Intent(this, StorageAnalyzerActivity.class));
+                    ThemeHelper.overrideOpenTransition(this);
+                }));
 
         addSwitchRow(analyzerCard,
                 "התרעה אוטומטית ב-96% תפוסה",
@@ -582,6 +617,11 @@ public class SettingsActivity extends AppCompatActivity {
                 "ריקון סל המיחזור (" + trashCount + " פריטים • " + trashSize + ")",
                 dangerColor, dark,
                 v -> confirmEmptyRecycleBinTwoStep()));
+
+        analyzerCard.addView(createSubtleButton(
+                "ניקוי מטמון קבצים זמניים",
+                textPrimary, dark,
+                v -> clearTemporaryCaches()));
         body.addView(analyzerCard);
 
         // 7. הסתרת סעיף הרשאות כאשר ההרשאות מאושרות ופעילות
@@ -653,30 +693,53 @@ public class SettingsActivity extends AppCompatActivity {
         }
     }
 
-    private void showDefaultOpenManagerDialog(Map<String, String> savedDefaults) {
-        final List<String> exts = new ArrayList<>(savedDefaults.keySet());
-        List<String> rows = new ArrayList<>();
-        for (String ext : exts) {
-            rows.add(ext + "  ->  " + friendlyActionName(savedDefaults.get(ext)));
+    private int dangerOrMutedTint(boolean dark) {
+        return dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626");
+    }
+
+    private String friendlySortSummary() {
+        int mode = PrefsManager.getSortMode(this);
+        String name;
+        if (mode == PrefsManager.SORT_SIZE) name = "משקל";
+        else if (mode == PrefsManager.SORT_DATE) name = "שינוי";
+        else if (mode == PrefsManager.SORT_TYPE) name = "סוג";
+        else if (mode == PrefsManager.SORT_CREATED) name = "יצירה";
+        else name = "שם";
+        return name + " • " + (PrefsManager.isSortAscending(this) ? "עולה" : "יורד");
+    }
+
+    private void clearTemporaryCaches() {
+        FileThumbnailLoader.clearMemoryCache();
+        ThemeHelper.invalidateWallpaperCache();
+        FileScanCache.invalidate();
+        new Thread(() -> {
+            long freed = deleteDirContentsSafe(getCacheDir()) + deleteDirContentsSafe(getExternalCacheDir());
+            runOnUiThread(() -> Toast.makeText(
+                    this,
+                    freed > 0
+                            ? "נוקה מטמון זמני (" + StorageUtils.formatSize(freed) + ")"
+                            : "המטמון הזמני כבר נקי",
+                    Toast.LENGTH_SHORT
+            ).show());
+        }).start();
+    }
+
+    private static long deleteDirContentsSafe(File dir) {
+        if (dir == null || !dir.exists() || !dir.isDirectory()) return 0L;
+        long bytes = 0L;
+        File[] children = dir.listFiles();
+        if (children == null) return 0L;
+        for (File f : children) {
+            if (f.isDirectory()) {
+                bytes += deleteDirContentsSafe(f);
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            } else {
+                long len = f.length();
+                if (f.delete()) bytes += len;
+            }
         }
-        rows.add("איפוס כל ברירות המחדל");
-        ThemedDialogHelper.showThemedMenu(
-                this,
-                "אפליקציות ברירת מחדל לפי סיומת",
-                "הקש על סיומת כדי לאפס את הבחירה הקבועה שלה:",
-                rows,
-                idx -> {
-                    if (idx == rows.size() - 1) {
-                        PrefsManager.clearAllDefaultOpenActions(this);
-                        Toast.makeText(this, "כל ברירות המחדל אופסו", Toast.LENGTH_SHORT).show();
-                    } else {
-                        String ext = exts.get(idx);
-                        PrefsManager.setDefaultOpenAction(this, ext, null);
-                        Toast.makeText(this, "הוסרה ברירת המחדל לסיומת " + ext, Toast.LENGTH_SHORT).show();
-                    }
-                    renderSettingsUi();
-                }
-        );
+        return bytes;
     }
 
     private String friendlyActionName(String action) {
@@ -846,7 +909,7 @@ public class SettingsActivity extends AppCompatActivity {
         b.setTextSize(ThemeHelper.spScaled(this, 12f));
         b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setTextColor(active
-                ? (theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE)
+                ? ThemeHelper.getOnAccentTextColor(accent)
                 : ThemeHelper.getPrimaryTextColor(this, theme));
 
         GradientDrawable bg = new GradientDrawable();
@@ -877,25 +940,14 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(10), 0, dp(10));
-
-        LinearLayout textCol = new LinearLayout(this);
-        textCol.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, dp(8), 0, dp(8));
 
         TextView tvT = new TextView(this);
         tvT.setText(title);
         tvT.setTextColor(textPrimary);
         tvT.setTextSize(ThemeHelper.spScaled(this, 13.5f));
         tvT.setTypeface(Typeface.DEFAULT_BOLD);
-        textCol.addView(tvT);
-
-        TextView tvS = new TextView(this);
-        tvS.setText(subtitle);
-        tvS.setTextColor(textSecondary);
-        tvS.setTextSize(ThemeHelper.spScaled(this, 11.5f));
-        textCol.addView(tvS);
-
-        row.addView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(tvT, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Switch sw = new Switch(this);
         sw.setChecked(initial);
@@ -932,59 +984,16 @@ public class SettingsActivity extends AppCompatActivity {
         return b;
     }
 
-    private void showPerCategoryLayoutDialog() {
-        final String[][] categories = new String[][]{
-                {FileBrowserActivity.MODE_INTERNAL, "אחסון ראשי"},
-                {FileBrowserActivity.MODE_SD_CARD, "כרטיס SD"},
-                {FileBrowserActivity.MODE_DOWNLOADS, "הורדות"},
-                {FileBrowserActivity.MODE_IMAGES, "תמונות"},
-                {FileBrowserActivity.MODE_AUDIO, "שמע"},
-                {FileBrowserActivity.MODE_VIDEOS, "סירטונים"},
-                {FileBrowserActivity.MODE_DOCUMENTS, "מסמכים"},
-                {FileBrowserActivity.MODE_APPS, "אפליקציות"},
-                {FileBrowserActivity.MODE_RECENT, "קבצים חדשים"},
-                {FileBrowserActivity.MODE_RECYCLE_BIN, "סל מיחזור"}
-        };
-
-        List<String> labels = new ArrayList<>();
-        for (String[] cat : categories) {
-            boolean grid = PrefsManager.isGridLayoutForMode(this, cat[0]);
-            labels.add(cat[1] + "  •  " + (grid ? "רשת" : "רשימה"));
-        }
-
-        ThemedDialogHelper.showThemedMenu(
-                this,
-                "תצוגת רשת / רשימה לפי קטגוריה",
-                "בחר קטגוריה כדי לשנות את תצוגתה:",
-                labels,
-                which -> {
-                    final String modeKey = categories[which][0];
-                    final String modeName = categories[which][1];
-                    ThemedDialogHelper.showThemedMenu(
-                            this,
-                            "אופן תצוגה: " + modeName,
-                            "בחר את התצוגה הרצויה עבור " + modeName + ":",
-                            Arrays.asList("תצוגת רשת", "תצוגת רשימה"),
-                            choice -> {
-                                boolean chooseGrid = (choice == 0);
-                                PrefsManager.setGridLayoutForMode(this, modeKey, chooseGrid);
-                                renderSettingsUi();
-                                Toast.makeText(this,
-                                        modeName + ": עודכן ל" + (chooseGrid ? "תצוגת רשת" : "תצוגת רשימה"),
-                                        Toast.LENGTH_SHORT).show();
-                            }
-                    );
-                }
-        );
-    }
-
     private void showSortModeDialog() {
         final String[] modes = {
                 "לפי שם (עברית תחילה)",
                 "לפי משקל קובץ",
                 "לפי תאריך שינוי",
                 "לפי סוג קובץ",
-                "לפי תאריך יצירה"
+                "לפי תאריך יצירה",
+                PrefsManager.isSortAscending(this)
+                        ? "החלף לסדר יורד (מהגדול/חדש)"
+                        : "החלף לסדר עולה (א-ת / מהקטן)"
         };
         final int[] modeValues = {
                 PrefsManager.SORT_NAME,
@@ -996,11 +1005,18 @@ public class SettingsActivity extends AppCompatActivity {
         ThemedDialogHelper.showThemedMenu(
                 this,
                 "מיון ברירת מחדל",
-                "בחר כיצד למיין קבצים ותיקיות:",
+                "בחר שדה מיון או החלף את כיוון המיון:",
                 Arrays.asList(modes),
                 which -> {
-                    PrefsManager.setSortMode(this, modeValues[which]);
-                    Toast.makeText(this, "המיון עודכן: " + modes[which], Toast.LENGTH_SHORT).show();
+                    if (which == modeValues.length) {
+                        boolean newAsc = !PrefsManager.isSortAscending(this);
+                        PrefsManager.setSortAscending(this, newAsc);
+                        Toast.makeText(this, newAsc ? "המיון הוגדר כעולה" : "המיון הוגדר כיורד", Toast.LENGTH_SHORT).show();
+                    } else {
+                        PrefsManager.setSortMode(this, modeValues[which]);
+                        Toast.makeText(this, "המיון עודכן: " + modes[which], Toast.LENGTH_SHORT).show();
+                    }
+                    renderSettingsUi();
                 }
         );
     }
@@ -1009,5 +1025,12 @@ public class SettingsActivity extends AppCompatActivity {
         Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:" + getPackageName()));
         startActivity(intent);
+        ThemeHelper.overrideOpenTransition(this);
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        ThemeHelper.overrideCloseTransition(this);
     }
 }

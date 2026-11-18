@@ -78,6 +78,7 @@ public class MiniAudioBarHelper {
         final WavySeekBar songWavyBar = new WavySeekBar(activity);
         songWavyBar.setCompactStyle(true);
         songWavyBar.setThumbOnlyTouch(true);
+        songWavyBar.setShowTickDots(true);
         songWavyBar.setMax(1000);
         songWavyBar.setProgress(0);
         songWavyBar.setPlaying(false);
@@ -140,7 +141,7 @@ public class MiniAudioBarHelper {
         bar.setOnTouchListener(new View.OnTouchListener() {
             private float downRawX = 0f;
             private float downRawY = 0f;
-            private boolean swiping = false;
+            private int swipeAxis = 0; // 0=none, 1=horizontal stop, 2=vertical pull-up
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -148,22 +149,33 @@ public class MiniAudioBarHelper {
                     case MotionEvent.ACTION_DOWN:
                         downRawX = event.getRawX();
                         downRawY = event.getRawY();
-                        swiping = false;
+                        swipeAxis = 0;
                         return true;
 
                     case MotionEvent.ACTION_MOVE: {
                         float dx = event.getRawX() - downRawX;
                         float dy = event.getRawY() - downRawY;
-                        if (!swiping && Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy)) {
-                            swiping = true;
-                            if (v.getParent() != null) {
-                                v.getParent().requestDisallowInterceptTouchEvent(true);
+                        if (swipeAxis == 0) {
+                            if (Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy) * 1.15f) {
+                                swipeAxis = 1;
+                                if (v.getParent() != null) {
+                                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                                }
+                            } else if (dy < -touchSlop && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                                swipeAxis = 2;
+                                if (v.getParent() != null) {
+                                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                                }
                             }
                         }
-                        if (swiping) {
+                        if (swipeAxis == 1) {
                             v.setTranslationX(dx);
                             float alpha = Math.max(0.2f, 1f - (Math.abs(dx) / Math.max(1f, v.getWidth())));
                             v.setAlpha(alpha);
+                        } else if (swipeAxis == 2) {
+                            float clampedUp = Math.max(-dpToPx(activity, 56), Math.min(0f, dy * 0.55f));
+                            v.setTranslationY(clampedUp);
+                            v.setAlpha(Math.max(0.75f, 1f - Math.abs(clampedUp) / dpToPx(activity, 180)));
                         }
                         return true;
                     }
@@ -171,13 +183,14 @@ public class MiniAudioBarHelper {
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL: {
                         float dx = event.getRawX() - downRawX;
-                        if (swiping) {
+                        float dy = event.getRawY() - downRawY;
+                        if (swipeAxis == 1) {
                             if (Math.abs(dx) > v.getWidth() * 0.24f) {
                                 float exitX = dx > 0 ? v.getWidth() : -v.getWidth();
                                 v.animate()
                                         .translationX(exitX)
                                         .alpha(0f)
-                                        .setDuration(160)
+                                        .setDuration(170)
                                         .withEndAction(() -> {
                                             v.setTranslationX(0f);
                                             v.setAlpha(1f);
@@ -186,7 +199,18 @@ public class MiniAudioBarHelper {
                                         })
                                         .start();
                             } else {
-                                v.animate().translationX(0f).alpha(1f).setDuration(150).start();
+                                v.animate().translationX(0f).alpha(1f).setDuration(160).start();
+                            }
+                        } else if (swipeAxis == 2) {
+                            v.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                            if (event.getActionMasked() == MotionEvent.ACTION_UP && dy < -dpToPx(activity, 24)) {
+                                File activeSong = AudioPlayerManager.getInstance().getCurrentFile();
+                                if (activeSong != null && activeSong.exists()) {
+                                    Intent i = new Intent(activity, BuiltInViewerActivity.class);
+                                    i.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, activeSong.getAbsolutePath());
+                                    activity.startActivity(i);
+                                    activity.overridePendingTransition(R.anim.slide_in_bottom, R.anim.hold_stay);
+                                }
                             }
                         } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                             File activeSong = AudioPlayerManager.getInstance().getCurrentFile();
@@ -194,9 +218,10 @@ public class MiniAudioBarHelper {
                                 Intent i = new Intent(activity, BuiltInViewerActivity.class);
                                 i.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, activeSong.getAbsolutePath());
                                 activity.startActivity(i);
+                                activity.overridePendingTransition(R.anim.slide_in_bottom, R.anim.hold_stay);
                             }
                         }
-                        swiping = false;
+                        swipeAxis = 0;
                         return true;
                     }
                 }
@@ -235,6 +260,7 @@ public class MiniAudioBarHelper {
                 progressHandler.removeCallbacks(updateProgressOnly);
                 return;
             }
+            boolean wasHidden = barWrapper.getVisibility() != View.VISIBLE;
 
             int theme = PrefsManager.getThemeMode(activity);
             int cardColor = ThemeHelper.getCardColor(activity, theme);
@@ -251,7 +277,7 @@ public class MiniAudioBarHelper {
             int activeTextPrimary = (art != null && !art.isRecycled()) ? pal.textPrimary : defaultTextPrimary;
             int activeTextSecondary = (art != null && !art.isRecycled()) ? pal.textSecondary : defaultTextSecondary;
             int playIconTint = (art != null && !art.isRecycled()) ? pal.playIconTint
-                    : (ColorUtils.calculateLuminance(defaultAccent) > 0.58 ? Color.parseColor("#0F172A") : Color.WHITE);
+                    : ThemeHelper.getOnAccentTextColor(defaultAccent);
 
             barWrapper.setBackgroundColor(ThemeHelper.getBgColor(activity, theme));
 
@@ -294,6 +320,11 @@ public class MiniAudioBarHelper {
             btnPlayPause.setColorFilter(playIconTint);
 
             barWrapper.setVisibility(View.VISIBLE);
+            if (wasHidden) {
+                barWrapper.setTranslationY(dpToPx(activity, 28));
+                barWrapper.setAlpha(0f);
+                barWrapper.animate().translationY(0f).alpha(1f).setDuration(220).start();
+            }
             progressHandler.removeCallbacks(updateProgressOnly);
             progressHandler.post(updateProgressOnly);
         };

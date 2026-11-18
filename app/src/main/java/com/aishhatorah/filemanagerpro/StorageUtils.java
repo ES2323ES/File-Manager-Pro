@@ -907,4 +907,115 @@ public class StorageUtils {
         }
         return candidate;
     }
+
+    public static boolean ejectRemovableStorageOrOpenSettings(Context context, String targetPath, boolean isSdCard) {
+        if (context == null) return false;
+        FileScanCache.invalidate();
+        try {
+            StorageManager sm = (StorageManager) context.getSystemService(Context.STORAGE_SERVICE);
+            if (sm != null) {
+                String volumeId = resolveRemovableVolumeId(sm, targetPath);
+                if (volumeId != null && !volumeId.isEmpty()) {
+                    try {
+                        java.lang.reflect.Method unmountMethod = StorageManager.class.getMethod("unmount", String.class);
+                        unmountMethod.invoke(sm, volumeId);
+                        return true;
+                    } catch (Throwable ignored) {
+                        // Normal on stock Android without privileged MOUNT_UNMOUNT_FILESYSTEMS
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        openSystemStorageSettings(context, isSdCard);
+        return false;
+    }
+
+    private static String resolveRemovableVolumeId(StorageManager sm, String targetPath) {
+        String normalizedTarget = targetPath == null ? "" : targetPath.replaceAll("/+$", "");
+        try {
+            List<StorageVolume> volumes = sm.getStorageVolumes();
+            for (StorageVolume vol : volumes) {
+                if (vol == null || vol.isPrimary() || !vol.isRemovable()) continue;
+                String volPath = extractStorageVolumePath(vol);
+                String normVol = volPath == null ? "" : volPath.replaceAll("/+$", "");
+                boolean match = !normalizedTarget.isEmpty() && !normVol.isEmpty()
+                        && (normalizedTarget.equals(normVol) || normalizedTarget.startsWith(normVol + "/"));
+                if (match || normalizedTarget.isEmpty()) {
+                    try {
+                        java.lang.reflect.Method getId = StorageVolume.class.getMethod("getId");
+                        Object idObj = getId.invoke(vol);
+                        if (idObj instanceof String && !((String) idObj).isEmpty()) {
+                            return (String) idObj;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            java.lang.reflect.Method getVolumes = StorageManager.class.getMethod("getVolumes");
+            Object listObj = getVolumes.invoke(sm);
+            if (listObj instanceof List<?>) {
+                for (Object vInfo : (List<?>) listObj) {
+                    if (vInfo == null) continue;
+                    String id = (String) vInfo.getClass().getMethod("getId").invoke(vInfo);
+                    Object pathObj = null;
+                    try {
+                        pathObj = vInfo.getClass().getMethod("getPath").invoke(vInfo);
+                    } catch (Throwable ignored) {
+                    }
+                    String volPath = pathObj instanceof File ? ((File) pathObj).getAbsolutePath() : "";
+                    if (!normalizedTarget.isEmpty() && normalizedTarget.equals(volPath.replaceAll("/+$", "")) && id != null) {
+                        return id;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static String extractStorageVolumePath(StorageVolume vol) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            File dir = vol.getDirectory();
+            if (dir != null) return dir.getAbsolutePath();
+        }
+        try {
+            java.lang.reflect.Method m = StorageVolume.class.getMethod("getPath");
+            Object res = m.invoke(vol);
+            if (res instanceof String) return (String) res;
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    public static void openSystemStorageSettings(Context context, boolean isSdCard) {
+        if (context == null) return;
+        String[] actions = isSdCard
+                ? new String[]{
+                android.provider.Settings.ACTION_MEMORY_CARD_SETTINGS,
+                android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS,
+                android.provider.Settings.ACTION_SETTINGS
+        }
+                : new String[]{
+                android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS,
+                android.provider.Settings.ACTION_MEMORY_CARD_SETTINGS,
+                android.provider.Settings.ACTION_SETTINGS
+        };
+        for (String action : actions) {
+            try {
+                Intent i = new Intent(action);
+                if (!(context instanceof android.app.Activity)) {
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                }
+                context.startActivity(i);
+                return;
+            } catch (Throwable ignored) {
+            }
+        }
+    }
 }

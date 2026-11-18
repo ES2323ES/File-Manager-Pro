@@ -60,6 +60,14 @@ public class FileThumbnailLoader {
 
     private static final Set<String> NO_EMBEDDED_ICON_KEYS = ConcurrentHashMap.newKeySet();
 
+    public static void clearMemoryCache() {
+        try {
+            BITMAP_CACHE.evictAll();
+            NO_EMBEDDED_ICON_KEYS.clear();
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static void bindFileIcon(Context context, File file, ImageView targetView) {
         if (file == null || targetView == null) return;
 

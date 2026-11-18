@@ -166,7 +166,7 @@ public class AboutDialogHelper {
         root.addView(creditCard, creditLp);
 
         root.addView(buildFloatingGlassButton(activity, theme, "בדיקת עידכונים והתקנה אוטומטית",
-                true, accent, theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE,
+                true, accent, ThemeHelper.getOnAccentTextColor(accent),
                 v -> UpdateChecker.checkForUpdates(activity, true)));
 
         root.addView(buildFloatingGlassButton(activity, theme, "יומן שינויים",
@@ -175,11 +175,17 @@ public class AboutDialogHelper {
 
         root.addView(buildFloatingGlassButton(activity, theme, "מדריך למשתמש",
                 false, accent, textPrimary,
-                v -> activity.startActivity(new Intent(activity, UserGuideActivity.class))));
+                v -> {
+                    activity.startActivity(new Intent(activity, UserGuideActivity.class));
+                    ThemeHelper.overrideOpenTransition(activity);
+                }));
 
         root.addView(buildFloatingGlassButton(activity, theme, "יומן שגיאות ודיווח תקלות",
                 false, accent, textSecondary,
-                v -> activity.startActivity(new Intent(activity, DiagnosticsActivity.class))));
+                v -> {
+                    activity.startActivity(new Intent(activity, DiagnosticsActivity.class));
+                    ThemeHelper.overrideOpenTransition(activity);
+                }));
 
         scroll.addView(root);
         dialog.show();

@@ -8,7 +8,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.Layout;
+import android.text.Spannable;
 import android.text.TextWatcher;
+import android.text.style.BackgroundColorSpan;
+import android.transition.AutoTransition;
+import android.transition.TransitionManager;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -26,6 +30,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.ColorUtils;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -33,14 +38,16 @@ import java.io.FileOutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
 import java.util.Locale;
 
 /**
  * סעיפים 2, 11, 12, 13, 23, 40, 41:
  * עורך טקסט וקוד מתקדם התומך ב-20 שפות תכנות, מספרי שורות מדויקים כולל בגלישת שורות,
- * ספירת שורות/מילים/תווים, Undo/Redo, חיפוש והחלפה, זום אצבעות, בחירת קידוד,
- * גיבוי .bak אוטומטי, עריכה ישירה מתוך קובץ ארכיון ZIP ותצוגת Markdown חיה.
+ * ספירת שורות/מילים/תווים, Undo/Redo, חיפוש והחלפה מרובה בשורה מוטמעת, זום אצבעות, בחירת קידוד,
+ * גיבוי .bak אוטומטי, עריכה ישירה מתוך קובץ ארכיון ZIP ותצוגת Markdown כברירת מחדל.
  */
 public class CodeEditorActivity extends AppCompatActivity {
 
@@ -56,6 +63,7 @@ public class CodeEditorActivity extends AppCompatActivity {
     private String archiveEntry;
     private String archivePassword;
     private boolean readOnlyMode = false;
+    private boolean isMarkdownFile = false;
 
     private CodeSyntaxHighlighter.Language currentLang = CodeSyntaxHighlighter.Language.PLAIN;
     private Charset currentCharset = StandardCharsets.UTF_8;
@@ -64,21 +72,35 @@ public class CodeEditorActivity extends AppCompatActivity {
     private boolean previewMarkdown = false;
     private boolean dirty = false;
     private boolean suppressHistory = false;
+    private boolean suppressMatchClear = false;
 
     private final Deque<String> undoStack = new ArrayDeque<>();
     private final Deque<String> redoStack = new ArrayDeque<>();
+    private final List<int[]> searchMatches = new ArrayList<>();
+    private int activeMatchIndex = -1;
 
+    private LinearLayout rootLayout;
     private EditText editorView;
     private LineNumberGutterView gutterView;
     private FrameLayout editorSlot;
     private HorizontalScrollView editorHScroll;
     private ScrollView editorVScroll;
     private WebView markdownWebView;
+    private HorizontalScrollView metaScroll;
+    private LinearLayout findReplaceBar;
+    private EditText etFindInput;
+    private EditText etReplaceInput;
+    private TextView tvFindCounter;
     private TextView tvTitle;
     private TextView tvStatsBar;
     private TextView tvLangChip;
     private TextView tvEncChip;
+    private ImageButton btnInfoToggle;
+    private ImageButton btnMarkdownEye;
     private ImageButton btnWrapToggle;
+    private int activeAccentColor;
+    private int activeTextPrimaryColor;
+    private boolean activeDarkBg;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -121,18 +143,22 @@ public class CodeEditorActivity extends AppCompatActivity {
 
         wordWrap = PrefsManager.isTextWrapEnabled(this);
         currentFontSp = PrefsManager.getTextFontSizeSp(this);
+        isMarkdownFile = MediaFormatHelper.isMarkdownFile(displayTitle);
+        activeAccentColor = accent;
+        activeTextPrimaryColor = textPrimary;
+        activeDarkBg = darkBg;
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(bg);
+        rootLayout = new LinearLayout(this);
+        rootLayout.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.setBackgroundColor(bg);
 
-        // סרגל עליון
+        // סרגל עליון נקי: חזרה, כותרת, Undo/Redo, אייקון מידע, (ב-Markdown: עין לתצוגה/קוד) ושמור
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
-        topBar.setPadding(16, 14, 16, 14);
+        topBar.setPadding(14, 12, 14, 12);
 
         ImageButton btnBack = makeIconBtn(R.drawable.ic_arrow_back, textPrimary, v -> handleBackAttempt());
         topBar.addView(btnBack);
@@ -145,24 +171,31 @@ public class CodeEditorActivity extends AppCompatActivity {
         tvTitle.setSingleLine(true);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         tLp.setMarginStart(10);
-        tLp.setMarginEnd(10);
+        tLp.setMarginEnd(6);
         topBar.addView(tvTitle, tLp);
 
         if (!readOnlyMode) {
             topBar.addView(makeIconBtn(R.drawable.ic_undo, textPrimary, v -> undo()));
             topBar.addView(makeIconBtn(R.drawable.ic_redo, textPrimary, v -> redo()));
         }
-        topBar.addView(makeIconBtn(R.drawable.ic_search, textPrimary, v -> showFindReplaceDialog()));
-        btnWrapToggle = makeIconBtn(R.drawable.ic_wrap, wordWrap ? accent : textSecondary, v -> toggleWordWrap(accent, textSecondary));
-        topBar.addView(btnWrapToggle);
+
+        btnInfoToggle = makeIconBtn(R.drawable.ic_info, textSecondary, v -> toggleInfoBar(accent, textSecondary));
+        topBar.addView(btnInfoToggle);
+
+        if (isMarkdownFile) {
+            previewMarkdown = true;
+            btnMarkdownEye = makeIconBtn(R.drawable.ic_visibility_off, accent,
+                    v -> toggleMarkdownPreview(darkBg, textPrimary, accent));
+            topBar.addView(btnMarkdownEye);
+        }
 
         if (!readOnlyMode) {
             TextView btnSave = new TextView(this);
             btnSave.setText("שמור");
-            btnSave.setTextColor(Color.WHITE);
+            btnSave.setTextColor(ThemeHelper.getOnAccentTextColor(accent));
             btnSave.setTextSize(13f);
             btnSave.setTypeface(Typeface.DEFAULT_BOLD);
-            btnSave.setPadding(24, 12, 24, 12);
+            btnSave.setPadding(22, 11, 22, 11);
             GradientDrawable saveBg = new GradientDrawable();
             saveBg.setCornerRadius(14f);
             saveBg.setColor(accent);
@@ -170,16 +203,17 @@ public class CodeEditorActivity extends AppCompatActivity {
             btnSave.setOnClickListener(v -> saveContent());
             topBar.addView(btnSave);
         }
-        root.addView(topBar);
+        rootLayout.addView(topBar);
 
-        // שורת מידע וכלים קומפקטית
-        HorizontalScrollView metaScroll = new HorizontalScrollView(this);
+        // שורת מידע וכלים קומפקטית (נפתחת מאייקון המידע): פרטים, תחביר, קידוד, חיפוש ושבירת שורות
+        metaScroll = new HorizontalScrollView(this);
         metaScroll.setHorizontalScrollBarEnabled(false);
         metaScroll.setBackgroundColor(cardBg);
+        metaScroll.setVisibility(View.GONE);
         LinearLayout metaRow = new LinearLayout(this);
         metaRow.setOrientation(LinearLayout.HORIZONTAL);
         metaRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        metaRow.setPadding(20, 10, 20, 10);
+        metaRow.setPadding(16, 8, 16, 8);
         metaRow.setGravity(Gravity.CENTER_VERTICAL);
 
         tvStatsBar = new TextView(this);
@@ -187,26 +221,26 @@ public class CodeEditorActivity extends AppCompatActivity {
         tvStatsBar.setTextSize(12f);
         metaRow.addView(tvStatsBar);
 
-        tvLangChip = makeChip(currentLang.displayName, accent, v -> showLanguagePicker(darkBg));
+        tvLangChip = makeChip("תחביר: " + currentLang.displayName, accent, v -> showLanguagePicker(darkBg));
         metaRow.addView(tvLangChip);
 
-        tvEncChip = makeChip("UTF-8", textSecondary, v -> showEncodingPicker());
+        tvEncChip = makeChip("קידוד: UTF-8", textSecondary, v -> showEncodingPicker());
         metaRow.addView(tvEncChip);
 
-        if (MediaFormatHelper.isMarkdownFile(displayTitle)) {
-            TextView mdChip = makeChip("תצוגת Markdown", Color.parseColor("#0D9488"), v -> toggleMarkdownPreview(darkBg, textPrimary, accent));
-            metaRow.addView(mdChip);
-        }
+        ImageButton btnSearchInBar = makeIconBtn(R.drawable.ic_search, textPrimary, v -> toggleFindReplaceBar());
+        metaRow.addView(btnSearchInBar);
 
-        if (!readOnlyMode) {
-            String[] quickChars = {"{ }", "( )", ";", "=", "->"};
-            for (String qc : quickChars) {
-                TextView q = makeChip(qc, textPrimary, v -> insertAtCursor(qc.equals("{ }") ? "{}" : (qc.equals("( )") ? "()" : qc)));
-                metaRow.addView(q);
-            }
-        }
+        btnWrapToggle = makeIconBtn(R.drawable.ic_wrap, wordWrap ? accent : textSecondary,
+                v -> toggleWordWrap(accent, textSecondary));
+        metaRow.addView(btnWrapToggle);
+
         metaScroll.addView(metaRow);
-        root.addView(metaScroll);
+        rootLayout.addView(metaScroll);
+
+        // שורת חיפוש והחלפה מוטמעת (כמו בחיפוש קבצים + החלפה והתאמות מרובות)
+        findReplaceBar = buildInlineFindReplaceBar(theme, cardBg, textPrimary, textSecondary, accent, darkBg);
+        findReplaceBar.setVisibility(View.GONE);
+        rootLayout.addView(findReplaceBar);
 
         // גלאי זום צביטה ב-2 אצבעות ברמת המכולה כדי שה-ScrollView/EditText לא יחטפו את המחווה
         ScaleGestureDetector pinchDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -260,15 +294,15 @@ public class CodeEditorActivity extends AppCompatActivity {
 
         editorVScroll.addView(codeContainer, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(editorVScroll, new LinearLayout.LayoutParams(
+        rootLayout.addView(editorVScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         markdownWebView = new WebView(this);
         markdownWebView.setVisibility(View.GONE);
-        root.addView(markdownWebView, new LinearLayout.LayoutParams(
+        rootLayout.addView(markdownWebView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        setContentView(root);
+        setContentView(rootLayout);
 
         // טעינת תוכן
         String initialContent = roContent != null ? roContent : loadInitialText();
@@ -279,6 +313,9 @@ public class CodeEditorActivity extends AppCompatActivity {
         undoStack.push(initialContent);
         updateStats();
         editorView.post(() -> gutterView.syncFromEditor(editorView));
+        if (previewMarkdown) {
+            applyMarkdownPreviewState(darkBg, textPrimary, accent);
+        }
 
         editorView.addTextChangedListener(new TextWatcher() {
             private String before;
@@ -304,6 +341,9 @@ public class CodeEditorActivity extends AppCompatActivity {
                     tvTitle.setText(displayTitle + " *");
                 }
                 CodeSyntaxHighlighter.highlight(s, currentLang, darkBg);
+                if (!suppressMatchClear && findReplaceBar.getVisibility() == View.VISIBLE && etFindInput != null) {
+                    refreshSearchHighlights(false);
+                }
                 updateStats();
                 editorView.post(() -> gutterView.syncFromEditor(editorView));
             }
@@ -441,6 +481,234 @@ public class CodeEditorActivity extends AppCompatActivity {
         editorView.post(() -> gutterView.syncFromEditor(editorView));
     }
 
+    private void toggleInfoBar(int accent, int textSecondary) {
+        AutoTransition transition = new AutoTransition();
+        transition.setDuration(170);
+        TransitionManager.beginDelayedTransition(rootLayout, transition);
+        boolean open = metaScroll.getVisibility() != View.VISIBLE;
+        metaScroll.setVisibility(open ? View.VISIBLE : View.GONE);
+        if (btnInfoToggle != null) {
+            btnInfoToggle.setColorFilter(open ? accent : textSecondary);
+        }
+    }
+
+    private void toggleFindReplaceBar() {
+        AutoTransition transition = new AutoTransition();
+        transition.setDuration(170);
+        TransitionManager.beginDelayedTransition(rootLayout, transition);
+        boolean opening = findReplaceBar.getVisibility() != View.VISIBLE;
+        findReplaceBar.setVisibility(opening ? View.VISIBLE : View.GONE);
+        if (opening) {
+            if (previewMarkdown) {
+                previewMarkdown = false;
+                applyMarkdownPreviewState(activeDarkBg, activeTextPrimaryColor, activeAccentColor);
+            }
+            etFindInput.requestFocus();
+            refreshSearchHighlights(true);
+        } else {
+            clearSearchHighlights();
+        }
+    }
+
+    private LinearLayout buildInlineFindReplaceBar(
+            int theme, int cardBg, int textPrimary, int textSecondary, int accent, boolean darkBg) {
+        float d = getResources().getDisplayMetrics().density;
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        container.setBackgroundColor(cardBg);
+        container.setPadding(Math.round(12 * d), Math.round(8 * d), Math.round(12 * d), Math.round(8 * d));
+
+        // שורת חיפוש + ניווט תוצאות מרובות
+        LinearLayout searchRow = new LinearLayout(this);
+        searchRow.setOrientation(LinearLayout.HORIZONTAL);
+        searchRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        etFindInput = new EditText(this);
+        etFindInput.setHint("חפש בקוד / טקסט...");
+        etFindInput.setHintTextColor(textSecondary);
+        etFindInput.setTextColor(textPrimary);
+        etFindInput.setTextSize(13.5f);
+        etFindInput.setSingleLine(true);
+        etFindInput.setPadding(Math.round(10 * d), Math.round(7 * d), Math.round(10 * d), Math.round(7 * d));
+        GradientDrawable fieldBg = new GradientDrawable();
+        fieldBg.setCornerRadius(10f * d);
+        fieldBg.setColor(ColorUtils.setAlphaComponent(accent, darkBg ? 28 : 16));
+        etFindInput.setBackground(fieldBg);
+        searchRow.addView(etFindInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        tvFindCounter = new TextView(this);
+        tvFindCounter.setText("0 תוצאות");
+        tvFindCounter.setTextColor(textSecondary);
+        tvFindCounter.setTextSize(11.5f);
+        tvFindCounter.setPadding(Math.round(8 * d), 0, Math.round(8 * d), 0);
+        searchRow.addView(tvFindCounter);
+
+        ImageButton btnPrev = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_chevron_up, accent, "תוצאה קודמת", 34, 6, v -> navigateSearchMatch(-1));
+        ImageButton btnNext = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_chevron_down, accent, "תוצאה הבאה", 34, 6, v -> navigateSearchMatch(1));
+        ImageButton btnCloseSearch = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_close, textSecondary, "סגור חיפוש", 34, 6, v -> {
+                    findReplaceBar.setVisibility(View.GONE);
+                    clearSearchHighlights();
+                });
+        searchRow.addView(btnPrev);
+        searchRow.addView(btnNext);
+        searchRow.addView(btnCloseSearch);
+        container.addView(searchRow);
+
+        etFindInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                refreshSearchHighlights(true);
+            }
+        });
+
+        if (!readOnlyMode) {
+            LinearLayout replaceRow = new LinearLayout(this);
+            replaceRow.setOrientation(LinearLayout.HORIZONTAL);
+            replaceRow.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rLp.topMargin = Math.round(6 * d);
+            replaceRow.setLayoutParams(rLp);
+
+            etReplaceInput = new EditText(this);
+            etReplaceInput.setHint("החלף ב...");
+            etReplaceInput.setHintTextColor(textSecondary);
+            etReplaceInput.setTextColor(textPrimary);
+            etReplaceInput.setTextSize(13.5f);
+            etReplaceInput.setSingleLine(true);
+            etReplaceInput.setPadding(Math.round(10 * d), Math.round(7 * d), Math.round(10 * d), Math.round(7 * d));
+            GradientDrawable repBg = new GradientDrawable();
+            repBg.setCornerRadius(10f * d);
+            repBg.setColor(ColorUtils.setAlphaComponent(accent, darkBg ? 28 : 16));
+            etReplaceInput.setBackground(repBg);
+            replaceRow.addView(etReplaceInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView btnRepOne = makeChip("החלף", accent, v -> replaceCurrentMatch());
+            TextView btnRepAll = makeChip("החלף הכל", accent, v -> replaceAllMatches());
+            replaceRow.addView(btnRepOne);
+            replaceRow.addView(btnRepAll);
+            container.addView(replaceRow);
+        }
+
+        return container;
+    }
+
+    private void clearSearchHighlights() {
+        searchMatches.clear();
+        activeMatchIndex = -1;
+        Editable ed = editorView.getText();
+        if (ed != null) {
+            BackgroundColorSpan[] spans = ed.getSpans(0, ed.length(), BackgroundColorSpan.class);
+            for (BackgroundColorSpan sp : spans) {
+                ed.removeSpan(sp);
+            }
+        }
+        if (tvFindCounter != null) {
+            tvFindCounter.setText("0 תוצאות");
+        }
+    }
+
+    private void refreshSearchHighlights(boolean jumpToFirst) {
+        searchMatches.clear();
+        Editable ed = editorView.getText();
+        if (ed == null) return;
+        BackgroundColorSpan[] oldSpans = ed.getSpans(0, ed.length(), BackgroundColorSpan.class);
+        for (BackgroundColorSpan sp : oldSpans) {
+            ed.removeSpan(sp);
+        }
+
+        String q = etFindInput != null ? etFindInput.getText().toString() : "";
+        if (q.isEmpty()) {
+            activeMatchIndex = -1;
+            if (tvFindCounter != null) tvFindCounter.setText("0 תוצאות");
+            return;
+        }
+
+        String text = ed.toString();
+        String lowerText = text.toLowerCase(Locale.ROOT);
+        String lowerQ = q.toLowerCase(Locale.ROOT);
+        int idx = 0;
+        while ((idx = lowerText.indexOf(lowerQ, idx)) >= 0) {
+            searchMatches.add(new int[]{idx, idx + q.length()});
+            idx += Math.max(1, q.length());
+        }
+
+        if (searchMatches.isEmpty()) {
+            activeMatchIndex = -1;
+            if (tvFindCounter != null) tvFindCounter.setText("0 תוצאות");
+            return;
+        }
+
+        if (jumpToFirst || activeMatchIndex < 0 || activeMatchIndex >= searchMatches.size()) {
+            activeMatchIndex = 0;
+        }
+
+        int otherColor = ColorUtils.setAlphaComponent(Color.parseColor("#F59E0B"), 85);
+        int activeColor = ColorUtils.setAlphaComponent(activeAccentColor, 130);
+        for (int i = 0; i < searchMatches.size(); i++) {
+            int[] spanRange = searchMatches.get(i);
+            ed.setSpan(new BackgroundColorSpan(i == activeMatchIndex ? activeColor : otherColor),
+                    spanRange[0], spanRange[1], Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        focusActiveMatch();
+    }
+
+    private void navigateSearchMatch(int delta) {
+        if (searchMatches.isEmpty()) {
+            refreshSearchHighlights(true);
+            return;
+        }
+        activeMatchIndex = (activeMatchIndex + delta + searchMatches.size()) % searchMatches.size();
+        refreshSearchHighlights(false);
+    }
+
+    private void focusActiveMatch() {
+        if (activeMatchIndex < 0 || activeMatchIndex >= searchMatches.size()) return;
+        int[] range = searchMatches.get(activeMatchIndex);
+        if (tvFindCounter != null) {
+            tvFindCounter.setText((activeMatchIndex + 1) + "/" + searchMatches.size());
+        }
+        editorView.setSelection(range[0], range[1]);
+        Layout layout = editorView.getLayout();
+        if (layout != null && editorVScroll != null) {
+            int line = layout.getLineForOffset(range[0]);
+            int y = Math.max(0, layout.getLineTop(line) - editorVScroll.getHeight() / 3);
+            editorVScroll.smoothScrollTo(0, y);
+        }
+    }
+
+    private void replaceCurrentMatch() {
+        if (readOnlyMode || searchMatches.isEmpty() || activeMatchIndex < 0) return;
+        String rep = etReplaceInput != null ? etReplaceInput.getText().toString() : "";
+        int[] range = searchMatches.get(activeMatchIndex);
+        suppressMatchClear = true;
+        editorView.getText().replace(range[0], range[1], rep);
+        suppressMatchClear = false;
+        refreshSearchHighlights(false);
+    }
+
+    private void replaceAllMatches() {
+        if (readOnlyMode || searchMatches.isEmpty()) return;
+        String q = etFindInput != null ? etFindInput.getText().toString() : "";
+        String rep = etReplaceInput != null ? etReplaceInput.getText().toString() : "";
+        if (q.isEmpty()) return;
+        int count = searchMatches.size();
+        Editable ed = editorView.getText();
+        suppressMatchClear = true;
+        for (int i = searchMatches.size() - 1; i >= 0; i--) {
+            int[] r = searchMatches.get(i);
+            ed.replace(r[0], r[1], rep);
+        }
+        suppressMatchClear = false;
+        refreshSearchHighlights(true);
+        Toast.makeText(this, "הוחלפו " + count + " התאמות", Toast.LENGTH_SHORT).show();
+    }
+
     private void toggleWordWrap(int accent, int textSecondary) {
         wordWrap = !wordWrap;
         PrefsManager.setTextWrapEnabled(this, wordWrap);
@@ -453,6 +721,10 @@ public class CodeEditorActivity extends AppCompatActivity {
 
     private void toggleMarkdownPreview(boolean darkBg, int textPrimary, int accent) {
         previewMarkdown = !previewMarkdown;
+        applyMarkdownPreviewState(darkBg, textPrimary, accent);
+    }
+
+    private void applyMarkdownPreviewState(boolean darkBg, int textPrimary, int accent) {
         if (previewMarkdown) {
             String textHex = String.format("#%06X", (0xFFFFFF & textPrimary));
             String accHex = String.format("#%06X", (0xFFFFFF & accent));
@@ -460,17 +732,17 @@ public class CodeEditorActivity extends AppCompatActivity {
             markdownWebView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
             editorVScroll.setVisibility(View.GONE);
             markdownWebView.setVisibility(View.VISIBLE);
+            if (btnMarkdownEye != null) {
+                btnMarkdownEye.setImageResource(R.drawable.ic_visibility_off);
+                btnMarkdownEye.setContentDescription("חזור לעריכת קוד Markdown");
+            }
         } else {
             markdownWebView.setVisibility(View.GONE);
             editorVScroll.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private void insertAtCursor(String token) {
-        int start = Math.max(0, editorView.getSelectionStart());
-        editorView.getText().insert(start, token);
-        if ("{}".equals(token) || "()".equals(token)) {
-            editorView.setSelection(start + 1);
+            if (btnMarkdownEye != null) {
+                btnMarkdownEye.setImageResource(R.drawable.ic_visibility);
+                btnMarkdownEye.setContentDescription("תצוגת Markdown");
+            }
         }
     }
 
@@ -491,7 +763,7 @@ public class CodeEditorActivity extends AppCompatActivity {
                 .setTitle("בחר שפת תחביר")
                 .setItems(names, (d, idx) -> {
                     currentLang = langs[idx];
-                    tvLangChip.setText(currentLang.displayName);
+                    tvLangChip.setText("תחביר: " + currentLang.displayName);
                     CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
                 }).show();
     }
@@ -503,53 +775,13 @@ public class CodeEditorActivity extends AppCompatActivity {
                 .setItems(labels, (d, idx) -> {
                     String cs = idx == 1 ? "ISO-8859-8" : (idx == 2 ? "windows-1255" : (idx == 3 ? "UTF-16" : "UTF-8"));
                     currentCharset = Charset.forName(cs);
-                    tvEncChip.setText(cs);
+                    tvEncChip.setText("קידוד: " + cs);
                     if (!dirty && !readOnlyMode) {
                         suppressHistory = true;
                         editorView.setText(loadInitialText());
                         suppressHistory = false;
                     }
                 }).show();
-    }
-
-    private void showFindReplaceDialog() {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        EditText etFind = new EditText(this);
-        etFind.setHint("חפש טקסט...");
-        panel.addView(etFind);
-        EditText etReplace = new EditText(this);
-        etReplace.setHint("החלף ב... (אופציונלי)");
-        panel.addView(etReplace);
-
-        ThemedDialogHelper.showCustomDialog(
-                this,
-                "חיפוש והחלפה",
-                null,
-                panel,
-                readOnlyMode ? "חפש" : "החלף הכל",
-                () -> {
-                    String q = etFind.getText().toString();
-                    if (q.isEmpty()) return;
-                    String content = editorView.getText().toString();
-                    String rep = etReplace.getText().toString();
-                    if (!readOnlyMode && !rep.isEmpty()) {
-                        editorView.setText(content.replace(q, rep));
-                    } else {
-                        int idx = content.indexOf(q, Math.max(0, editorView.getSelectionEnd()));
-                        if (idx < 0) idx = content.indexOf(q);
-                        if (idx >= 0) {
-                            editorView.requestFocus();
-                            editorView.setSelection(idx, idx + q.length());
-                        } else {
-                            Toast.makeText(this, "לא נמצא", Toast.LENGTH_SHORT).show();
-                        }
-                    }
-                },
-                "ביטול",
-                null,
-                true
-        );
     }
 
     private void handleBackAttempt() {
@@ -576,6 +808,12 @@ public class CodeEditorActivity extends AppCompatActivity {
     @Override
     public void onBackPressed() {
         handleBackAttempt();
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        ThemeHelper.overrideCloseTransition(this);
     }
 
     /**
