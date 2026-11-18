@@ -50,23 +50,19 @@ public class AboutDialogHelper {
                 .setView(scroll)
                 .create();
 
-        // שורת כותרת עליונה עם תג גרסה ממורכז וכפתור סגירה SVG ללא מסגרת על גבי הכרטיסייה
+        // שורת כותרת עליונה: לוגו האפליקציה ממורכז למעלה וכפתור סגירה SVG בפינה
         FrameLayout headerOverlay = new FrameLayout(activity);
         headerOverlay.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView tvVersionBadge = new TextView(activity);
-        tvVersionBadge.setText("File Manager Pro  •  גירסה " + BuildConfig.VERSION_NAME + " רשמית");
-        tvVersionBadge.setTextColor(accent);
-        tvVersionBadge.setTextSize(ThemeHelper.spScaled(activity, 14f));
-        tvVersionBadge.setTypeface(Typeface.DEFAULT_BOLD);
-        tvVersionBadge.setGravity(Gravity.CENTER);
-        tvVersionBadge.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        FrameLayout.LayoutParams badgeLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        badgeLp.setMarginStart(Math.round(34 * d));
-        badgeLp.setMarginEnd(Math.round(34 * d));
-        headerOverlay.addView(tvVersionBadge, badgeLp);
+        int logoPx = ThemeHelper.dpScaled(activity, 56);
+        ImageView logo = new ImageView(activity);
+        logo.setImageResource(R.drawable.ic_app_logo);
+        FrameLayout.LayoutParams logoLp = new FrameLayout.LayoutParams(
+                logoPx, logoPx, Gravity.CENTER_HORIZONTAL | Gravity.TOP);
+        logoLp.topMargin = Math.round(4 * d);
+        logoLp.bottomMargin = Math.round(6 * d);
+        headerOverlay.addView(logo, logoLp);
 
         ImageButton btnCloseIcon = ThemeHelper.createBorderlessSvgButton(
                 activity, R.drawable.ic_close, textSecondary, "סגור", 36, 7, v -> dialog.dismiss());
@@ -76,19 +72,21 @@ public class AboutDialogHelper {
         headerOverlay.addView(btnCloseIcon, closeLp);
         root.addView(headerOverlay);
 
-        int logoPx = ThemeHelper.dpScaled(activity, 52);
-        ImageView logo = new ImageView(activity);
-        logo.setImageResource(R.drawable.ic_app_logo);
-        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(logoPx, logoPx);
-        logoLp.gravity = Gravity.CENTER_HORIZONTAL;
-        logoLp.topMargin = Math.round(8 * d);
-        logoLp.bottomMargin = Math.round(6 * d);
-        root.addView(logo, logoLp);
+        TextView tvAppNameVersion = new TextView(activity);
+        tvAppNameVersion.setText("File Manager Pro  " + BuildConfig.VERSION_NAME + " רשמית");
+        tvAppNameVersion.setTextColor(accent);
+        tvAppNameVersion.setTextSize(ThemeHelper.spScaled(activity, 14.5f));
+        tvAppNameVersion.setTypeface(Typeface.DEFAULT_BOLD);
+        tvAppNameVersion.setGravity(Gravity.CENTER);
+        tvAppNameVersion.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        tvAppNameVersion.setPadding(0, Math.round(4 * d), 0, Math.round(4 * d));
+        root.addView(tvAppNameVersion, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView tvTitle = new TextView(activity);
         tvTitle.setText("מנהל קבצים מתקדם ומהיר לאנדרואיד");
         tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(ThemeHelper.spScaled(activity, 16f));
+        tvTitle.setTextSize(ThemeHelper.spScaled(activity, 15.5f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setGravity(Gravity.CENTER);
         tvTitle.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);

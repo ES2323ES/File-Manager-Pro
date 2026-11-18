@@ -24,11 +24,14 @@ import androidx.appcompat.widget.AppCompatTextView;
 import androidx.core.graphics.ColorUtils;
 
 import java.io.File;
+import java.util.Locale;
 
 /**
  * השורה החכמה של האודיו:
  * - מתאימה את צבעיה דינאמית לעטיפת האודיו (כאשר קיימת)
  * - פס התקדמות בצורת גלים עדינים בזמן ניגון, ופס רציף בעצירה
+ * - הזזת השמע קדימה/אחורה מתבצעת אך ורק מלחיצה וגרירה של הידית העבה על פס ההתקדמות
+ * - מציגה את הזמן שעבר והמשך הכולל בקטן בצד שמאל למטה
  * - החלקה אופקית על השורה לעצירה ולחיצה לפתיחת מסך האודיו
  */
 public class MiniAudioBarHelper {
@@ -45,7 +48,7 @@ public class MiniAudioBarHelper {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(24, 14, 24, 14);
+        bar.setPadding(24, 14, 24, 12);
 
         final ImageView ivArt = new ImageView(activity);
         ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -74,6 +77,7 @@ public class MiniAudioBarHelper {
 
         final WavySeekBar songWavyBar = new WavySeekBar(activity);
         songWavyBar.setCompactStyle(true);
+        songWavyBar.setThumbOnlyTouch(true);
         songWavyBar.setMax(1000);
         songWavyBar.setProgress(0);
         songWavyBar.setPlaying(false);
@@ -81,6 +85,19 @@ public class MiniAudioBarHelper {
                 ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(activity, 22));
         pbLp.topMargin = dpToPx(activity, 4);
         textCol.addView(songWavyBar, pbLp);
+
+        final TextView tvTime = new TextView(activity);
+        tvTime.setText("00:00 / 00:00");
+        tvTime.setTextSize(10.5f);
+        tvTime.setTypeface(Typeface.MONOSPACE);
+        tvTime.setSingleLine(true);
+        tvTime.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        tvTime.setTextDirection(View.TEXT_DIRECTION_LTR);
+        tvTime.setGravity(Gravity.LEFT);
+        LinearLayout.LayoutParams timeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        timeLp.topMargin = dpToPx(activity, 1);
+        textCol.addView(tvTime, timeLp);
 
         final boolean[] userScrubbing = {false};
         songWavyBar.setOnSeekBarChangeListener(new WavySeekBar.OnSeekBarChangeListener() {
@@ -90,7 +107,9 @@ public class MiniAudioBarHelper {
                     AudioPlayerManager mgr = AudioPlayerManager.getInstance();
                     int dur = mgr.getDurationMs();
                     if (dur > 0) {
-                        mgr.seekTo((int) ((progress * (long) dur) / 1000L));
+                        int newPos = (int) ((progress * (long) dur) / 1000L);
+                        mgr.seekTo(newPos);
+                        tvTime.setText(formatClock(newPos) + " / " + formatClock(dur));
                     }
                 }
             }
@@ -202,6 +221,7 @@ public class MiniAudioBarHelper {
                         int pos = mgr.getCurrentPositionMs();
                         int permille = dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0;
                         songWavyBar.setProgress(permille);
+                        tvTime.setText(formatClock(pos) + " / " + formatClock(dur));
                     }
                     progressHandler.postDelayed(this, 220);
                 }
@@ -252,6 +272,8 @@ public class MiniAudioBarHelper {
             int dur = mgr.getDurationMs();
             int pos = mgr.getCurrentPositionMs();
             songWavyBar.setProgress(dur > 0 ? Math.min(1000, (int) ((pos * 1000L) / dur)) : 0);
+            tvTime.setText(formatClock(pos) + " / " + formatClock(dur));
+            tvTime.setTextColor(activeTextSecondary);
 
             ivArt.clearColorFilter();
             if (art != null && !art.isRecycled()) {
@@ -280,6 +302,11 @@ public class MiniAudioBarHelper {
         AudioPlayerManager.getInstance().addListener(listener);
         refreshUi.run();
         return listener;
+    }
+
+    private static String formatClock(int ms) {
+        int sec = Math.max(0, ms / 1000);
+        return String.format(Locale.US, "%02d:%02d", sec / 60, sec % 60);
     }
 
     private static int dpToPx(Activity activity, float dp) {

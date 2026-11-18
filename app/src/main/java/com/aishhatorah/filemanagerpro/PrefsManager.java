@@ -248,8 +248,10 @@ public class PrefsManager {
         prefs(context).edit().putString("home_wallpaper_path", path == null ? "" : path).apply();
     }
 
+    public static final int DEFAULT_WALLPAPER_BLUR = 14;
+
     public static int getWallpaperBlurRadius(Context context) {
-        int val = prefs(context).getInt("wallpaper_blur_radius", 14);
+        int val = prefs(context).getInt("wallpaper_blur_radius", DEFAULT_WALLPAPER_BLUR);
         return Math.max(0, Math.min(28, val));
     }
 

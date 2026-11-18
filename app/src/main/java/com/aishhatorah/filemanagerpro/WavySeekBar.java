@@ -49,6 +49,7 @@ public class WavySeekBar extends View {
 
     private float wavePhase = 0f;
     private long lastWaveTickMs = 0L;
+    private boolean thumbOnlyTouch = false;
 
     private OnSeekBarChangeListener listener;
 
@@ -248,11 +249,24 @@ public class WavySeekBar extends View {
         canvas.drawRoundRect(thumbRect, hw, hw, thumbPaint);
     }
 
+    public void setThumbOnlyTouch(boolean thumbOnly) {
+        this.thumbOnlyTouch = thumbOnly;
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (!isEnabled()) return false;
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                if (thumbOnlyTouch) {
+                    float sx = endX > startX ? startX : getPaddingLeft() + thumbActiveHalfW + dp(4f);
+                    float ex = endX > startX ? endX : Math.max(sx + 1f, getWidth() - getPaddingRight() - thumbActiveHalfW - dp(4f));
+                    float frac = max > 0 ? Math.max(0f, Math.min(1f, (float) progress / max)) : 0f;
+                    float thumbX = sx + frac * (ex - sx);
+                    if (Math.abs(event.getX() - thumbX) > dp(18f)) {
+                        return false;
+                    }
+                }
                 ViewParent parent = getParent();
                 if (parent != null) parent.requestDisallowInterceptTouchEvent(true);
                 userDragging = true;

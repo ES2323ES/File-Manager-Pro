@@ -993,37 +993,50 @@ public final class TsToMp4Remuxer {
 
         @Override
         public void onVideoSample(byte[] data, int len, long timeUs, boolean isKeyFrame) {
-            if (!muxerStarted || videoTrackIdx < 0 || len <= 0) return;
+            if (!muxerStarted || videoTrackIdx < 0 || data == null || len <= 0) return;
+            int safeLen = Math.min(len, data.length);
+            if (safeLen <= 0) return;
             long pts = timeUs <= lastVideoPtsUs ? (lastVideoPtsUs + 1000L) : timeUs;
             lastVideoPtsUs = pts;
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             info.offset = 0;
-            info.size = len;
+            info.size = safeLen;
             info.presentationTimeUs = pts;
             info.flags = isKeyFrame ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
-            muxer.writeSampleData(videoTrackIdx, ByteBuffer.wrap(data, 0, len), info);
+            try {
+                muxer.writeSampleData(videoTrackIdx, ByteBuffer.wrap(data, 0, safeLen), info);
+            } catch (Throwable ignored) {
+            }
         }
 
         @Override
         public void onAudioSample(byte[] data, int len, long timeUs) {
-            if (!muxerStarted || audioTrackIdx < 0 || len <= 0) return;
+            if (!muxerStarted || audioTrackIdx < 0 || data == null || len <= 0) return;
+            int safeLen = Math.min(len, data.length);
+            if (safeLen <= 0) return;
             if (audioTranscoder != null) {
-                audioTranscoder.transcodeAndWrite(data, len, timeUs, muxer, audioTrackIdx,
-                        newPts -> {
-                            long safePts = newPts <= lastAudioPtsUs ? (lastAudioPtsUs + 1000L) : newPts;
-                            lastAudioPtsUs = safePts;
-                            return safePts;
-                        });
+                try {
+                    audioTranscoder.transcodeAndWrite(data, safeLen, timeUs, muxer, audioTrackIdx,
+                            newPts -> {
+                                long safePts = newPts <= lastAudioPtsUs ? (lastAudioPtsUs + 1000L) : newPts;
+                                lastAudioPtsUs = safePts;
+                                return safePts;
+                            });
+                } catch (Throwable ignored) {
+                }
                 return;
             }
             long pts = timeUs <= lastAudioPtsUs ? (lastAudioPtsUs + 1000L) : timeUs;
             lastAudioPtsUs = pts;
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             info.offset = 0;
-            info.size = len;
+            info.size = safeLen;
             info.presentationTimeUs = pts;
             info.flags = 0;
-            muxer.writeSampleData(audioTrackIdx, ByteBuffer.wrap(data, 0, len), info);
+            try {
+                muxer.writeSampleData(audioTrackIdx, ByteBuffer.wrap(data, 0, safeLen), info);
+            } catch (Throwable ignored) {
+            }
         }
 
         @Override

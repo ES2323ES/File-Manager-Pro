@@ -130,6 +130,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     private File rootBoundary = null;
     private File selectedCategoryFolder = null;
     private final Map<String, Integer> categoryFolderCounts = new ConcurrentHashMap<>();
+    private final Map<String, File> categoryFolderFirstFile = new ConcurrentHashMap<>();
     private final Map<String, Integer> dirItemCountCache = new ConcurrentHashMap<>();
     private final Set<String> pendingDirCountPaths = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> cachedSizesByPath = new ConcurrentHashMap<>();
@@ -568,8 +569,9 @@ public class FileBrowserActivity extends AppCompatActivity {
         for (String q : recent) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(4), dp(4), dp(10), dp(4));
+            row.setPadding(dp(4), dp(4), dp(8), dp(4));
 
             ImageView ivIcon = new ImageView(this);
             ivIcon.setImageResource(R.drawable.ic_recent);
@@ -582,6 +584,19 @@ public class FileBrowserActivity extends AppCompatActivity {
             tvQ.setTextSize(ThemeHelper.spScaled(this, 12.5f));
             tvQ.setPadding(dp(5), 0, dp(4), 0);
             row.addView(tvQ);
+
+            ImageButton btnRemove = new ImageButton(this);
+            btnRemove.setBackgroundColor(Color.TRANSPARENT);
+            btnRemove.setImageResource(R.drawable.ic_close);
+            btnRemove.setColorFilter(textSecondary);
+            btnRemove.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            btnRemove.setPadding(dp(4), dp(4), dp(4), dp(4));
+            btnRemove.setContentDescription("מחק חיפוש אחרון");
+            btnRemove.setOnClickListener(v -> {
+                PrefsManager.removeRecentSearch(this, q);
+                renderRecentSearches();
+            });
+            row.addView(btnRemove, new LinearLayout.LayoutParams(dp(22), dp(22)));
 
             row.setOnClickListener(v -> {
                 etSearch.setText(q);
@@ -1046,7 +1061,69 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void initInitialDirectory() {
-        String initialDirExtra = getIntent().getStringExtra(EXTRA_INITIAL_DIR);
+        Intent launchIntent = getIntent();
+        if (launchIntent != null) {
+            String action = launchIntent.getAction();
+            if ("android.hardware.usb.action.USB_DEVICE_ATTACHED".equals(action)) {
+                currentMode = MODE_USB_OTG;
+                baseCategoryTitle = "כונן USB חיצוני";
+                tvHeaderTitle.setText(baseCategoryTitle);
+                List<StorageUtils.StorageStat> otgs = StorageUtils.getConnectedUsbOtgVolumes(this);
+                rootBoundary = otgs.isEmpty() ? null : otgs.get(0).root;
+                currentDir = rootBoundary;
+                if (currentDir == null) {
+                    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        List<StorageUtils.StorageStat> delayed = StorageUtils.getConnectedUsbOtgVolumes(this);
+                        if (!delayed.isEmpty() && delayed.get(0).root != null) {
+                            rootBoundary = delayed.get(0).root;
+                            currentDir = rootBoundary;
+                            loadFilesForCurrentMode(false);
+                        }
+                    }, 900L);
+                }
+                return;
+            }
+            if (Intent.ACTION_VIEW.equals(action) && launchIntent.getData() != null) {
+                Uri dataUri = launchIntent.getData();
+                File targetFolder = null;
+                if ("file".equalsIgnoreCase(dataUri.getScheme()) && dataUri.getPath() != null) {
+                    targetFolder = new File(dataUri.getPath());
+                } else if (dataUri.getPath() != null) {
+                    int idx = dataUri.getPath().indexOf("/storage/");
+                    if (idx >= 0) targetFolder = new File(dataUri.getPath().substring(idx));
+                }
+                if (targetFolder != null && targetFolder.exists() && targetFolder.isDirectory()) {
+                    StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
+                    List<StorageUtils.StorageStat> otgs = StorageUtils.getConnectedUsbOtgVolumes(this);
+                    boolean matchedOtg = false;
+                    for (StorageUtils.StorageStat otg : otgs) {
+                        if (otg.root != null && targetFolder.getAbsolutePath().startsWith(otg.root.getAbsolutePath())) {
+                            currentMode = MODE_USB_OTG;
+                            rootBoundary = otg.root;
+                            matchedOtg = true;
+                            break;
+                        }
+                    }
+                    if (!matchedOtg) {
+                        if (sd.available && sd.root != null && targetFolder.getAbsolutePath().startsWith(sd.root.getAbsolutePath())) {
+                            currentMode = MODE_SD_CARD;
+                            rootBoundary = sd.root;
+                        } else {
+                            currentMode = MODE_INTERNAL;
+                            rootBoundary = Environment.getExternalStorageDirectory();
+                        }
+                    }
+                    currentDir = targetFolder;
+                    baseCategoryTitle = currentMode.equals(MODE_SD_CARD) ? "כרטיס SD"
+                            : (currentMode.equals(MODE_USB_OTG) ? "כונן USB חיצוני" : "אחסון ראשי");
+                    tvHeaderTitle.setText(targetFolder.equals(rootBoundary) ? baseCategoryTitle : targetFolder.getName());
+                    return;
+                }
+            }
+        }
+
+        String initialDirExtra = launchIntent != null ? launchIntent.getStringExtra(EXTRA_INITIAL_DIR) : null;
         if (initialDirExtra != null && !initialDirExtra.isEmpty()) {
             File target = new File(initialDirExtra);
             if (target.exists() && target.isDirectory()) {
@@ -1249,16 +1326,20 @@ public class FileBrowserActivity extends AppCompatActivity {
                     List<File> allMediaFiles = FileScanCache.extractCategoryFiles(snap, currentMode);
                     Map<String, File> foldersByPath = new LinkedHashMap<>();
                     Map<String, Integer> countsByPath = new LinkedHashMap<>();
+                    Map<String, File> firstFileByPath = new LinkedHashMap<>();
                     for (File mf : allMediaFiles) {
                         File parent = mf.getParentFile();
                         if (parent == null) continue;
                         String key = parent.getAbsolutePath();
                         if (!foldersByPath.containsKey(key)) foldersByPath.put(key, parent);
+                        if (!firstFileByPath.containsKey(key)) firstFileByPath.put(key, mf);
                         Integer prev = countsByPath.get(key);
                         countsByPath.put(key, (prev == null ? 0 : prev) + 1);
                     }
                     categoryFolderCounts.clear();
                     categoryFolderCounts.putAll(countsByPath);
+                    categoryFolderFirstFile.clear();
+                    categoryFolderFirstFile.putAll(firstFileByPath);
                     result.addAll(foldersByPath.values());
                 }
             } else if (isIndexedCat) {
@@ -1473,12 +1554,24 @@ public class FileBrowserActivity extends AppCompatActivity {
             tvEmptyState.setVisibility(displayedFiles.isEmpty() ? View.VISIBLE : View.GONE);
             adapter.notifyDataSetChanged();
 
-            if (!nq.isEmpty() && isDirectoryMode() && currentDir != null) {
-                final File scanRoot = currentDir;
+            if (!nq.isEmpty()) {
+                final File scanRoot = isDirectoryMode() ? (currentDir != null ? currentDir : rootBoundary) : null;
                 final boolean showHidden = PrefsManager.isShowHidden(this);
                 searchExecutor.execute(() -> {
+                    FileIndexDatabase idxDb = FileIndexDatabase.getInstance(this);
+                    List<File> indexHits = idxDb.search(nq, scanRoot, showHidden, 2000);
                     List<File> deepMatches = new ArrayList<>();
-                    searchRecursiveFiles(scanRoot, nq, showHidden, deepMatches, seen, 0);
+                    for (File hit : indexHits) {
+                        if (seen.add(hit.getAbsolutePath())) {
+                            deepMatches.add(hit);
+                        }
+                    }
+                    if (!idxDb.hasIndexedEntries() && scanRoot != null) {
+                        searchRecursiveFiles(scanRoot, nq, showHidden, deepMatches, seen, 0);
+                        if (!deepMatches.isEmpty()) {
+                            idxDb.upsertFiles(deepMatches);
+                        }
+                    }
                     if (gen != searchGeneration.get() || deepMatches.isEmpty()) return;
                     sortFileList(deepMatches);
                     runOnUiThread(() -> {
@@ -1495,15 +1588,19 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void searchRecursiveFiles(File dir, String nq, boolean showHidden, List<File> out, Set<String> seen, int depth) {
-        if (dir == null || !dir.exists() || depth > 6 || out.size() >= 400) return;
+        if (dir == null || !dir.exists() || depth > 20 || out.size() >= 2000) return;
+        String abs = dir.getAbsolutePath();
+        if (abs.endsWith("/Android/data") || abs.endsWith("/Android/obb")) return;
         File[] children = dir.listFiles();
         if (children == null) return;
+        String[] tokens = FileIndexDatabase.tokenize(nq);
         for (File f : children) {
-            if (out.size() >= 400) return;
+            if (out.size() >= 2000) return;
             String name = f.getName();
             if (!showHidden && name.startsWith(".")) continue;
-            if (".FileManagerPro_Trash".equals(name) || "Android".equals(name)) continue;
-            if (normalizeSearchText(name).contains(nq) && seen.add(f.getAbsolutePath())) {
+            if (".FileManagerPro_Trash".equals(name)) continue;
+            String nameNorm = normalizeSearchText(name);
+            if (FileIndexDatabase.matchesAllTokens(nameNorm, tokens) && seen.add(f.getAbsolutePath())) {
                 out.add(f);
             }
             if (f.isDirectory()) {
@@ -1541,6 +1638,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     if (!folderName.isEmpty()) {
                         File nf = new File(currentDir, folderName);
                         if (nf.mkdirs()) {
+                            FileIndexDatabase.getInstance(this).upsertFile(nf);
                             FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "התיקייה נוצרה", Toast.LENGTH_SHORT).show();
@@ -1571,6 +1669,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     File target = StorageUtils.uniqueDestinationFile(currentDir, name);
                     try (FileOutputStream fos = new FileOutputStream(target)) {
                         fos.write("".getBytes(StandardCharsets.UTF_8));
+                        FileIndexDatabase.getInstance(this).upsertFile(target);
                         FileScanCache.invalidate();
                         loadFilesForCurrentMode();
                         Intent ed = new Intent(this, CodeEditorActivity.class);
@@ -1645,6 +1744,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                             "מחיקת קבצים", f.getName(), done, total);
                     if (toTrash) RecycleBinManager.moveToTrash(this, f);
                     else StorageUtils.deleteRecursively(f);
+                    FileIndexDatabase.getInstance(this).removePath(f.getAbsolutePath());
                     done++;
                 }
                 FileOperationNotificationHelper.finish(this, opId,
@@ -1780,6 +1880,12 @@ public class FileBrowserActivity extends AppCompatActivity {
                 FileOperationNotificationHelper.finish(this, opId,
                         isMove ? "ההעברה הושלמה" : "ההעתקה הושלמה",
                         actionVerb + " " + finalDone + " קבצים בהצלחה");
+                FileIndexDatabase idxDb = FileIndexDatabase.getInstance(this);
+                for (File src : items) {
+                    if (isMove) idxDb.removePath(src.getAbsolutePath());
+                    File pasted = new File(dst, src.getName());
+                    if (pasted.exists()) idxDb.upsertTree(pasted);
+                }
                 FileScanCache.invalidate();
                 runOnUiThread(() -> {
                     if (progressDialog.isShowing()) progressDialog.dismiss();
@@ -1838,6 +1944,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     if (!forcedExt.isEmpty() && !forcedExt.startsWith(".")) forcedExt = "." + forcedExt;
 
                     int renamed = 0;
+                    FileIndexDatabase idxDb = FileIndexDatabase.getInstance(this);
                     for (int i = 0; i < items.size(); i++) {
                         File f = items.get(i);
                         File parent = f.getParentFile();
@@ -1852,7 +1959,12 @@ public class FileBrowserActivity extends AppCompatActivity {
                         }
                         String num = String.format(Locale.US, "%02d", start + i);
                         File target = StorageUtils.uniqueDestinationFile(parent, prefix + num + ext);
-                        if (f.renameTo(target)) renamed++;
+                        String oldPath = f.getAbsolutePath();
+                        if (f.renameTo(target)) {
+                            renamed++;
+                            idxDb.removePath(oldPath);
+                            idxDb.upsertTree(target);
+                        }
                     }
                     exitMultiSelectMode();
                     if (renamed > 0) FileScanCache.invalidate();
@@ -1931,6 +2043,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                             ArchiveUtils.compressFiles(sources, targetArchive, fmt, pwd);
                             FileOperationNotificationHelper.finish(this, opId,
                                     "הארכיון נוצר בהצלחה", targetArchive.getName());
+                            FileIndexDatabase.getInstance(this).upsertFile(targetArchive);
                             FileScanCache.invalidate();
                             runOnUiThread(() -> {
                                 loadFilesForCurrentMode();
@@ -2037,6 +2150,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         byte[] buf = new byte[16 * 1024];
                         int r;
                         while ((r = fis.read(buf)) != -1) fos.write(buf, 0, r);
+                        FileIndexDatabase.getInstance(this).upsertFile(dest);
                         FileScanCache.invalidate();
                         loadFilesForCurrentMode(false);
                         Toast.makeText(this, "הקובץ שוחזר: " + dest.getName(), Toast.LENGTH_LONG).show();
@@ -2066,11 +2180,13 @@ public class FileBrowserActivity extends AppCompatActivity {
                         if (which == 0) {
                             if (RecycleBinManager.restoreFromTrash(this, file)) {
                                 FileScanCache.invalidate();
+                                executor.execute(() -> FileIndexDatabase.getInstance(this).clearAndRebuildSync(this));
                                 loadFilesForCurrentMode();
                                 Toast.makeText(this, "הקובץ שוחזר בהצלחה", Toast.LENGTH_SHORT).show();
                             }
                         } else if (which == 1) {
                             StorageUtils.deleteRecursively(file);
+                            FileIndexDatabase.getInstance(this).removePath(file.getAbsolutePath());
                             FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
@@ -2247,7 +2363,11 @@ public class FileBrowserActivity extends AppCompatActivity {
                     String newName = input.getText().toString().trim();
                     if (!newName.isEmpty() && file.getParentFile() != null) {
                         File dest = new File(file.getParentFile(), newName);
+                        String oldPath = file.getAbsolutePath();
                         if (file.renameTo(dest)) {
+                            FileIndexDatabase idxDb = FileIndexDatabase.getInstance(this);
+                            idxDb.removePath(oldPath);
+                            idxDb.upsertTree(dest);
                             FileScanCache.invalidate();
                             loadFilesForCurrentMode();
                             Toast.makeText(this, "השם שונה בהצלחה", Toast.LENGTH_SHORT).show();
@@ -2265,8 +2385,10 @@ public class FileBrowserActivity extends AppCompatActivity {
     private void handleDeleteFile(File file) {
         final boolean toTrash = PrefsManager.isUseRecycleBin(this);
         Runnable performDelete = () -> {
+            String oldPath = file.getAbsolutePath();
             boolean ok = toTrash ? RecycleBinManager.moveToTrash(this, file) : StorageUtils.deleteRecursively(file);
             if (ok) {
+                FileIndexDatabase.getInstance(this).removePath(oldPath);
                 FileScanCache.invalidate();
                 loadFilesForCurrentMode();
                 Toast.makeText(this, toTrash ? "הועבר לסל המיחזור" : "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
@@ -2372,16 +2494,41 @@ public class FileBrowserActivity extends AppCompatActivity {
             h.tvName.setTextColor(textPrimary);
             h.tvHint.setTextColor(accent);
 
+            if (h.ivFolderPlayBadge != null) {
+                h.ivFolderPlayBadge.setVisibility(View.GONE);
+            }
+
             if (f.isDirectory() && isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
-                h.ivIcon.setTag(null);
-                h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                h.ivIcon.clearColorFilter();
-                if (MODE_VIDEOS.equals(currentMode)) {
-                    h.ivIcon.setImageResource(R.drawable.ic_video);
-                } else if (MODE_AUDIO.equals(currentMode)) {
-                    h.ivIcon.setImageResource(R.drawable.ic_audio);
+                if (isGrid && (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))) {
+                    File firstThumbFile = categoryFolderFirstFile.get(f.getAbsolutePath());
+                    if (firstThumbFile != null) {
+                        FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, firstThumbFile, h.ivIcon);
+                        if (MODE_VIDEOS.equals(currentMode) && h.ivFolderPlayBadge != null) {
+                            GradientDrawable skyBadge = new GradientDrawable();
+                            skyBadge.setShape(GradientDrawable.OVAL);
+                            skyBadge.setColor(Color.parseColor("#38BDF8"));
+                            h.ivFolderPlayBadge.setBackground(skyBadge);
+                            h.ivFolderPlayBadge.setImageResource(R.drawable.ic_play);
+                            h.ivFolderPlayBadge.setColorFilter(Color.WHITE);
+                            h.ivFolderPlayBadge.setVisibility(View.VISIBLE);
+                        }
+                    } else {
+                        h.ivIcon.setTag(null);
+                        h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                        h.ivIcon.clearColorFilter();
+                        h.ivIcon.setImageResource(MODE_VIDEOS.equals(currentMode) ? R.drawable.ic_video : R.drawable.ic_images);
+                    }
                 } else {
-                    h.ivIcon.setImageResource(R.drawable.ic_images);
+                    h.ivIcon.setTag(null);
+                    h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    h.ivIcon.clearColorFilter();
+                    if (MODE_VIDEOS.equals(currentMode)) {
+                        h.ivIcon.setImageResource(R.drawable.ic_video);
+                    } else if (MODE_AUDIO.equals(currentMode)) {
+                        h.ivIcon.setImageResource(R.drawable.ic_audio);
+                    } else {
+                        h.ivIcon.setImageResource(R.drawable.ic_images);
+                    }
                 }
             } else {
                 FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
@@ -2460,6 +2607,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         class VH extends RecyclerView.ViewHolder {
             final CardView rowCard;
             final ImageView ivIcon;
+            final ImageView ivFolderPlayBadge;
             final TextView tvName;
             final TextView tvMeta;
             final TextView tvHint;
@@ -2468,6 +2616,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 super(itemView);
                 rowCard = itemView.findViewById(R.id.rowCard);
                 ivIcon = itemView.findViewById(R.id.ivFileIcon);
+                ivFolderPlayBadge = itemView.findViewById(R.id.ivFolderPlayBadge);
                 tvName = itemView.findViewById(R.id.tvFileName);
                 tvMeta = itemView.findViewById(R.id.tvFileMeta);
                 tvHint = itemView.findViewById(R.id.tvFileActionHint);

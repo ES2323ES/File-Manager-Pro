@@ -19,17 +19,35 @@
         android:orientation="vertical"
         android:padding="10dp">
 
-        <ImageView
-            android:id="@+id/ivFileIcon"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:clickable="true"
-            android:contentDescription="אפשרויות עריכה"
-            android:focusable="true"
-            android:padding="2dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_file_generic" />
+        <FrameLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content">
+
+            <ImageView
+                android:id="@+id/ivFileIcon"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:contentDescription="אפשרויות עריכה"
+                android:focusable="true"
+                android:padding="2dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_file_generic" />
+
+            <ImageView
+                android:id="@+id/ivFolderPlayBadge"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_gravity="center"
+                android:clickable="false"
+                android:contentDescription="תיקיית וידאו"
+                android:focusable="false"
+                android:padding="4dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_play"
+                android:visibility="gone" />
+        </FrameLayout>
 
         <TextView
             android:id="@+id/tvFileName"

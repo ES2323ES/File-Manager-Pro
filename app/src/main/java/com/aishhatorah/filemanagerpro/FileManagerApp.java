@@ -17,6 +17,7 @@ public class FileManagerApp extends Application {
             try {
                 RecycleBinManager.migrateLegacyTrashIfNeeded(this);
                 FileScanCache.prewarm(this);
+                FileIndexDatabase.getInstance(this).clearAndRebuildSync(this);
             } catch (Throwable t) {
                 AppLogger.warn(this, "Startup", "Background prewarm warning: " + t.getMessage());
             }

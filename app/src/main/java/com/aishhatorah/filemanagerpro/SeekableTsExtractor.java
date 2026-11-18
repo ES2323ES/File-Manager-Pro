@@ -34,7 +34,7 @@ public final class SeekableTsExtractor implements Extractor {
         long getFallbackDurationMs();
     }
 
-    private static final int TS_SEARCH_BYTES = 4 * 1024 * 1024;
+    private static final int TS_SEARCH_BYTES = 1024 * 1024;
     private static final int TS_PACKET_BYTES = MpegTsNormalizer.TS_PACKET_SIZE;
 
     private final Extractor delegate;
@@ -84,10 +84,22 @@ public final class SeekableTsExtractor implements Extractor {
         if (base == null || base.length == 0) {
             return new Extractor[0];
         }
+        int tsIndex = 0;
+        for (int i = 0; i < base.length; i++) {
+            Extractor ext = base[i];
+            if (ext instanceof androidx.media3.extractor.ts.TsExtractor
+                    || ext.getClass().getSimpleName().contains("TsExtractor")) {
+                tsIndex = i;
+                break;
+            }
+        }
         Extractor[] wrapped = new Extractor[base.length];
-        wrapped[0] = new SeekableTsExtractor(base[0], durationProvider);
-        for (int i = 1; i < base.length; i++) {
-            wrapped[i] = base[i];
+        wrapped[0] = new SeekableTsExtractor(base[tsIndex], durationProvider);
+        int outIdx = 1;
+        for (int i = 0; i < base.length; i++) {
+            if (i != tsIndex) {
+                wrapped[outIdx++] = base[i];
+            }
         }
         return wrapped;
     }
@@ -95,8 +107,11 @@ public final class SeekableTsExtractor implements Extractor {
     @Override
     public boolean sniff(@NonNull ExtractorInput input) throws IOException {
         streamLengthBytes = input.getLength();
-        if (delegate.sniff(input)) {
-            return true;
+        try {
+            if (delegate.sniff(input)) {
+                return true;
+            }
+        } catch (RuntimeException ignored) {
         }
         // גיבוי אם אחת הפאקטים הראשונים פגומה: בדיקת סנכרון 0x47 בתוך 16KB ראשונים
         input.resetPeekPosition();
@@ -170,7 +185,11 @@ public final class SeekableTsExtractor implements Extractor {
         if (streamLengthBytes == C.LENGTH_UNSET) {
             streamLengthBytes = input.getLength();
         }
-        return delegate.read(input, seekPosition);
+        try {
+            return delegate.read(input, seekPosition);
+        } catch (RuntimeException e) {
+            throw new IOException("TS stream read error", e);
+        }
     }
 
     @Override

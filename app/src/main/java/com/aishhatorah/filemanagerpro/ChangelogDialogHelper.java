@@ -96,6 +96,19 @@ public class ChangelogDialogHelper {
         headerRow.addView(rightTitleGroup, rightLp);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.6 =====================
+        SpannableStringBuilder v36 = new SpannableStringBuilder();
+        appendBullet(v36, "מנוע חיפוש מבוסס אינדקס לכל הקבצים והתיקיות: ", accent,
+                "מסד נתונים מהיר מבוסס SQLite (WAL) המאתר מיידית קבצים ותיקיות בכל האחסון, בכרטיס SD ובכונן USB OTG בכל אורך של שאילתה.", textPrimary);
+        appendBullet(v36, "\n\nמנוע וידאו יציב לקבצי MTS, תמונה בתוך תמונה ופתיחה אוניברסלית: ", accent,
+                "תיקון תקיעות, בעיות זרימה וקריסות ב-MTS, התאמת יחס התמונה של הווידאו לפני פתיחתו, תמונה בתוך תמונה (PiP) מתפריט ה-+ והגדרות הווידאו, וכניסה כברירת מחדל בפתיחה באמצעות ובחיבור כונני USB OTG.", textPrimary);
+        appendBullet(v36, "\n\nאחסון חיצוני, רשת תיקיות מדיה, אודיו וליטושי UI: ", accent,
+                "לשונית הגדרות והוצאה בטוחה בלחיצה על כרטיס זיכרון או USB במסך הבית, תצוגה מקדימה לתיקיות תמונות וסירטונים ברשת (עם עיגול תכלת בסירטונים), דקות והזזת פס מהנקודה העבה בלבד בשורה החכמה למטה, X למחיקה בחיפושים אחרונים, תיבת מהירות שמע מצומצמת, איפוס טשטוש בהגדרות ופריסת מסך אודות מעודכנת.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.6", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+                accent, textPrimary, textSecondary, subtleBg, divider, v36);
+
         // ===================== גירסה 0.3.5 =====================
         SpannableStringBuilder v35 = new SpannableStringBuilder();
         appendBullet(v35, "רקע מותאם אישית, ממשק זכוכית שקופה וערכות נושא מאוזנות: ", accent,
@@ -107,8 +120,8 @@ public class ChangelogDialogHelper {
         appendBullet(v35, "\n\nתיקוני יציבות, גודל אייקונים ודיוק סורק הקבצים: ", accent,
                 "הגדלת אייקוני הבית והקטגוריות, שיפור ביצועי דחיסת קבצים ומניעת חריגות זיכרון בארכיונים גדולים, הוספת .nomedia לסל המיחזור, דיוק מונה הנפחים בסורק האחסון, ושדרוג הדיאלוגים ומדריך המשתמש.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.3.5", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.3.5", "עיצוב זכוכית חלבית, עורך וידאו וארכיונים משופרים",
                 accent, textPrimary, textSecondary, subtleBg, divider, v35);
 
         // ===================== גירסה 0.3.4 =====================

@@ -396,15 +396,42 @@ public class SettingsActivity extends AppCompatActivity {
         }
 
         int curBlur = PrefsManager.getWallpaperBlurRadius(this);
+        LinearLayout blurHeaderRow = new LinearLayout(this);
+        blurHeaderRow.setOrientation(LinearLayout.HORIZONTAL);
+        blurHeaderRow.setGravity(Gravity.CENTER_VERTICAL);
+        blurHeaderRow.setPadding(0, dp(12), 0, dp(4));
+
         TextView tvBlurLabel = new TextView(this);
         tvBlurLabel.setText("עוצמת טשטוש תמונת הרקע: " + (curBlur == 0 ? "ללא טשטוש (0%)" : Math.round((curBlur / 28f) * 100f) + "%"));
         tvBlurLabel.setTextColor(textPrimary);
         tvBlurLabel.setTextSize(ThemeHelper.spScaled(this, 13f));
         tvBlurLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        tvBlurLabel.setPadding(0, dp(12), 0, dp(4));
-        homeCard.addView(tvBlurLabel);
+        blurHeaderRow.addView(tvBlurLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        SeekBar sbBlur = new SeekBar(this);
+        final boolean[] isBlurDefault = {curBlur == PrefsManager.DEFAULT_WALLPAPER_BLUR};
+        final SeekBar sbBlur = new SeekBar(this);
+        final ImageButton btnResetBlur = ThemeHelper.createBorderlessSvgButton(
+                this,
+                R.drawable.ic_reset,
+                isBlurDefault[0] ? textSecondary : accent,
+                "איפוס טשטוש לברירת המחדל",
+                32,
+                6,
+                null);
+        btnResetBlur.setAlpha(isBlurDefault[0] ? 0.5f : 1.0f);
+        btnResetBlur.setOnClickListener(v -> {
+            PrefsManager.setWallpaperBlurRadius(this, PrefsManager.DEFAULT_WALLPAPER_BLUR);
+            ThemeHelper.invalidateWallpaperCache();
+            ThemeHelper.applyWallpaperBackdrop(this, root, theme);
+            sbBlur.setProgress(PrefsManager.DEFAULT_WALLPAPER_BLUR);
+            tvBlurLabel.setText("עוצמת טשטוש תמונת הרקע: " + Math.round((PrefsManager.DEFAULT_WALLPAPER_BLUR / 28f) * 100f) + "%");
+            btnResetBlur.setColorFilter(textSecondary);
+            btnResetBlur.setAlpha(0.5f);
+            Toast.makeText(this, "עוצמת הטשטוש אופסה לברירת המחדל", Toast.LENGTH_SHORT).show();
+        });
+        blurHeaderRow.addView(btnResetBlur);
+        homeCard.addView(blurHeaderRow);
+
         ThemeHelper.applySeekBarTint(sbBlur, accent);
         sbBlur.setMax(28);
         sbBlur.setProgress(curBlur);
@@ -412,6 +439,9 @@ public class SettingsActivity extends AppCompatActivity {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 tvBlurLabel.setText("עוצמת טשטוש תמונת הרקע: " + (progress == 0 ? "ללא טשטוש (0%)" : Math.round((progress / 28f) * 100f) + "%"));
+                boolean defNow = (progress == PrefsManager.DEFAULT_WALLPAPER_BLUR);
+                btnResetBlur.setColorFilter(defNow ? textSecondary : accent);
+                btnResetBlur.setAlpha(defNow ? 0.5f : 1.0f);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override

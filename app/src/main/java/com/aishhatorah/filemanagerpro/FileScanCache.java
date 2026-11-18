@@ -47,7 +47,9 @@ public final class FileScanCache {
 
     public static StorageUtils.CategoryBytesSummary refreshNow(Context context) {
         if (context == null) return new StorageUtils.CategoryBytesSummary();
-        return getSnapshot(context, PrefsManager.isShowHidden(context), true).summary;
+        StorageUtils.CategoryIndexSnapshot snap = getSnapshot(context, PrefsManager.isShowHidden(context), true);
+        FileIndexDatabase.getInstance(context).clearAndRebuildSync(context);
+        return snap.summary;
     }
 
     public static StorageUtils.CategoryIndexSnapshot getSnapshot(Context context, boolean showHidden, boolean forceRefresh) {
