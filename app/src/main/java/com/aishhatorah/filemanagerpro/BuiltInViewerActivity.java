@@ -488,8 +488,6 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             setSystemBarsFullscreen(false);
             return;
         }
-    private void applyMediaImmersiveAndLayoutState() {
-        if (!isImageMode && !isVideoMode) return;
         boolean isLandscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
         if (isVideoMode && (isVideoLocked || isInPipMode)) {
             mediaControlsHidden = true;
