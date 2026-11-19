@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.Layout;
 import android.text.Spannable;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.text.style.BackgroundColorSpan;
 import android.transition.AutoTransition;
@@ -74,8 +75,12 @@ public class CodeEditorActivity extends AppCompatActivity {
     private boolean suppressHistory = false;
     private boolean suppressMatchClear = false;
 
+    private static final int MAX_UNDO_ENTRIES = 40;
+    private static final long MAX_UNDO_TOTAL_CHARS = 2_500_000L;
+
     private final Deque<String> undoStack = new ArrayDeque<>();
     private final Deque<String> redoStack = new ArrayDeque<>();
+    private long undoTotalChars = 0L;
     private final List<int[]> searchMatches = new ArrayList<>();
     private int activeMatchIndex = -1;
 
@@ -86,6 +91,7 @@ public class CodeEditorActivity extends AppCompatActivity {
     private HorizontalScrollView editorHScroll;
     private ScrollView editorVScroll;
     private WebView markdownWebView;
+    private LinearLayout metaContainer;
     private HorizontalScrollView metaScroll;
     private LinearLayout findReplaceBar;
     private EditText etFindInput;
@@ -152,7 +158,7 @@ public class CodeEditorActivity extends AppCompatActivity {
         rootLayout.setOrientation(LinearLayout.VERTICAL);
         rootLayout.setBackgroundColor(bg);
 
-        // סרגל עליון נקי: חזרה, כותרת, Undo/Redo, אייקון מידע, (ב-Markdown: עין לתצוגה/קוד) ושמור
+        // סרגל עליון נקי: חזרה, שם הקובץ, ביטול וביצוע מחדש ושמירה בלבד
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -169,6 +175,7 @@ public class CodeEditorActivity extends AppCompatActivity {
         tvTitle.setTextSize(15f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setSingleLine(true);
+        tvTitle.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         tLp.setMarginStart(10);
         tLp.setMarginEnd(6);
@@ -177,16 +184,6 @@ public class CodeEditorActivity extends AppCompatActivity {
         if (!readOnlyMode) {
             topBar.addView(makeIconBtn(R.drawable.ic_undo, textPrimary, v -> undo()));
             topBar.addView(makeIconBtn(R.drawable.ic_redo, textPrimary, v -> redo()));
-        }
-
-        btnInfoToggle = makeIconBtn(R.drawable.ic_info, textSecondary, v -> toggleInfoBar(accent, textSecondary));
-        topBar.addView(btnInfoToggle);
-
-        if (isMarkdownFile) {
-            previewMarkdown = true;
-            btnMarkdownEye = makeIconBtn(R.drawable.ic_visibility_off, accent,
-                    v -> toggleMarkdownPreview(darkBg, textPrimary, accent));
-            topBar.addView(btnMarkdownEye);
         }
 
         if (!readOnlyMode) {
@@ -205,15 +202,72 @@ public class CodeEditorActivity extends AppCompatActivity {
         }
         rootLayout.addView(topBar);
 
-        // שורת מידע וכלים קומפקטית (נפתחת מאייקון המידע): פרטים, תחביר, קידוד, חיפוש ושבירת שורות
+        int glassFill = ThemeHelper.getGlassCardFillColor(this, theme, true);
+        int dividerColor = ThemeHelper.getDividerColor(this, theme);
+        float density = getResources().getDisplayMetrics().density;
+
+        // שורת כלים קבועה מתחת לסרגל העליון בסגנון האפליקציה: מידע, תחביר, קידוד, חיפוש, שבירת שורות, (ועין ב-Markdown)
+        LinearLayout toolsBarContainer = new LinearLayout(this);
+        toolsBarContainer.setOrientation(LinearLayout.VERTICAL);
+        toolsBarContainer.setBackgroundColor(glassFill);
+
+        HorizontalScrollView toolsScroll = new HorizontalScrollView(this);
+        toolsScroll.setHorizontalScrollBarEnabled(false);
+        toolsScroll.setFillViewport(true);
+
+        LinearLayout toolsRow = new LinearLayout(this);
+        toolsRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        toolsRow.setPadding(Math.round(12 * density), Math.round(5 * density), Math.round(12 * density), Math.round(5 * density));
+        toolsRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        btnInfoToggle = makeIconBtn(R.drawable.ic_info, textSecondary, v -> toggleInfoBar(accent, textSecondary));
+        toolsRow.addView(btnInfoToggle);
+
+        tvLangChip = makeChip(currentLang.displayName, accent, v -> showLanguagePicker(darkBg));
+        toolsRow.addView(tvLangChip);
+
+        tvEncChip = makeChip("UTF-8", textSecondary, v -> showEncodingPicker());
+        toolsRow.addView(tvEncChip);
+
+        ImageButton btnSearchInBar = makeIconBtn(R.drawable.ic_search, textPrimary, v -> toggleFindReplaceBar());
+        toolsRow.addView(btnSearchInBar);
+
+        btnWrapToggle = makeIconBtn(R.drawable.ic_wrap, wordWrap ? accent : textSecondary,
+                v -> toggleWordWrap(accent, textSecondary));
+        toolsRow.addView(btnWrapToggle);
+
+        if (isMarkdownFile) {
+            previewMarkdown = true;
+            btnMarkdownEye = makeIconBtn(R.drawable.ic_visibility_off, accent,
+                    v -> toggleMarkdownPreview(darkBg, textPrimary, accent));
+            toolsRow.addView(btnMarkdownEye);
+        }
+
+        toolsScroll.addView(toolsRow, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        toolsBarContainer.addView(toolsScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        View toolsDivider = new View(this);
+        toolsDivider.setBackgroundColor(dividerColor);
+        toolsBarContainer.addView(toolsDivider, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density))));
+        rootLayout.addView(toolsBarContainer);
+
+        // שורת ספירה נפתחת בלחיצה על אייקון המידע (שורות / מילים / תווים בלבד)
+        metaContainer = new LinearLayout(this);
+        metaContainer.setOrientation(LinearLayout.VERTICAL);
+        metaContainer.setBackgroundColor(glassFill);
+        metaContainer.setVisibility(View.GONE);
+
         metaScroll = new HorizontalScrollView(this);
         metaScroll.setHorizontalScrollBarEnabled(false);
-        metaScroll.setBackgroundColor(cardBg);
-        metaScroll.setVisibility(View.GONE);
+        metaScroll.setFillViewport(true);
         LinearLayout metaRow = new LinearLayout(this);
         metaRow.setOrientation(LinearLayout.HORIZONTAL);
         metaRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        metaRow.setPadding(16, 8, 16, 8);
+        metaRow.setPadding(Math.round(16 * density), Math.round(6 * density), Math.round(16 * density), Math.round(6 * density));
         metaRow.setGravity(Gravity.CENTER_VERTICAL);
 
         tvStatsBar = new TextView(this);
@@ -221,24 +275,19 @@ public class CodeEditorActivity extends AppCompatActivity {
         tvStatsBar.setTextSize(12f);
         metaRow.addView(tvStatsBar);
 
-        tvLangChip = makeChip("תחביר: " + currentLang.displayName, accent, v -> showLanguagePicker(darkBg));
-        metaRow.addView(tvLangChip);
+        metaScroll.addView(metaRow, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        metaContainer.addView(metaScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        tvEncChip = makeChip("קידוד: UTF-8", textSecondary, v -> showEncodingPicker());
-        metaRow.addView(tvEncChip);
-
-        ImageButton btnSearchInBar = makeIconBtn(R.drawable.ic_search, textPrimary, v -> toggleFindReplaceBar());
-        metaRow.addView(btnSearchInBar);
-
-        btnWrapToggle = makeIconBtn(R.drawable.ic_wrap, wordWrap ? accent : textSecondary,
-                v -> toggleWordWrap(accent, textSecondary));
-        metaRow.addView(btnWrapToggle);
-
-        metaScroll.addView(metaRow);
-        rootLayout.addView(metaScroll);
+        View metaDivider = new View(this);
+        metaDivider.setBackgroundColor(dividerColor);
+        metaContainer.addView(metaDivider, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density))));
+        rootLayout.addView(metaContainer);
 
         // שורת חיפוש והחלפה מוטמעת (כמו בחיפוש קבצים + החלפה והתאמות מרובות)
-        findReplaceBar = buildInlineFindReplaceBar(theme, cardBg, textPrimary, textSecondary, accent, darkBg);
+        findReplaceBar = buildInlineFindReplaceBar(theme, glassFill, textPrimary, textSecondary, accent, darkBg);
         findReplaceBar.setVisibility(View.GONE);
         rootLayout.addView(findReplaceBar);
 
@@ -310,7 +359,7 @@ public class CodeEditorActivity extends AppCompatActivity {
         editorView.setText(initialContent);
         CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
         suppressHistory = false;
-        undoStack.push(initialContent);
+        pushUndoSnapshot(initialContent);
         updateStats();
         editorView.post(() -> gutterView.syncFromEditor(editorView));
         if (previewMarkdown) {
@@ -322,7 +371,7 @@ public class CodeEditorActivity extends AppCompatActivity {
 
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                before = s.toString();
+                before = !suppressHistory ? s.toString() : null;
             }
 
             @Override
@@ -332,11 +381,11 @@ public class CodeEditorActivity extends AppCompatActivity {
             @Override
             public void afterTextChanged(Editable s) {
                 if (!suppressHistory) {
-                    if (before != null && !before.equals(s.toString())) {
-                        undoStack.push(before);
-                        if (undoStack.size() > 50) undoStack.removeLast();
+                    if (before != null && !before.contentEquals(s)) {
+                        pushUndoSnapshot(before);
                         redoStack.clear();
                     }
+                    before = null;
                     dirty = true;
                     tvTitle.setText(displayTitle + " *");
                 }
@@ -379,6 +428,17 @@ public class CodeEditorActivity extends AppCompatActivity {
         return tv;
     }
 
+    private void pushUndoSnapshot(String snap) {
+        if (snap == null) return;
+        undoStack.push(snap);
+        undoTotalChars += snap.length();
+        while ((undoStack.size() > MAX_UNDO_ENTRIES || undoTotalChars > MAX_UNDO_TOTAL_CHARS)
+                && undoStack.size() > 2) {
+            String removed = undoStack.removeLast();
+            undoTotalChars -= removed.length();
+        }
+    }
+
     private String loadInitialText() {
         try {
             byte[] raw;
@@ -399,7 +459,12 @@ public class CodeEditorActivity extends AppCompatActivity {
                 return "";
             }
             return new String(raw, currentCharset);
-        } catch (Exception e) {
+        } catch (OutOfMemoryError oom) {
+            System.gc();
+            AppLogger.error(this, "CodeEditor", "OutOfMemory loading text", oom);
+            Toast.makeText(this, "הקובץ כבד מדי לטעינה מלאה בזיכרון", Toast.LENGTH_LONG).show();
+            return "";
+        } catch (Throwable e) {
             AppLogger.error(this, "CodeEditor", "Load failed", e);
             Toast.makeText(this, "שגיאה בקריאת הקובץ: " + e.getMessage(), Toast.LENGTH_LONG).show();
             return "";
@@ -435,6 +500,7 @@ public class CodeEditorActivity extends AppCompatActivity {
         if (undoStack.size() <= 1) return;
         String current = editorView.getText().toString();
         String prev = undoStack.pop();
+        undoTotalChars -= prev.length();
         redoStack.push(current);
         suppressHistory = true;
         editorView.setText(prev);
@@ -445,7 +511,7 @@ public class CodeEditorActivity extends AppCompatActivity {
     private void redo() {
         if (redoStack.isEmpty()) return;
         String next = redoStack.pop();
-        undoStack.push(editorView.getText().toString());
+        pushUndoSnapshot(editorView.getText().toString());
         suppressHistory = true;
         editorView.setText(next);
         editorView.setSelection(next.length());
@@ -482,20 +548,24 @@ public class CodeEditorActivity extends AppCompatActivity {
     }
 
     private void toggleInfoBar(int accent, int textSecondary) {
-        AutoTransition transition = new AutoTransition();
-        transition.setDuration(170);
-        TransitionManager.beginDelayedTransition(rootLayout, transition);
-        boolean open = metaScroll.getVisibility() != View.VISIBLE;
-        metaScroll.setVisibility(open ? View.VISIBLE : View.GONE);
+        if (!PrefsManager.isReduceAnimations(this)) {
+            AutoTransition transition = new AutoTransition();
+            transition.setDuration(170);
+            TransitionManager.beginDelayedTransition(rootLayout, transition);
+        }
+        boolean open = metaContainer.getVisibility() != View.VISIBLE;
+        metaContainer.setVisibility(open ? View.VISIBLE : View.GONE);
         if (btnInfoToggle != null) {
             btnInfoToggle.setColorFilter(open ? accent : textSecondary);
         }
     }
 
     private void toggleFindReplaceBar() {
-        AutoTransition transition = new AutoTransition();
-        transition.setDuration(170);
-        TransitionManager.beginDelayedTransition(rootLayout, transition);
+        if (!PrefsManager.isReduceAnimations(this)) {
+            AutoTransition transition = new AutoTransition();
+            transition.setDuration(170);
+            TransitionManager.beginDelayedTransition(rootLayout, transition);
+        }
         boolean opening = findReplaceBar.getVisibility() != View.VISIBLE;
         findReplaceBar.setVisibility(opening ? View.VISIBLE : View.GONE);
         if (opening) {
@@ -747,11 +817,23 @@ public class CodeEditorActivity extends AppCompatActivity {
     }
 
     private void updateStats() {
-        String txt = editorView.getText().toString();
-        int chars = txt.length();
-        int lines = txt.isEmpty() ? 1 : txt.split("\n", -1).length;
-        String trimmed = txt.trim();
-        int words = trimmed.isEmpty() ? 0 : trimmed.split("\\s+").length;
+        Editable ed = editorView.getText();
+        int chars = ed != null ? ed.length() : 0;
+        int lines = 1;
+        int words = 0;
+        boolean inWord = false;
+        for (int i = 0; i < chars; i++) {
+            char c = ed.charAt(i);
+            if (c == '\n') {
+                lines++;
+            }
+            if (Character.isWhitespace(c)) {
+                inWord = false;
+            } else if (!inWord) {
+                words++;
+                inWord = true;
+            }
+        }
         tvStatsBar.setText(String.format(Locale.US, "%d שורות  •  %d מילים  •  %d תווים", lines, words, chars));
     }
 
@@ -763,7 +845,7 @@ public class CodeEditorActivity extends AppCompatActivity {
                 .setTitle("בחר שפת תחביר")
                 .setItems(names, (d, idx) -> {
                     currentLang = langs[idx];
-                    tvLangChip.setText("תחביר: " + currentLang.displayName);
+                    tvLangChip.setText(currentLang.displayName);
                     CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
                 }).show();
     }
@@ -775,7 +857,7 @@ public class CodeEditorActivity extends AppCompatActivity {
                 .setItems(labels, (d, idx) -> {
                     String cs = idx == 1 ? "ISO-8859-8" : (idx == 2 ? "windows-1255" : (idx == 3 ? "UTF-16" : "UTF-8"));
                     currentCharset = Charset.forName(cs);
-                    tvEncChip.setText("קידוד: " + cs);
+                    tvEncChip.setText(cs);
                     if (!dirty && !readOnlyMode) {
                         suppressHistory = true;
                         editorView.setText(loadInitialText());
@@ -814,6 +896,14 @@ public class CodeEditorActivity extends AppCompatActivity {
     public void finish() {
         super.finish();
         ThemeHelper.overrideCloseTransition(this);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (isFinishing() && targetFile != null) {
+            CacheCleanupManager.cleanupPreviewFileIfManagedCache(this, targetFile);
+        }
     }
 
     /**
