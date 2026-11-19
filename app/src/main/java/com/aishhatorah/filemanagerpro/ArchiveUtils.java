@@ -23,6 +23,7 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -365,43 +366,134 @@ public class ArchiveUtils {
             return extractRawZipWithOptionalPassword(archiveFile, destinationDir, canonicalDestDir, password, cb, estTotal);
         }
 
-        int extractedCount = 0;
-        try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(new FileInputStream(archiveFile)))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
+        try (ZipFile zf = new ZipFile(archiveFile)) {
+            int zfTotal = Math.max(estTotal, Math.max(1, zf.size()));
+            int extractedCount = 0;
+            Enumeration<? extends ZipEntry> entries = zf.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
                 File outFile = safeResolve(destinationDir, canonicalDestDir, entry.getName());
                 if (entry.isDirectory()) {
                     outFile.mkdirs();
                 } else {
-                    if (cb != null) cb.onProgress(outFile.getName(), extractedCount, estTotal);
+                    if (cb != null) cb.onProgress(outFile.getName(), extractedCount, zfTotal);
                     File parent = outFile.getParentFile();
                     if (parent != null && !parent.exists()) parent.mkdirs();
-                    try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile))) {
-                        copyStream(zis, bos);
+                    try (InputStream is = zf.getInputStream(entry);
+                         BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                        copyStream(is, bos);
                     }
                     extractedCount++;
-                    if (cb != null) cb.onProgress(outFile.getName(), extractedCount, estTotal);
+                    if (cb != null) cb.onProgress(outFile.getName(), extractedCount, zfTotal);
                 }
-                zis.closeEntry();
+            }
+            return extractedCount;
+        } catch (SecurityException se) {
+            throw se;
+        } catch (IOException zfErr) {
+            int extractedCount = 0;
+            try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE))) {
+                ZipEntry entry;
+                while ((entry = zis.getNextEntry()) != null) {
+                    File outFile = safeResolve(destinationDir, canonicalDestDir, entry.getName());
+                    if (entry.isDirectory()) {
+                        outFile.mkdirs();
+                    } else {
+                        if (cb != null) cb.onProgress(outFile.getName(), extractedCount, estTotal);
+                        File parent = outFile.getParentFile();
+                        if (parent != null && !parent.exists()) parent.mkdirs();
+                        try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                            copyStream(zis, bos);
+                        }
+                        extractedCount++;
+                        if (cb != null) cb.onProgress(outFile.getName(), extractedCount, estTotal);
+                    }
+                    zis.closeEntry();
+                }
+            }
+            return extractedCount;
+        }
+    }
+
+    public static void extractEntryToFile(File archiveFile, String targetEntryName, String password, File outFile) throws IOException {
+        if (archiveFile == null || !archiveFile.exists()) {
+            throw new IOException("קובץ הארכיון לא נמצא");
+        }
+        File parent = outFile.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        boolean success = false;
+        try {
+            String name = archiveFile.getName().toLowerCase(Locale.ROOT);
+            if (MediaFormatHelper.isTarGzArchive(name)) {
+                try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE));
+                     BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                    extractTarEntryToStream(is, targetEntryName, bos);
+                    bos.flush();
+                }
+                success = true;
+                return;
+            }
+            if (MediaFormatHelper.isTarArchive(name)) {
+                try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE);
+                     BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                    extractTarEntryToStream(is, targetEntryName, bos);
+                    bos.flush();
+                }
+                success = true;
+                return;
+            }
+            if (MediaFormatHelper.isGzArchive(name)) {
+                try (GZIPInputStream gis = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE));
+                     BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                    copyStream(gis, bos);
+                    bos.flush();
+                }
+                success = true;
+                return;
+            }
+            if ((password != null && !password.isEmpty()) || archiveRequiresPassword(archiveFile)) {
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                    extractRawZipEntryToStream(archiveFile, targetEntryName, password, bos, -1L);
+                    bos.flush();
+                }
+                success = true;
+                return;
+            }
+            try (ZipFile zf = new ZipFile(archiveFile)) {
+                ZipEntry ze = zf.getEntry(targetEntryName);
+                if (ze == null) {
+                    throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryName);
+                }
+                try (InputStream is = zf.getInputStream(ze);
+                     BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                    copyStream(is, bos);
+                    bos.flush();
+                }
+                success = true;
+            }
+        } finally {
+            if (!success && outFile.exists()) {
+                outFile.delete();
             }
         }
-        return extractedCount;
     }
 
     public static byte[] readEntryBytes(File archiveFile, String targetEntryName, String password) throws IOException {
         String name = archiveFile.getName().toLowerCase(Locale.ROOT);
         if (MediaFormatHelper.isTarGzArchive(name)) {
-            try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)))) {
+            try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE))) {
                 return readTarEntryBytes(is, targetEntryName);
             }
         }
         if (MediaFormatHelper.isTarArchive(name)) {
-            try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile))) {
+            try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE)) {
                 return readTarEntryBytes(is, targetEntryName);
             }
         }
         if (MediaFormatHelper.isGzArchive(name)) {
-            try (GZIPInputStream gis = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)))) {
+            try (GZIPInputStream gis = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE))) {
                 return readAllBytes(gis);
             }
         }
@@ -491,7 +583,9 @@ public class ArchiveUtils {
 
     // ==================== Zip Central Directory & ZipCrypto Engine ====================
 
+    private static final int COPY_BUFFER_SIZE = 128 * 1024;
     private static final long MAX_IN_MEMORY_ENTRY_BYTES = 48L * 1024L * 1024L;
+    private static final long ZIP32_SENTINEL = 0xFFFFFFFFL;
 
     private static byte[] readCentralDirectoryBytes(RandomAccessFile raf) throws IOException {
         long fileLen = raf.length();
@@ -520,15 +614,72 @@ public class ArchiveUtils {
             throw new IOException("קובץ ZIP אינו תקין");
         }
         ByteBuffer eocd = ByteBuffer.wrap(tail).order(ByteOrder.LITTLE_ENDIAN);
+        int totalEntries16 = eocd.getShort(eocdOffset + 10) & 0xFFFF;
         long cdSize = eocd.getInt(eocdOffset + 12) & 0xFFFFFFFFL;
         long cdOffset = eocd.getInt(eocdOffset + 16) & 0xFFFFFFFFL;
-        if (cdSize > 128L * 1024L * 1024L || cdOffset + cdSize > fileLen) {
+
+        // בדיקת Zip64 EOCD Locator (20 בתים לפני ה-EOCD הרגיל)
+        long eocdFilePos = (fileLen - tailLen) + eocdOffset;
+        if ((cdSize == ZIP32_SENTINEL || cdOffset == ZIP32_SENTINEL || totalEntries16 == 0xFFFF)
+                && eocdFilePos >= 20L) {
+            byte[] locator = new byte[20];
+            raf.seek(eocdFilePos - 20L);
+            raf.readFully(locator);
+            ByteBuffer locBb = ByteBuffer.wrap(locator).order(ByteOrder.LITTLE_ENDIAN);
+            if (locBb.getInt(0) == 0x07064b50) {
+                long zip64EocdOffset = locBb.getLong(8);
+                if (zip64EocdOffset >= 0 && zip64EocdOffset + 56L <= fileLen) {
+                    byte[] z64Eocd = new byte[56];
+                    raf.seek(zip64EocdOffset);
+                    raf.readFully(z64Eocd);
+                    ByteBuffer z64Bb = ByteBuffer.wrap(z64Eocd).order(ByteOrder.LITTLE_ENDIAN);
+                    if (z64Bb.getInt(0) == 0x06064b50) {
+                        cdSize = z64Bb.getLong(40);
+                        cdOffset = z64Bb.getLong(48);
+                    }
+                }
+            }
+        }
+
+        if (cdSize < 0 || cdSize > 256L * 1024L * 1024L || cdOffset < 0 || cdOffset + cdSize > fileLen) {
             throw new IOException("מבנה אינדקס הארכיון חורג מגודל הקובץ");
         }
         byte[] cdBytes = new byte[(int) cdSize];
         raf.seek(cdOffset);
         raf.readFully(cdBytes);
         return cdBytes;
+    }
+
+    private static long[] resolveZip64CdSizes(ByteBuffer bb, int extraStart, int extraLen,
+                                              long uncompSize, long compSize, long localHeaderOffset) {
+        long[] vals = new long[]{uncompSize, compSize, localHeaderOffset};
+        if (uncompSize != ZIP32_SENTINEL && compSize != ZIP32_SENTINEL && localHeaderOffset != ZIP32_SENTINEL) {
+            return vals;
+        }
+        int ePos = extraStart;
+        int eEnd = Math.min(bb.capacity(), extraStart + extraLen);
+        while (ePos + 4 <= eEnd) {
+            int headerId = bb.getShort(ePos) & 0xFFFF;
+            int dataSize = bb.getShort(ePos + 2) & 0xFFFF;
+            int fieldEnd = Math.min(eEnd, ePos + 4 + dataSize);
+            if (headerId == 0x0001) {
+                int cursor = ePos + 4;
+                if (vals[0] == ZIP32_SENTINEL && cursor + 8 <= fieldEnd) {
+                    vals[0] = bb.getLong(cursor);
+                    cursor += 8;
+                }
+                if (vals[1] == ZIP32_SENTINEL && cursor + 8 <= fieldEnd) {
+                    vals[1] = bb.getLong(cursor);
+                    cursor += 8;
+                }
+                if (vals[2] == ZIP32_SENTINEL && cursor + 8 <= fieldEnd) {
+                    vals[2] = bb.getLong(cursor);
+                }
+                break;
+            }
+            ePos += 4 + dataSize;
+        }
+        return vals;
     }
 
     private static List<ArchiveEntryInfo> listZipCentralDirectory(File zipFile) throws IOException {
@@ -546,11 +697,13 @@ public class ArchiveUtils {
                 int nameLen = bb.getShort(pos + 28) & 0xFFFF;
                 int extraLen = bb.getShort(pos + 30) & 0xFFFF;
                 int commentLen = bb.getShort(pos + 32) & 0xFFFF;
+                long localHeaderOffset = bb.getInt(pos + 42) & 0xFFFFFFFFL;
                 if (pos + 46 + nameLen > end) break;
                 String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                long[] z64 = resolveZip64CdSizes(bb, pos + 46 + nameLen, extraLen, uncompSize, compSize, localHeaderOffset);
                 boolean encrypted = (flags & 0x0001) != 0;
                 boolean dir = name.endsWith("/");
-                result.add(new ArchiveEntryInfo(name, uncompSize, compSize, dir, encrypted));
+                result.add(new ArchiveEntryInfo(name, z64[0], z64[1], dir, encrypted));
                 pos += 46 + nameLen + extraLen + commentLen;
             }
             return result;
@@ -572,12 +725,16 @@ public class ArchiveUtils {
                 int method = bb.getShort(pos + 10) & 0xFFFF;
                 long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
                 long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
+                long uncompSize = bb.getInt(pos + 24) & 0xFFFFFFFFL;
                 int nameLen = bb.getShort(pos + 28) & 0xFFFF;
                 int extraLen = bb.getShort(pos + 30) & 0xFFFF;
                 int commentLen = bb.getShort(pos + 32) & 0xFFFF;
                 long localHeaderOffset = bb.getInt(pos + 42) & 0xFFFFFFFFL;
                 if (pos + 46 + nameLen > end) break;
                 String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                long[] z64 = resolveZip64CdSizes(bb, pos + 46 + nameLen, extraLen, uncompSize, compSize, localHeaderOffset);
+                compSize = z64[1];
+                localHeaderOffset = z64[2];
                 pos += 46 + nameLen + extraLen + commentLen;
 
                 File outFile = safeResolve(destDir, canonicalDestDir, name);
@@ -588,7 +745,7 @@ public class ArchiveUtils {
                 if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(1, totalCount));
                 File parent = outFile.getParentFile();
                 if (parent != null && !parent.exists()) parent.mkdirs();
-                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile))) {
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
                     decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, bos, -1L);
                 }
                 extracted++;
@@ -598,7 +755,8 @@ public class ArchiveUtils {
         return extracted;
     }
 
-    private static byte[] readRawZipEntryBytes(File zipFile, String targetName, String password) throws IOException {
+    private static void extractRawZipEntryToStream(File zipFile, String targetName, String password,
+                                                   OutputStream out, long maxOutBytes) throws IOException {
         try (RandomAccessFile raf = new RandomAccessFile(zipFile, "r")) {
             byte[] cdBytes = readCentralDirectoryBytes(raf);
             ByteBuffer bb = ByteBuffer.wrap(cdBytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -611,21 +769,30 @@ public class ArchiveUtils {
                 int method = bb.getShort(pos + 10) & 0xFFFF;
                 long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
                 long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
+                long uncompSize = bb.getInt(pos + 24) & 0xFFFFFFFFL;
                 int nameLen = bb.getShort(pos + 28) & 0xFFFF;
                 int extraLen = bb.getShort(pos + 30) & 0xFFFF;
                 int commentLen = bb.getShort(pos + 32) & 0xFFFF;
                 long localHeaderOffset = bb.getInt(pos + 42) & 0xFFFFFFFFL;
                 if (pos + 46 + nameLen > end) break;
                 String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                long[] z64 = resolveZip64CdSizes(bb, pos + 46 + nameLen, extraLen, uncompSize, compSize, localHeaderOffset);
+                compSize = z64[1];
+                localHeaderOffset = z64[2];
                 pos += 46 + nameLen + extraLen + commentLen;
                 if (name.equals(targetName)) {
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, baos, MAX_IN_MEMORY_ENTRY_BYTES);
-                    return baos.toByteArray();
+                    decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, out, maxOutBytes);
+                    return;
                 }
             }
         }
         throw new IOException("הפריט לא נמצא: " + targetName);
+    }
+
+    private static byte[] readRawZipEntryBytes(File zipFile, String targetName, String password) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        extractRawZipEntryToStream(zipFile, targetName, password, baos, MAX_IN_MEMORY_ENTRY_BYTES);
+        return baos.toByteArray();
     }
 
     private static void decodeLocalZipEntryToStream(RandomAccessFile raf, long localOffset, int flags, int method,
@@ -671,14 +838,14 @@ public class ArchiveUtils {
             payloadLen -= 12L;
         }
 
-        InputStream rawBounded = new BoundedRafInputStream(raf, payloadLen);
+        InputStream rawBounded = new BufferedInputStream(new BoundedRafInputStream(raf, payloadLen), 64 * 1024);
         InputStream plainStream = cipher != null ? new ZipCryptoInputStream(rawBounded, cipher) : rawBounded;
 
         if (method == 0) {
             copyStreamBounded(plainStream, out, maxOutBytes);
         } else if (method == 8) {
             Inflater inflater = new Inflater(true);
-            try (InflaterInputStream iis = new InflaterInputStream(plainStream, inflater, 16 * 1024)) {
+            try (InflaterInputStream iis = new InflaterInputStream(plainStream, inflater, 64 * 1024)) {
                 copyStreamBounded(iis, out, maxOutBytes);
             } finally {
                 inflater.end();
@@ -689,7 +856,7 @@ public class ArchiveUtils {
     }
 
     private static void copyStreamBounded(InputStream is, OutputStream os, long maxBytes) throws IOException {
-        byte[] buf = new byte[16 * 1024];
+        byte[] buf = new byte[COPY_BUFFER_SIZE];
         long total = 0L;
         int r;
         while ((r = is.read(buf)) != -1) {
@@ -756,6 +923,86 @@ public class ArchiveUtils {
         }
     }
 
+    private static class ZipCryptoOutputStream extends OutputStream {
+        private final OutputStream out;
+        private final ZipCryptoCipher cipher;
+        private final byte[] encBuf = new byte[64 * 1024];
+
+        ZipCryptoOutputStream(OutputStream out, ZipCryptoCipher cipher) {
+            this.out = out;
+            this.cipher = cipher;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            out.write(cipher.encryptByte((byte) b) & 0xFF);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            int pos = off;
+            int rem = len;
+            while (rem > 0) {
+                int chunk = Math.min(rem, encBuf.length);
+                for (int i = 0; i < chunk; i++) {
+                    encBuf[i] = cipher.encryptByte(b[pos + i]);
+                }
+                out.write(encBuf, 0, chunk);
+                pos += chunk;
+                rem -= chunk;
+            }
+        }
+
+        @Override
+        public void flush() throws IOException {
+            out.flush();
+        }
+    }
+
+    private static class BufferedRafOutputStream extends OutputStream {
+        private final RandomAccessFile raf;
+        private final byte[] buf = new byte[COPY_BUFFER_SIZE];
+        private int count = 0;
+
+        BufferedRafOutputStream(RandomAccessFile raf) {
+            this.raf = raf;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            if (count >= buf.length) {
+                flushBuffer();
+            }
+            buf[count++] = (byte) b;
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            if (len >= buf.length) {
+                flushBuffer();
+                raf.write(b, off, len);
+                return;
+            }
+            if (len > buf.length - count) {
+                flushBuffer();
+            }
+            System.arraycopy(b, off, buf, count, len);
+            count += len;
+        }
+
+        private void flushBuffer() throws IOException {
+            if (count > 0) {
+                raf.write(buf, 0, count);
+                count = 0;
+            }
+        }
+
+        @Override
+        public void flush() throws IOException {
+            flushBuffer();
+        }
+    }
+
     private static void writePasswordProtectedZip(List<File> sources, File targetZip, String password,
                                                   ArchiveProgressCallback cb, int totalHint) throws IOException {
         List<FileItem> items = new ArrayList<>();
@@ -771,91 +1018,150 @@ public class ArchiveUtils {
         byte[] pwdBytes = password.getBytes(StandardCharsets.UTF_8);
         SecureRandom rng = new SecureRandom();
         ByteArrayOutputStream centralDir = new ByteArrayOutputStream();
-        long offset = 0;
+        long offset = 0L;
         int entryCount = 0;
+        boolean archiveUsedZip64 = false;
+        byte[] streamBuf = new byte[COPY_BUFFER_SIZE];
 
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(targetZip))) {
+        try (RandomAccessFile raf = new RandomAccessFile(targetZip, "rw")) {
+            raf.setLength(0L);
+
             for (FileItem item : items) {
                 if (!item.isDir && cb != null && item.file != null) {
                     cb.onProgress(item.file.getName(), doneFiles, totalFiles);
                 }
                 byte[] nameBytes = item.entryName.getBytes(StandardCharsets.UTF_8);
-                byte[] rawData = item.isDir ? new byte[0] : readAllBytes(new FileInputStream(item.file));
-                CRC32 crc32 = new CRC32();
-                crc32.update(rawData);
-                long crc = crc32.getValue();
-
-                byte[] compressed;
-                int method;
-                if (item.isDir || rawData.length == 0) {
-                    compressed = rawData;
-                    method = 0;
-                } else {
-                    ByteArrayOutputStream defOut = new ByteArrayOutputStream();
-                    Deflater def = new Deflater(Deflater.DEFAULT_COMPRESSION, true);
-                    try (DeflaterOutputStream dos = new DeflaterOutputStream(defOut, def)) {
-                        dos.write(rawData);
-                    } finally {
-                        def.end();
+                long crc = 0L;
+                long uncompSize = 0L;
+                if (!item.isDir && item.file != null) {
+                    CRC32 crc32 = new CRC32();
+                    try (FileInputStream crcFis = new FileInputStream(item.file)) {
+                        int r;
+                        while ((r = crcFis.read(streamBuf)) != -1) {
+                            crc32.update(streamBuf, 0, r);
+                            uncompSize += r;
+                        }
                     }
-                    compressed = defOut.toByteArray();
-                    method = 8;
+                    crc = crc32.getValue();
                 }
 
-                byte[] encryptedPayload;
-                int flags = 0x0800; // UTF-8
-                if (!item.isDir) {
-                    flags |= 0x0001; // Encrypted
-                    ZipCryptoCipher cipher = new ZipCryptoCipher(pwdBytes);
-                    encryptedPayload = new byte[12 + compressed.length];
-                    byte[] hdr = new byte[12];
-                    rng.nextBytes(hdr);
-                    hdr[11] = (byte) ((crc >>> 24) & 0xFF);
-                    for (int i = 0; i < 12; i++) encryptedPayload[i] = cipher.encryptByte(hdr[i]);
-                    for (int i = 0; i < compressed.length; i++) encryptedPayload[12 + i] = cipher.encryptByte(compressed[i]);
-                } else {
-                    encryptedPayload = compressed;
-                }
+                boolean needZip64LocalSizes = !item.isDir && uncompSize >= 0xFF000000L;
+                int localExtraLen = needZip64LocalSizes ? 20 : 0;
+                int method = (item.isDir || uncompSize == 0L) ? 0 : 8;
+                int flags = 0x0800 | (item.isDir ? 0 : 0x0001); // UTF-8 (+ Encrypted for files)
+                int verNeededLocal = needZip64LocalSizes ? 45 : 20;
 
-                int localOffset = (int) offset;
+                long localOffset = offset;
                 ByteBuffer lh = ByteBuffer.allocate(30).order(ByteOrder.LITTLE_ENDIAN);
                 lh.putInt(0x04034b50);
-                lh.putShort((short) 20);
+                lh.putShort((short) verNeededLocal);
                 lh.putShort((short) flags);
                 lh.putShort((short) method);
                 lh.putShort((short) 0);
                 lh.putShort((short) 0x5421);
                 lh.putInt((int) crc);
-                lh.putInt(encryptedPayload.length);
-                lh.putInt(rawData.length);
+                lh.putInt(needZip64LocalSizes ? (int) ZIP32_SENTINEL : 0);
+                lh.putInt(needZip64LocalSizes ? (int) ZIP32_SENTINEL : (int) uncompSize);
                 lh.putShort((short) nameBytes.length);
-                lh.putShort((short) 0);
+                lh.putShort((short) localExtraLen);
 
-                out.write(lh.array());
-                out.write(nameBytes);
-                out.write(encryptedPayload);
-                offset += 30 + nameBytes.length + encryptedPayload.length;
+                raf.write(lh.array());
+                raf.write(nameBytes);
+                if (needZip64LocalSizes) {
+                    ByteBuffer z64Local = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
+                    z64Local.putShort((short) 0x0001);
+                    z64Local.putShort((short) 16);
+                    z64Local.putLong(uncompSize);
+                    z64Local.putLong(0L);
+                    raf.write(z64Local.array());
+                }
+
+                long dataStartOffset = raf.getFilePointer();
+                long compSize = 0L;
+                if (!item.isDir) {
+                    BufferedRafOutputStream rafOut = new BufferedRafOutputStream(raf);
+                    ZipCryptoCipher cipher = new ZipCryptoCipher(pwdBytes);
+                    byte[] hdr = new byte[12];
+                    rng.nextBytes(hdr);
+                    hdr[11] = (byte) ((crc >>> 24) & 0xFF);
+                    byte[] encHdr = new byte[12];
+                    for (int i = 0; i < 12; i++) {
+                        encHdr[i] = cipher.encryptByte(hdr[i]);
+                    }
+                    rafOut.write(encHdr, 0, 12);
+
+                    if (uncompSize > 0L) {
+                        ZipCryptoOutputStream zcos = new ZipCryptoOutputStream(rafOut, cipher);
+                        Deflater def = new Deflater(Deflater.DEFAULT_COMPRESSION, true);
+                        try (FileInputStream srcFis = new FileInputStream(item.file)) {
+                            DeflaterOutputStream dos = new DeflaterOutputStream(zcos, def, 64 * 1024);
+                            int r;
+                            while ((r = srcFis.read(streamBuf)) != -1) {
+                                dos.write(streamBuf, 0, r);
+                            }
+                            dos.finish();
+                        } finally {
+                            def.end();
+                        }
+                    }
+                    rafOut.flush();
+                    long dataEndOffset = raf.getFilePointer();
+                    compSize = dataEndOffset - dataStartOffset;
+
+                    // תיקון compressedSize ב-Local Header בלי החזקת הקובץ בזיכרון
+                    raf.seek(localOffset + 18L);
+                    ByteBuffer patch32 = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
+                    patch32.putInt(needZip64LocalSizes ? (int) ZIP32_SENTINEL : (int) compSize);
+                    raf.write(patch32.array());
+                    if (needZip64LocalSizes) {
+                        raf.seek(localOffset + 30L + nameBytes.length + 12L);
+                        ByteBuffer patch64 = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+                        patch64.putLong(compSize);
+                        raf.write(patch64.array());
+                    }
+                    raf.seek(dataEndOffset);
+                    offset = dataEndOffset;
+                } else {
+                    offset = dataStartOffset;
+                }
+
+                boolean needZ64Uncomp = uncompSize >= ZIP32_SENTINEL;
+                boolean needZ64Comp = compSize >= ZIP32_SENTINEL;
+                boolean needZ64Offset = localOffset >= ZIP32_SENTINEL;
+                int z64FieldBytes = (needZ64Uncomp ? 8 : 0) + (needZ64Comp ? 8 : 0) + (needZ64Offset ? 8 : 0);
+                int cdExtraLen = z64FieldBytes > 0 ? (4 + z64FieldBytes) : 0;
+                if (cdExtraLen > 0) archiveUsedZip64 = true;
 
                 ByteBuffer cd = ByteBuffer.allocate(46).order(ByteOrder.LITTLE_ENDIAN);
                 cd.putInt(0x02014b50);
-                cd.putShort((short) 20);
-                cd.putShort((short) 20);
+                cd.putShort((short) 45);
+                cd.putShort((short) (cdExtraLen > 0 ? 45 : 20));
                 cd.putShort((short) flags);
                 cd.putShort((short) method);
                 cd.putShort((short) 0);
                 cd.putShort((short) 0x5421);
                 cd.putInt((int) crc);
-                cd.putInt(encryptedPayload.length);
-                cd.putInt(rawData.length);
+                cd.putInt(needZ64Comp ? (int) ZIP32_SENTINEL : (int) compSize);
+                cd.putInt(needZ64Uncomp ? (int) ZIP32_SENTINEL : (int) uncompSize);
                 cd.putShort((short) nameBytes.length);
-                cd.putShort((short) 0);
+                cd.putShort((short) cdExtraLen);
                 cd.putShort((short) 0);
                 cd.putShort((short) 0);
                 cd.putShort((short) 0);
                 cd.putInt(item.isDir ? 0x10 : 0);
-                cd.putInt(localOffset);
+                cd.putInt(needZ64Offset ? (int) ZIP32_SENTINEL : (int) localOffset);
                 centralDir.write(cd.array());
                 centralDir.write(nameBytes);
+                if (cdExtraLen > 0) {
+                    ByteBuffer cdZ64 = ByteBuffer.allocate(cdExtraLen).order(ByteOrder.LITTLE_ENDIAN);
+                    cdZ64.putShort((short) 0x0001);
+                    cdZ64.putShort((short) z64FieldBytes);
+                    if (needZ64Uncomp) cdZ64.putLong(uncompSize);
+                    if (needZ64Comp) cdZ64.putLong(compSize);
+                    if (needZ64Offset) cdZ64.putLong(localOffset);
+                    centralDir.write(cdZ64.array());
+                }
+
                 entryCount++;
                 if (!item.isDir) {
                     doneFiles++;
@@ -865,19 +1171,45 @@ public class ArchiveUtils {
                 }
             }
 
+            long cdOffset = offset;
             byte[] cdBytes = centralDir.toByteArray();
-            out.write(cdBytes);
+            long cdSize = cdBytes.length;
+            raf.write(cdBytes);
+
+            boolean writeZip64Eocd = archiveUsedZip64 || entryCount >= 0xFFFF || cdSize >= ZIP32_SENTINEL || cdOffset >= ZIP32_SENTINEL;
+            if (writeZip64Eocd) {
+                long z64EocdOffset = raf.getFilePointer();
+                ByteBuffer z64Eocd = ByteBuffer.allocate(56).order(ByteOrder.LITTLE_ENDIAN);
+                z64Eocd.putInt(0x06064b50);
+                z64Eocd.putLong(44L);
+                z64Eocd.putShort((short) 45);
+                z64Eocd.putShort((short) 45);
+                z64Eocd.putInt(0);
+                z64Eocd.putInt(0);
+                z64Eocd.putLong(entryCount);
+                z64Eocd.putLong(entryCount);
+                z64Eocd.putLong(cdSize);
+                z64Eocd.putLong(cdOffset);
+                raf.write(z64Eocd.array());
+
+                ByteBuffer z64Loc = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
+                z64Loc.putInt(0x07064b50);
+                z64Loc.putInt(0);
+                z64Loc.putLong(z64EocdOffset);
+                z64Loc.putInt(1);
+                raf.write(z64Loc.array());
+            }
 
             ByteBuffer eocd = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
             eocd.putInt(0x06054b50);
             eocd.putShort((short) 0);
             eocd.putShort((short) 0);
-            eocd.putShort((short) entryCount);
-            eocd.putShort((short) entryCount);
-            eocd.putInt(cdBytes.length);
-            eocd.putInt((int) offset);
+            eocd.putShort((short) Math.min(0xFFFF, entryCount));
+            eocd.putShort((short) Math.min(0xFFFF, entryCount));
+            eocd.putInt(cdSize >= ZIP32_SENTINEL ? (int) ZIP32_SENTINEL : (int) cdSize);
+            eocd.putInt(cdOffset >= ZIP32_SENTINEL ? (int) ZIP32_SENTINEL : (int) cdOffset);
             eocd.putShort((short) 0);
-            out.write(eocd.array());
+            raf.write(eocd.array());
         }
     }
 
@@ -1076,7 +1408,7 @@ public class ArchiveUtils {
         return count;
     }
 
-    private static byte[] readTarEntryBytes(InputStream is, String targetName) throws IOException {
+    private static void extractTarEntryToStream(InputStream is, String targetName, OutputStream out) throws IOException {
         byte[] hdr = new byte[512];
         while (readExact(is, hdr, 512) == 512) {
             if (isAllZero(hdr)) break;
@@ -1086,14 +1418,19 @@ public class ArchiveUtils {
             long size = parseOctal(hdr, 124, 12);
             boolean isDir = hdr[156] == '5' || name.endsWith("/");
             if (!isDir && name.equals(targetName)) {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                copyFixed(is, baos, size);
-                return baos.toByteArray();
+                copyFixed(is, out, size);
+                return;
             }
             long blocks = isDir ? 0L : (size + 511L) / 512L;
             skipFully(is, blocks * 512L);
         }
         throw new IOException("הפריט לא נמצא ב-TAR: " + targetName);
+    }
+
+    private static byte[] readTarEntryBytes(InputStream is, String targetName) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        extractTarEntryToStream(is, targetName, baos);
+        return baos.toByteArray();
     }
 
     private static File safeResolve(File destDir, String canonicalDestDir, String entryName) throws IOException {
@@ -1146,7 +1483,7 @@ public class ArchiveUtils {
 
     private static void skipFully(InputStream is, long n) throws IOException {
         long rem = n;
-        byte[] dump = new byte[4096];
+        byte[] dump = new byte[32 * 1024];
         while (rem > 0) {
             int r = is.read(dump, 0, (int) Math.min(dump.length, rem));
             if (r < 0) throw new EOFException();
@@ -1155,7 +1492,7 @@ public class ArchiveUtils {
     }
 
     private static void copyFixed(InputStream is, OutputStream os, long len) throws IOException {
-        byte[] buf = new byte[8192];
+        byte[] buf = new byte[COPY_BUFFER_SIZE];
         long rem = len;
         while (rem > 0) {
             int r = is.read(buf, 0, (int) Math.min(buf.length, rem));
@@ -1166,7 +1503,7 @@ public class ArchiveUtils {
     }
 
     private static void copyStream(InputStream is, OutputStream os) throws IOException {
-        byte[] buf = new byte[16 * 1024];
+        byte[] buf = new byte[COPY_BUFFER_SIZE];
         int r;
         while ((r = is.read(buf)) != -1) {
             os.write(buf, 0, r);

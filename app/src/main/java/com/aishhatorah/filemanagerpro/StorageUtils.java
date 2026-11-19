@@ -820,20 +820,47 @@ public class StorageUtils {
             if (cb != null) {
                 cb.onProgress(src.getName(), 0L, totalBytes, doneBefore, totalFiles);
             }
-            byte[] buf = new byte[64 * 1024];
             long copiedBytes = 0L;
             long lastReportMs = 0L;
+            boolean usedFallbackStream = false;
+
             try (FileInputStream fis = new FileInputStream(src);
-                 FileOutputStream fos = new FileOutputStream(target)) {
-                int r;
-                while ((r = fis.read(buf)) != -1) {
-                    fos.write(buf, 0, r);
-                    copiedBytes += r;
+                 FileOutputStream fos = new FileOutputStream(target);
+                 FileChannel inCh = fis.getChannel();
+                 FileChannel outCh = fos.getChannel()) {
+
+                final long chunk = 2L * 1024L * 1024L;
+                while (copiedBytes < totalBytes) {
+                    long count = Math.min(chunk, totalBytes - copiedBytes);
+                    long transferred = inCh.transferTo(copiedBytes, count, outCh);
+                    if (transferred <= 0L) {
+                        usedFallbackStream = true;
+                        break;
+                    }
+                    copiedBytes += transferred;
                     if (cb != null) {
                         long now = System.currentTimeMillis();
                         if (now - lastReportMs >= 80L || copiedBytes >= totalBytes) {
                             lastReportMs = now;
                             cb.onProgress(src.getName(), copiedBytes, totalBytes, doneBefore, totalFiles);
+                        }
+                    }
+                }
+
+                if (usedFallbackStream || copiedBytes < totalBytes) {
+                    inCh.position(copiedBytes);
+                    outCh.position(copiedBytes);
+                    byte[] buf = new byte[512 * 1024];
+                    int r;
+                    while ((r = fis.read(buf)) != -1) {
+                        fos.write(buf, 0, r);
+                        copiedBytes += r;
+                        if (cb != null) {
+                            long now = System.currentTimeMillis();
+                            if (now - lastReportMs >= 80L || copiedBytes >= totalBytes) {
+                                lastReportMs = now;
+                                cb.onProgress(src.getName(), copiedBytes, totalBytes, doneBefore, totalFiles);
+                            }
                         }
                     }
                 }

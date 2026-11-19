@@ -116,6 +116,9 @@ public class FileThumbnailLoader {
             Bitmap extracted = extractRealFileBitmap(appCtx, file, nameLower, 224);
             if (extracted != null) {
                 Bitmap rounded = createRoundedSquareBitmap(extracted, 224, 30f);
+                if (rounded != extracted && !extracted.isRecycled()) {
+                    extracted.recycle();
+                }
                 BITMAP_CACHE.put(cacheKey, rounded);
                 MAIN_HANDLER.post(() -> {
                     if (cacheKey.equals(targetView.getTag())) {
@@ -257,7 +260,25 @@ public class FileThumbnailLoader {
                 if (entry.isDirectory()) continue;
                 String name = entry.getName().toLowerCase(Locale.ROOT);
                 if (name.equals("icon.png") || name.endsWith("/icon.png")) {
-                    Bitmap b = BitmapFactory.decodeStream(zis);
+                    java.io.ByteArrayOutputStream iconBaos = new java.io.ByteArrayOutputStream();
+                    byte[] iBuf = new byte[8192];
+                    int ir;
+                    int total = 0;
+                    while ((ir = zis.read(iBuf)) != -1 && total < 2 * 1024 * 1024) {
+                        iconBaos.write(iBuf, 0, ir);
+                        total += ir;
+                    }
+                    byte[] iconData = iconBaos.toByteArray();
+                    BitmapFactory.Options ib = new BitmapFactory.Options();
+                    ib.inJustDecodeBounds = true;
+                    BitmapFactory.decodeByteArray(iconData, 0, iconData.length, ib);
+                    int iSample = 1;
+                    while (ib.outWidth / iSample > sizePx * 2 || ib.outHeight / iSample > sizePx * 2) {
+                        iSample *= 2;
+                    }
+                    BitmapFactory.Options iOpts = new BitmapFactory.Options();
+                    iOpts.inSampleSize = iSample;
+                    Bitmap b = BitmapFactory.decodeByteArray(iconData, 0, iconData.length, iOpts);
                     if (b != null) return b;
                 } else if (tempBaseApk == null && (name.equals("base.apk") || name.endsWith("/base.apk") || name.endsWith(".apk"))) {
                     tempBaseApk = File.createTempFile("bundle_icon_", ".apk", context.getCacheDir());
@@ -306,6 +327,9 @@ public class FileThumbnailLoader {
         paint.setShader(new BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
         RectF rect = new RectF(0f, 0f, sizePx, sizePx);
         canvas.drawRoundRect(rect, radiusPx, radiusPx, paint);
+        if (scaled != src && !scaled.isRecycled()) {
+            scaled.recycle();
+        }
         return output;
     }
 

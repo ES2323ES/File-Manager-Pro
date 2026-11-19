@@ -47,7 +47,7 @@ public class WallpaperCropActivity extends AppCompatActivity {
         File f = new File(path);
         if (!f.exists()) { finish(); return; }
 
-        sourceBitmap = BitmapFactory.decodeFile(f.getAbsolutePath());
+        sourceBitmap = decodeBoundedWallpaperBitmap(f, 2560);
         if (sourceBitmap == null) {
             Toast.makeText(this, "לא ניתן לטעון תמונה זו כטפט", Toast.LENGTH_SHORT).show();
             finish();
@@ -174,6 +174,33 @@ public class WallpaperCropActivity extends AppCompatActivity {
             AppLogger.error(this, "Wallpaper", "Failed setting wallpaper", t);
             Toast.makeText(this, "שגיאה בקביעת טפט: " + t.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private Bitmap decodeBoundedWallpaperBitmap(File file, int maxDim) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+            int sample = 1;
+            int rawW = Math.max(1, bounds.outWidth);
+            int rawH = Math.max(1, bounds.outHeight);
+            while (rawW / sample > maxDim || rawH / sample > maxDim) {
+                sample *= 2;
+            }
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    BitmapFactory.Options opts = new BitmapFactory.Options();
+                    opts.inSampleSize = sample;
+                    opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                    return BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
+                } catch (OutOfMemoryError oom) {
+                    System.gc();
+                    sample *= 2;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     @Override

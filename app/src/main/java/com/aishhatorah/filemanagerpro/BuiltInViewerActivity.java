@@ -164,7 +164,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private int currentImageIdx = 0;
     private ZoomableImageView activeZoomImageView = null;
     private int imageLoadGeneration = 0;
-    private final android.util.LruCache<String, DecodedPhoto> photoCache = new android.util.LruCache<>(5);
+    private final android.util.LruCache<String, DecodedPhoto> photoCache = new android.util.LruCache<String, DecodedPhoto>(
+            (int) Math.max(4096, Math.min(32768, Runtime.getRuntime().maxMemory() / 1024L / 10L))) {
+        @Override
+        protected int sizeOf(String key, DecodedPhoto value) {
+            if (value == null || value.bitmap == null || value.bitmap.isRecycled()) return 1;
+            return Math.max(1, value.bitmap.getByteCount() / 1024);
+        }
+    };
     private Runnable archiveNavigateUpHandler = null;
 
     private boolean isAudioMode = false;
@@ -246,6 +253,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private ParcelFileDescriptor pdfDescriptor;
     private PdfRenderer pdfRenderer;
+    private Bitmap activePdfBitmap;
     private int currentPdfPage = 0;
 
     private String archivePassword = "";
@@ -591,7 +599,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         finish();
         if (isAudioMode) {
             try {
-                overridePendingTransition(0, R.anim.slide_out_bottom);
+                if (PrefsManager.isReduceAnimations(this)) {
+                    overridePendingTransition(0, 0);
+                } else {
+                    overridePendingTransition(0, R.anim.slide_out_bottom);
+                }
             } catch (Throwable ignored) {
             }
         } else {
@@ -842,31 +854,47 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                 final View stage = audioStagePlayerView;
                                 int slideDist = Math.max(dp(180), getHeight() / 2);
                                 int triggerThreshold = dp(64);
+                                boolean reduce = PrefsManager.isReduceAnimations(BuiltInViewerActivity.this);
                                 if (stage != null && Math.abs(dy) > triggerThreshold) {
                                     final boolean goingPreviousDown = dy > 0;
-                                    float exitY = goingPreviousDown ? slideDist : -slideDist;
-                                    float enterFromY = goingPreviousDown ? -slideDist : slideDist;
-                                    stage.animate()
-                                            .translationY(exitY)
-                                            .alpha(0f)
-                                            .setDuration(150)
-                                            .withEndAction(() -> {
-                                                if (goingPreviousDown) {
-                                                    audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
-                                                } else {
-                                                    audioMgr.playNext(BuiltInViewerActivity.this);
-                                                }
-                                                stage.setTranslationY(enterFromY);
-                                                stage.setAlpha(0f);
-                                                stage.animate()
-                                                        .translationY(0f)
-                                                        .alpha(1f)
-                                                        .setDuration(220)
-                                                        .start();
-                                            })
-                                            .start();
+                                    if (reduce) {
+                                        stage.setTranslationY(0f);
+                                        stage.setAlpha(1f);
+                                        if (goingPreviousDown) {
+                                            audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
+                                        } else {
+                                            audioMgr.playNext(BuiltInViewerActivity.this);
+                                        }
+                                    } else {
+                                        float exitY = goingPreviousDown ? slideDist : -slideDist;
+                                        float enterFromY = goingPreviousDown ? -slideDist : slideDist;
+                                        stage.animate()
+                                                .translationY(exitY)
+                                                .alpha(0f)
+                                                .setDuration(150)
+                                                .withEndAction(() -> {
+                                                    if (goingPreviousDown) {
+                                                        audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
+                                                    } else {
+                                                        audioMgr.playNext(BuiltInViewerActivity.this);
+                                                    }
+                                                    stage.setTranslationY(enterFromY);
+                                                    stage.setAlpha(0f);
+                                                    stage.animate()
+                                                            .translationY(0f)
+                                                            .alpha(1f)
+                                                            .setDuration(220)
+                                                            .start();
+                                                })
+                                                .start();
+                                    }
                                 } else if (stage != null) {
-                                    stage.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                                    if (reduce) {
+                                        stage.setTranslationY(0f);
+                                        stage.setAlpha(1f);
+                                    } else {
+                                        stage.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                                    }
                                 }
                                 audioSwipeMode[0] = 0;
                                 return true;
@@ -1226,6 +1254,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             for (int off : offsets) {
                 int nIdx = (currentImageIdx + off + imagePlaylist.size()) % imagePlaylist.size();
                 File neighbor = imagePlaylist.get(nIdx);
+                if (neighbor.length() > 16L * 1024L * 1024L) continue;
                 String nLow = neighbor.getName().toLowerCase(Locale.ROOT);
                 if (MediaFormatHelper.isSvgFile(nLow) || MediaFormatHelper.isGifFile(nLow)) continue;
                 String cacheKey = neighbor.getAbsolutePath() + ":" + neighbor.lastModified();
@@ -1507,7 +1536,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private DecodedPhoto decodeUltraClearPhoto(File file) {
         DecodedPhoto out = new DecodedPhoto();
-        final int MAX_EDGE = 4096;
+        final int MAX_EDGE = 3072;
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
@@ -1520,7 +1549,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     ImageDecoder.Source src = ImageDecoder.createSource(file);
                     out.bitmap = ImageDecoder.decodeBitmap(src, (decoder, info, s) -> {
                         decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                        decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_DEFAULT);
+                        decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
                         int w = info.getSize().getWidth();
                         int h = info.getSize().getHeight();
                         out.origWidth = w;
@@ -1532,6 +1561,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         }
                     });
                     if (out.bitmap != null) return out;
+                } catch (OutOfMemoryError oom) {
+                    System.gc();
                 } catch (Exception ignored) {
                 }
             }
@@ -1541,22 +1572,30 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 while (out.origWidth / sample > MAX_EDGE || out.origHeight / sample > MAX_EDGE) {
                     sample *= 2;
                 }
-                BitmapFactory.Options loadOpts = new BitmapFactory.Options();
-                loadOpts.inSampleSize = sample;
-                loadOpts.inPreferredConfig = Bitmap.Config.ARGB_8888;
-                loadOpts.inScaled = false;
-                loadOpts.inDither = false;
-                out.bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), loadOpts);
+                for (int attempt = 0; attempt < 3 && out.bitmap == null; attempt++) {
+                    try {
+                        BitmapFactory.Options loadOpts = new BitmapFactory.Options();
+                        loadOpts.inSampleSize = sample;
+                        loadOpts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                        loadOpts.inScaled = false;
+                        loadOpts.inDither = false;
+                        out.bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), loadOpts);
+                    } catch (OutOfMemoryError oom) {
+                        System.gc();
+                        sample *= 2;
+                    }
+                }
             }
         } catch (OutOfMemoryError oom) {
+            System.gc();
             try {
                 BitmapFactory.Options fallback = new BitmapFactory.Options();
-                fallback.inSampleSize = 2;
-                fallback.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                fallback.inSampleSize = 4;
+                fallback.inPreferredConfig = Bitmap.Config.RGB_565;
                 out.bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), fallback);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         }
         return out;
     }
@@ -1802,6 +1841,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         final WavySeekBar seekBar = new WavySeekBar(this);
+        seekBar.setShowTickDots(false);
+        seekBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(this));
         seekBar.setColors(accent, ColorUtils.setAlphaComponent(textPrimary, 56), accent);
         controlsColumn.addView(seekBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -2085,6 +2126,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
 
             boolean playingNow = mgr.isPlaying();
+            seekBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(this));
             seekBar.setPlaying(playingNow);
             int playRes = playingNow ? R.drawable.ic_pause : R.drawable.ic_play;
             if (lastPlayRes[0] != playRes) {
@@ -2109,6 +2151,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (!audioTickerActive) return;
                 int dur = mgr.getDurationMs();
                 int pos = mgr.getCurrentPositionMs();
+                seekBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(BuiltInViewerActivity.this));
                 seekBar.setPlaying(mgr.isPlaying());
                 seekBar.setMax(Math.max(1, dur));
                 seekBar.setProgress(pos);
@@ -3873,8 +3916,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         badge.animate().cancel();
         badge.setAlpha(1f);
         badge.setVisibility(View.VISIBLE);
-        badge.animate().alpha(0f).setStartDelay(400).setDuration(220)
-                .withEndAction(() -> badge.setVisibility(View.GONE)).start();
+        if (PrefsManager.isReduceAnimations(this)) {
+            uiHandler.postDelayed(() -> badge.setVisibility(View.GONE), 480);
+        } else {
+            badge.animate().alpha(0f).setStartDelay(400).setDuration(220)
+                    .withEndAction(() -> badge.setVisibility(View.GONE)).start();
+        }
     }
 
     private void resetVideoZoom() {
@@ -4203,20 +4250,26 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         badge.setText(forwardRight ? "\u200E+10 ש׳" : "\u200E-10 ש׳");
         badge.animate().cancel();
         badge.setAlpha(1f);
-        badge.setScaleX(0.85f);
-        badge.setScaleY(0.85f);
         badge.setVisibility(View.VISIBLE);
-        badge.animate()
-                .scaleX(1.05f)
-                .scaleY(1.05f)
-                .setDuration(140)
-                .withEndAction(() -> badge.animate()
-                        .alpha(0f)
-                        .setStartDelay(380)
-                        .setDuration(200)
-                        .withEndAction(() -> badge.setVisibility(View.GONE))
-                        .start())
-                .start();
+        if (PrefsManager.isReduceAnimations(this)) {
+            badge.setScaleX(1f);
+            badge.setScaleY(1f);
+            uiHandler.postDelayed(() -> badge.setVisibility(View.GONE), 500);
+        } else {
+            badge.setScaleX(0.85f);
+            badge.setScaleY(0.85f);
+            badge.animate()
+                    .scaleX(1.05f)
+                    .scaleY(1.05f)
+                    .setDuration(140)
+                    .withEndAction(() -> badge.animate()
+                            .alpha(0f)
+                            .setStartDelay(380)
+                            .setDuration(200)
+                            .withEndAction(() -> badge.setVisibility(View.GONE))
+                            .start())
+                    .start();
+        }
     }
 
     private ImageButton createResponsiveRoundIconButton(int drawableRes, int sizePx, int marginPx, boolean primaryFilled, int accent, int theme) {
@@ -4544,13 +4597,35 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             Runnable renderPage = () -> {
                 if (pdfRenderer == null || totalPages == 0) return;
                 try (PdfRenderer.Page page = pdfRenderer.openPage(currentPdfPage)) {
-                    float scale = Math.max(3.0f, Math.min(4.5f, 2600f / Math.max(1, page.getWidth())));
-                    int w = Math.max(1, Math.round(page.getWidth() * scale));
-                    int h = Math.max(1, Math.round(page.getHeight() * scale));
-                    Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                    bmp.eraseColor(Color.WHITE);
-                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                    pageImage.setImageBitmap(bmp);
+                    int pw = Math.max(1, page.getWidth());
+                    int ph = Math.max(1, page.getHeight());
+                    float scale = Math.max(2.0f, Math.min(4.0f, 2400f / Math.max(pw, ph)));
+                    final double maxPixels = 8_000_000.0;
+                    double estPixels = (pw * (double) scale) * (ph * (double) scale);
+                    if (estPixels > maxPixels) {
+                        scale *= (float) Math.sqrt(maxPixels / estPixels);
+                    }
+                    Bitmap bmp = null;
+                    for (int attempt = 0; attempt < 3 && bmp == null; attempt++) {
+                        int w = Math.max(1, Math.min(2800, Math.round(pw * scale)));
+                        int h = Math.max(1, Math.min(2800, Math.round(ph * scale)));
+                        try {
+                            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                        } catch (OutOfMemoryError oom) {
+                            System.gc();
+                            scale *= 0.65f;
+                        }
+                    }
+                    if (bmp != null) {
+                        bmp.eraseColor(Color.WHITE);
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                        Bitmap oldBmp = activePdfBitmap;
+                        activePdfBitmap = bmp;
+                        pageImage.setImageBitmap(bmp);
+                        if (oldBmp != null && oldBmp != bmp && !oldBmp.isRecycled()) {
+                            oldBmp.recycle();
+                        }
+                    }
                     tvPageIndicator.setText((currentPdfPage + 1) + " / " + totalPages);
                     boolean hasPrev = currentPdfPage > 0;
                     boolean hasNext = currentPdfPage < totalPages - 1;
@@ -4558,6 +4633,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     btnPrev.setAlpha(hasPrev ? 1f : 0.35f);
                     btnNext.setEnabled(hasNext);
                     btnNext.setAlpha(hasNext ? 1f : 0.35f);
+                } catch (Throwable t) {
+                    AppLogger.error(this, "PdfViewer", "Failed rendering PDF page " + currentPdfPage, t);
+                    Toast.makeText(this, "שגיאה בטעינת עמוד ה-PDF", Toast.LENGTH_SHORT).show();
                 }
             };
             renderPage.run();
@@ -4887,13 +4965,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                byte[] bytes = ArchiveUtils.readEntryBytes(targetFile, item.name, archivePassword);
+                CacheCleanupManager.cleanupArchivePreviewDir(this);
                 File previewDir = new File(getCacheDir(), "arch_preview");
                 previewDir.mkdirs();
-                File tmp = new File(previewDir, new File(item.name).getName());
-                try (FileOutputStream fos = new FileOutputStream(tmp)) {
-                    fos.write(bytes);
-                }
+                String cleanLeaf = new File(item.name).getName();
+                if (cleanLeaf.isEmpty()) cleanLeaf = "entry_" + System.currentTimeMillis();
+                File tmp = new File(previewDir, cleanLeaf);
+                ArchiveUtils.extractEntryToFile(targetFile, item.name, archivePassword, tmp);
                 uiHandler.post(() -> FileOpenWithHelper.tryOpenByDefaultOrBuiltin(this, tmp));
             } catch (Exception e) {
                 String msg = e.getMessage() != null ? e.getMessage() : "";
@@ -4990,12 +5068,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         cleanupActiveRemuxedCache();
         cleanupExternalCopiedCache();
 
+        if (isFinishing()) {
+            CacheCleanupManager.cleanupArchivePreviewDir(this);
+            CacheCleanupManager.cleanupPreviewFileIfManagedCache(this, targetFile);
+        }
+
         if (pdfRenderer != null) {
             try { pdfRenderer.close(); } catch (Exception ignored) {}
         }
         if (pdfDescriptor != null) {
             try { pdfDescriptor.close(); } catch (Exception ignored) {}
         }
+        if (activePdfBitmap != null && !activePdfBitmap.isRecycled()) {
+            activePdfBitmap.recycle();
+        }
+        activePdfBitmap = null;
         photoCache.evictAll();
         executor.shutdownNow();
     }

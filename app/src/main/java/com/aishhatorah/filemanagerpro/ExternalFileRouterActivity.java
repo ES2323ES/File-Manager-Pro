@@ -97,10 +97,11 @@ public class ExternalFileRouterActivity extends AppCompatActivity {
                     if (rawIn == null) {
                         throw new IllegalStateException("לא ניתן לפתוח זרם קריאה מהמקור");
                     }
-                    try (BufferedInputStream bis = new BufferedInputStream(rawIn);
-                         BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(tempOut))) {
-                        byte[] buf = new byte[32 * 1024];
+                    try (BufferedInputStream bis = new BufferedInputStream(rawIn, 128 * 1024);
+                         BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(tempOut), 128 * 1024)) {
+                        byte[] buf = new byte[128 * 1024];
                         long totalRead = 0L;
+                        long lastProgMs = 0L;
                         int r;
                         while ((r = bis.read(buf)) != -1) {
                             if (headerRead == 0) {
@@ -110,12 +111,16 @@ public class ExternalFileRouterActivity extends AppCompatActivity {
                             }
                             bos.write(buf, 0, r);
                             totalRead += r;
-                            if (expectedSize > 0) {
-                                int pct = (int) Math.min(99L, (totalRead * 100L) / expectedSize);
-                                progress.updatePercent(rawName, pct,
-                                        StorageUtils.formatSize(totalRead) + " / " + StorageUtils.formatSize(expectedSize));
-                            } else {
-                                progress.updateIndeterminate(rawName, StorageUtils.formatSize(totalRead));
+                            long now = System.currentTimeMillis();
+                            if (now - lastProgMs >= 80L) {
+                                lastProgMs = now;
+                                if (expectedSize > 0) {
+                                    int pct = (int) Math.min(99L, (totalRead * 100L) / expectedSize);
+                                    progress.updatePercent(rawName, pct,
+                                            StorageUtils.formatSize(totalRead) + " / " + StorageUtils.formatSize(expectedSize));
+                                } else {
+                                    progress.updateIndeterminate(rawName, StorageUtils.formatSize(totalRead));
+                                }
                             }
                         }
                     }
@@ -241,18 +246,7 @@ public class ExternalFileRouterActivity extends AppCompatActivity {
     }
 
     private void cleanupOldExternalCache() {
-        try {
-            File extRoot = new File(getCacheDir(), "external_open");
-            File[] dirs = extRoot.listFiles();
-            if (dirs == null) return;
-            long cutoff = System.currentTimeMillis() - (12L * 60L * 60L * 1000L);
-            for (File d : dirs) {
-                if (d.lastModified() < cutoff) {
-                    StorageUtils.deleteRecursively(d);
-                }
-            }
-        } catch (Throwable ignored) {
-        }
+        CacheCleanupManager.cleanupOldExternalOpenSessions(this, 20L * 60L * 1000L);
     }
 
     @Override
