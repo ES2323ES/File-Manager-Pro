@@ -17,6 +17,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -170,6 +171,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        ThemeHelper.invalidateSystemPaletteCache();
         applyCurrentThemeAndRefresh(false);
     }
 
@@ -226,7 +228,9 @@ public class MainActivity extends AppCompatActivity {
         swipeRefreshHome.setColorSchemeColors(0xFF1D4ED8, 0xFF0284C7, 0xFF0D9488);
         swipeRefreshHome.setOnRefreshListener(() -> applyCurrentThemeAndRefresh(true));
 
-        miniAudioListener = MiniAudioBarHelper.attach(this, rootContainer);
+        FrameLayout mainOverlayHost = findViewById(R.id.mainOverlayHost);
+        View homeScrollView = findViewById(R.id.homeScrollView);
+        miniAudioListener = MiniAudioBarHelper.attachOverlay(this, mainOverlayHost, homeScrollView);
     }
 
     private void applyCurrentThemeAndRefresh(boolean fromUserPullToRefresh) {

@@ -522,7 +522,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         multiSelectBar.setVisibility(View.GONE);
         root.addView(multiSelectBar);
 
-        miniAudioListener = MiniAudioBarHelper.attach(this, root);
+        miniAudioListener = MiniAudioBarHelper.attachOverlay(this, listStageFrame, recyclerView);
 
         setContentView(root);
 

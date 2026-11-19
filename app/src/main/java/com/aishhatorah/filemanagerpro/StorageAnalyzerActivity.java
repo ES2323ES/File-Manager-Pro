@@ -12,6 +12,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -103,6 +104,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         root.addView(scanSpinner);
 
         RecyclerView rv = new RecyclerView(this);
+        rv.setClipToPadding(false);
         rv.setLayoutManager(new LinearLayoutManager(this));
         rv.setItemAnimator(null);
         if (ThemeHelper.hasWallpaper(this)) {
@@ -130,10 +132,13 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         adapter = new HeavyAdapter(cardColor, textPrimary, textSecondary, accent);
         rv.setAdapter(adapter);
 
-        root.addView(rv, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        FrameLayout overlayHost = new FrameLayout(this);
+        overlayHost.addView(rv, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        miniAudioListener = MiniAudioBarHelper.attachOverlay(this, overlayHost, rv);
 
-        miniAudioListener = MiniAudioBarHelper.attach(this, root);
+        root.addView(overlayHost, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(root);
         runHeavyFilesScan();
