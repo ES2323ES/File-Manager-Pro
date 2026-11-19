@@ -10,8 +10,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -33,8 +31,33 @@ public final class AppLogger {
     public static final String LEVEL_ERROR = "ERROR";
 
     private static final int RETENTION_DAYS = 14;
+    private static final int MAX_CRASH_TRACE_CHARS = 12_000;
     private static final Object FILE_LOCK = new Object();
-    private static volatile boolean handlerInstalled = false;
+    private static volatile File cachedLogsDir;
+
+    private static final class CrashUncaughtHandler implements Thread.UncaughtExceptionHandler {
+        private final Context appCtx;
+        private final Thread.UncaughtExceptionHandler prev;
+
+        CrashUncaughtHandler(Context appCtx, Thread.UncaughtExceptionHandler prev) {
+            this.appCtx = appCtx;
+            this.prev = prev;
+        }
+
+        @Override
+        public void uncaughtException(Thread thread, Throwable throwable) {
+            try {
+                String threadName = thread != null ? thread.getName() : "unknown";
+                String trace = formatThrowableCompact(throwable, MAX_CRASH_TRACE_CHARS);
+                File dir = cachedLogsDir != null ? cachedLogsDir : getLogsDir(appCtx);
+                appendToDir(dir, LEVEL_ERROR, "Crash", "Uncaught in " + threadName + ": " + trace, System.currentTimeMillis());
+            } catch (Throwable ignored) {
+            }
+            if (prev != null && prev != this) {
+                prev.uncaughtException(thread, throwable);
+            }
+        }
+    }
 
     private static final Pattern EMAIL_PATTERN =
             Pattern.compile("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}");
@@ -68,7 +91,9 @@ public final class AppLogger {
 
     public static void init(Context context) {
         if (context == null) return;
-        cleanupOldLogs(getLogsDir(context), System.currentTimeMillis());
+        File dir = getLogsDir(context);
+        cachedLogsDir = dir;
+        cleanupOldLogs(dir, System.currentTimeMillis());
     }
 
     public static File getLogsDir(Context context) {
@@ -76,25 +101,55 @@ public final class AppLogger {
         if (!dir.exists()) {
             dir.mkdirs();
         }
+        cachedLogsDir = dir;
         return dir;
     }
 
     public static void installUncaughtHandler(Context context) {
-        if (handlerInstalled || context == null) return;
-        handlerInstalled = true;
-        final Context appCtx = context.getApplicationContext();
-        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
-            try {
-                StringWriter sw = new StringWriter();
-                throwable.printStackTrace(new PrintWriter(sw));
-                error(appCtx, "Crash", "Uncaught in " + thread.getName() + ": " + sw.toString());
-            } catch (Throwable ignored) {
+        if (context == null) return;
+        Context appCtx = context.getApplicationContext();
+        if (cachedLogsDir == null) {
+            getLogsDir(appCtx);
+        }
+        Thread.UncaughtExceptionHandler current = Thread.getDefaultUncaughtExceptionHandler();
+        if (current instanceof CrashUncaughtHandler) {
+            return;
+        }
+        Thread.setDefaultUncaughtExceptionHandler(new CrashUncaughtHandler(appCtx, current));
+    }
+
+    public static String formatThrowableCompact(Throwable err, int maxChars) {
+        if (err == null) return "Unknown error";
+        int limit = Math.max(256, maxChars);
+        StringBuilder sb = new StringBuilder(Math.min(limit, 2048));
+        Throwable cur = err;
+        int depth = 0;
+        while (cur != null && depth < 6 && sb.length() < limit) {
+            if (depth > 0) {
+                sb.append("\nCaused by: ");
             }
-            if (prev != null) {
-                prev.uncaughtException(thread, throwable);
+            sb.append(cur.getClass().getName());
+            String msg = cur.getMessage();
+            if (msg != null && !msg.isEmpty()) {
+                sb.append(": ").append(msg);
             }
-        });
+            StackTraceElement[] trace = cur.getStackTrace();
+            if (trace != null) {
+                int maxFrames = Math.min(trace.length, depth == 0 ? 45 : 20);
+                for (int i = 0; i < maxFrames && sb.length() < limit - 80; i++) {
+                    sb.append("\n  at ").append(trace[i].toString());
+                }
+                if (trace.length > maxFrames && sb.length() < limit - 32) {
+                    sb.append("\n  ... ").append(trace.length - maxFrames).append(" more");
+                }
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        if (sb.length() > limit) {
+            return sb.substring(0, limit - 3) + "...";
+        }
+        return sb.toString();
     }
 
     public static void info(Context context, String tag, String message) {
@@ -112,13 +167,14 @@ public final class AppLogger {
     public static void error(Context context, String tag, String message, Throwable err) {
         String detail = message == null ? "" : message;
         if (err != null) {
-            detail = detail + (detail.isEmpty() ? "" : " | ") + err.getClass().getSimpleName() + ": " + err.getMessage();
+            detail = detail + (detail.isEmpty() ? "" : " | ") + formatThrowableCompact(err, MAX_CRASH_TRACE_CHARS);
         }
         append(context, LEVEL_ERROR, tag, detail);
     }
 
     private static void append(Context context, String level, String tag, String message) {
         if (context == null) return;
+        installUncaughtHandler(context);
         appendToDir(getLogsDir(context), level, tag, message, System.currentTimeMillis());
     }
 
@@ -128,21 +184,63 @@ public final class AppLogger {
         String dayName = "log_" + new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(nowMs)) + ".jsonl";
         File target = new File(logsDir, dayName);
         String timeStr = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(nowMs));
+        String safeLevel = level == null ? LEVEL_INFO : level;
+        String safeTag = tag == null ? "App" : tag;
+        String safeMsg = message == null ? "" : message;
         synchronized (FILE_LOCK) {
+            String line;
             try {
                 JSONObject obj = new JSONObject();
                 obj.put("ts", nowMs);
                 obj.put("time", timeStr);
-                obj.put("level", level == null ? LEVEL_INFO : level);
-                obj.put("tag", tag == null ? "App" : tag);
-                obj.put("msg", message == null ? "" : message);
-                String line = obj.toString() + "\n";
-                try (FileOutputStream fos = new FileOutputStream(target, true)) {
-                    fos.write(line.getBytes(StandardCharsets.UTF_8));
+                obj.put("level", safeLevel);
+                obj.put("tag", safeTag);
+                obj.put("msg", safeMsg);
+                String encoded = obj.toString();
+                if (encoded == null || !encoded.startsWith("{")) {
+                    throw new IllegalStateException("JSON serialization unavailable");
+                }
+                line = encoded + "\n";
+            } catch (Throwable jsonErr) {
+                line = "{\"ts\":" + nowMs
+                        + ",\"time\":\"" + escapeJsonRaw(timeStr)
+                        + "\",\"level\":\"" + escapeJsonRaw(safeLevel)
+                        + "\",\"tag\":\"" + escapeJsonRaw(safeTag)
+                        + "\",\"msg\":\"" + escapeJsonRaw(safeMsg) + "\"}\n";
+            }
+            try (FileOutputStream fos = new FileOutputStream(target, true)) {
+                fos.write(line.getBytes(StandardCharsets.UTF_8));
+                fos.flush();
+                try {
+                    fos.getFD().sync();
+                } catch (Throwable ignored) {
                 }
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    private static String escapeJsonRaw(String s) {
+        if (s == null || s.isEmpty()) return "";
+        StringBuilder out = new StringBuilder(s.length() + 16);
+        int cap = Math.min(s.length(), MAX_CRASH_TRACE_CHARS);
+        for (int i = 0; i < cap; i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"': out.append("\\\""); break;
+                case '\\': out.append("\\\\"); break;
+                case '\n': out.append("\\n"); break;
+                case '\r': out.append("\\r"); break;
+                case '\t': out.append("\\t"); break;
+                default:
+                    if (c < 0x20) {
+                        out.append(' ');
+                    } else {
+                        out.append(c);
+                    }
+            }
+        }
+        return out.toString();
     }
 
     public static void cleanupOldLogs(File logsDir, long nowMs) {
