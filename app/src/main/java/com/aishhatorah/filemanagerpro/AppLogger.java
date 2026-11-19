@@ -124,7 +124,8 @@ public final class AppLogger {
         StringBuilder sb = new StringBuilder(Math.min(limit, 2048));
         Throwable cur = err;
         int depth = 0;
-        while (cur != null && depth < 6 && sb.length() < limit) {
+        boolean cutByLimit = false;
+        while (cur != null && depth < 6 && sb.length() < limit - 32) {
             if (depth > 0) {
                 sb.append("\nCaused by: ");
             }
@@ -134,20 +135,39 @@ public final class AppLogger {
                 sb.append(": ").append(msg);
             }
             StackTraceElement[] trace = cur.getStackTrace();
-            if (trace != null) {
-                int maxFrames = Math.min(trace.length, depth == 0 ? 45 : 20);
-                for (int i = 0; i < maxFrames && sb.length() < limit - 80; i++) {
+            boolean hasNextCause = cur.getCause() != null && depth < 5;
+            int reserveForCause = hasNextCause ? Math.min(limit / 3, 1024) : 48;
+            int frameStopAt = Math.max(sb.length(), limit - reserveForCause);
+            if (trace != null && sb.length() < frameStopAt) {
+                int maxFrames = Math.min(trace.length, depth == 0 ? 40 : 18);
+                int shown = 0;
+                for (int i = 0; i < maxFrames && sb.length() < frameStopAt; i++) {
                     sb.append("\n  at ").append(trace[i].toString());
+                    shown++;
                 }
-                if (trace.length > maxFrames && sb.length() < limit - 32) {
-                    sb.append("\n  ... ").append(trace.length - maxFrames).append(" more");
+                if (shown < trace.length) {
+                    if (sb.length() < limit - 24) {
+                        sb.append("\n  ... ").append(trace.length - shown).append(" more");
+                    } else {
+                        cutByLimit = true;
+                    }
                 }
+            } else if (trace != null && trace.length > 0 && hasNextCause && sb.length() < limit - 16) {
+                sb.append("\n  ... ").append(trace.length).append(" frames omitted");
+                cutByLimit = true;
             }
             cur = cur.getCause();
             depth++;
         }
+        if (cur != null) {
+            cutByLimit = true;
+        }
         if (sb.length() > limit) {
             return sb.substring(0, limit - 3) + "...";
+        }
+        if (cutByLimit && !sb.toString().endsWith("...")) {
+            int keep = Math.min(sb.length(), limit - 3);
+            return sb.substring(0, keep) + "...";
         }
         return sb.toString();
     }

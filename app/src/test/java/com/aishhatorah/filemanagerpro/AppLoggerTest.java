@@ -50,12 +50,27 @@ public class AppLoggerTest {
     public void formatThrowableCompactIncludesCauseAndRespectsLimit() {
         IllegalStateException root = new IllegalStateException("root failure reason");
         RuntimeException outer = new RuntimeException("outer wrapper", root);
+        StackTraceElement[] deepOuter = new StackTraceElement[80];
+        for (int i = 0; i < deepOuter.length; i++) {
+            deepOuter[i] = new StackTraceElement(
+                    "com.aishhatorah.filemanagerpro.DeepRunnerFrame" + i,
+                    "executeStepWithVeryLongDiagnosticMethodName_" + i,
+                    "DeepRunnerFrame.java",
+                    100 + i
+            );
+        }
+        outer.setStackTrace(deepOuter);
 
         String full = AppLogger.formatThrowableCompact(outer, 4096);
         assertTrue(full.contains("java.lang.RuntimeException: outer wrapper"));
         assertTrue(full.contains("Caused by: java.lang.IllegalStateException: root failure reason"));
 
-        String truncated = AppLogger.formatThrowableCompact(outer, 256);
+        StringBuilder longMsg = new StringBuilder("huge header ");
+        for (int i = 0; i < 40; i++) {
+            longMsg.append("segment_").append(i).append("_");
+        }
+        RuntimeException oversized = new RuntimeException(longMsg.toString(), root);
+        String truncated = AppLogger.formatThrowableCompact(oversized, 256);
         assertTrue(truncated.length() <= 256);
         assertTrue(truncated.endsWith("..."));
     }
