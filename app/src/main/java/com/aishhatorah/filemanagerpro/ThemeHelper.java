@@ -1,6 +1,8 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.app.Activity;
+import android.app.WallpaperColors;
+import android.app.WallpaperManager;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -57,6 +59,167 @@ public class ThemeHelper {
         return f.exists() && f.isFile() && f.length() > 0;
     }
 
+    private static volatile long cachedSystemPaletteTs = 0L;
+    private static volatile boolean cachedSystemPaletteNight = false;
+    private static volatile SystemPalette cachedSystemPalette = null;
+
+    private static final class SystemPalette {
+        final int bg;
+        final int card;
+        final int topBar;
+        final int accent;
+        final int textPrimary;
+        final int textSecondary;
+
+        SystemPalette(int bg, int card, int topBar, int accent, int textPrimary, int textSecondary) {
+            this.bg = bg;
+            this.card = card;
+            this.topBar = topBar;
+            this.accent = accent;
+            this.textPrimary = textPrimary;
+            this.textSecondary = textSecondary;
+        }
+    }
+
+    public static void invalidateSystemPaletteCache() {
+        cachedSystemPaletteTs = 0L;
+        cachedSystemPalette = null;
+    }
+
+    private static boolean isUntintedDefaultMonetBlue(int color) {
+        int rgb = color & 0x00FFFFFF;
+        return rgb == 0x1A73E8 || rgb == 0x1B6EF3 || rgb == 0x0061A4 || rgb == 0x4285F4 || rgb == 0x1E40AF;
+    }
+
+    private static int adaptAccentForSurface(int rawColor, boolean night) {
+        float[] hsl = new float[3];
+        ColorUtils.colorToHSL(rawColor, hsl);
+        if (hsl[1] < 0.14f) {
+            hsl[1] = 0.28f;
+        } else {
+            hsl[1] = Math.min(0.85f, Math.max(0.32f, hsl[1]));
+        }
+        hsl[2] = night ? Math.max(0.58f, Math.min(0.76f, hsl[2] + 0.12f))
+                : Math.max(0.34f, Math.min(0.48f, hsl[2]));
+        return ColorUtils.HSLToColor(hsl);
+    }
+
+    private static SystemPalette resolveSystemPalette(Context context) {
+        boolean night = resolveEffectiveTheme(context, PrefsManager.THEME_SYSTEM) == PrefsManager.THEME_DARK;
+        long now = android.os.SystemClock.uptimeMillis();
+        SystemPalette snap = cachedSystemPalette;
+        if (snap != null && cachedSystemPaletteNight == night && (now - cachedSystemPaletteTs) < 1500L) {
+            return snap;
+        }
+
+        Integer wallpaperPrimary = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            try {
+                WallpaperManager wm = WallpaperManager.getInstance(context.getApplicationContext());
+                if (wm != null) {
+                    WallpaperColors wc = wm.getWallpaperColors(WallpaperManager.FLAG_SYSTEM);
+                    if (wc != null) {
+                        Color p = wc.getPrimaryColor();
+                        if (p != null) {
+                            int argb = p.toArgb();
+                            float[] hsl = new float[3];
+                            ColorUtils.colorToHSL(argb, hsl);
+                            // אם הצבע הראשי ניטרלי כמעט לגמרי (שחור/לבן), ננסה את המשני אם קיים
+                            if (hsl[1] < 0.12f && wc.getSecondaryColor() != null) {
+                                Color sec = wc.getSecondaryColor();
+                                float[] secHsl = new float[3];
+                                ColorUtils.colorToHSL(sec.toArgb(), secHsl);
+                                if (secHsl[1] > hsl[1] + 0.08f) {
+                                    argb = sec.toArgb();
+                                }
+                            }
+                            wallpaperPrimary = argb;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        int monetAccent = 0;
+        int monetBg = 0;
+        int monetCard = 0;
+        int monetSecText = 0;
+        boolean hasMonet = false;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                int rawMonet500 = context.getColor(android.R.color.system_accent1_500);
+                int rawMonetAccent = context.getColor(night
+                        ? android.R.color.system_accent1_300
+                        : android.R.color.system_accent1_600);
+                int rawNeutralBg = context.getColor(night
+                        ? android.R.color.system_neutral1_900
+                        : android.R.color.system_neutral1_50);
+                int rawNeutralCard = context.getColor(night
+                        ? android.R.color.system_neutral1_800
+                        : android.R.color.system_neutral1_0);
+                int rawNeutralSec = context.getColor(night
+                        ? android.R.color.system_neutral2_300
+                        : android.R.color.system_neutral2_600);
+
+                // אם יצרן ROM מחזיר כחול ברירת מחדל קשיח למרות שצבע הרקע של המכשיר שונה, נעדיף את צבע הרקע מהטפט
+                boolean looksStaticDefault = isUntintedDefaultMonetBlue(rawMonet500)
+                        && wallpaperPrimary != null
+                        && !isUntintedDefaultMonetBlue(wallpaperPrimary);
+                if (!looksStaticDefault && rawMonetAccent != 0) {
+                    hasMonet = true;
+                    monetAccent = rawMonetAccent;
+                    monetBg = rawNeutralBg;
+                    monetCard = rawNeutralCard;
+                    monetSecText = rawNeutralSec;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        int accent;
+        int bg;
+        int card;
+        int topBar;
+        int textPrimary;
+        int textSecondary;
+
+        if (hasMonet) {
+            accent = monetAccent;
+            bg = monetBg;
+            card = monetCard;
+            topBar = monetCard;
+            textPrimary = night ? Color.parseColor("#F1F5F9") : Color.parseColor("#0F172A");
+            textSecondary = monetSecText;
+        } else if (wallpaperPrimary != null) {
+            accent = adaptAccentForSurface(wallpaperPrimary, night);
+            int neutralBg = night ? Color.parseColor("#111418") : Color.parseColor("#F5F7FA");
+            int neutralCard = night ? Color.parseColor("#1B212A") : Color.parseColor("#FFFFFF");
+            bg = ColorUtils.blendARGB(neutralBg, accent, night ? 0.08f : 0.06f);
+            card = ColorUtils.blendARGB(neutralCard, accent, night ? 0.07f : 0.03f);
+            topBar = ColorUtils.blendARGB(neutralCard, accent, night ? 0.10f : 0.04f);
+            textPrimary = night ? Color.parseColor("#F1F5F9") : Color.parseColor("#0F172A");
+            textSecondary = ColorUtils.blendARGB(
+                    night ? Color.parseColor("#94A3B8") : Color.parseColor("#64748B"),
+                    accent,
+                    0.18f);
+        } else {
+            accent = night ? Color.parseColor("#60A5FA") : Color.parseColor("#1E40AF");
+            bg = night ? Color.parseColor("#111418") : Color.parseColor("#F5F7FA");
+            card = night ? Color.parseColor("#1C222B") : Color.parseColor("#FFFFFF");
+            topBar = card;
+            textPrimary = night ? Color.parseColor("#F1F5F9") : Color.parseColor("#0F172A");
+            textSecondary = night ? Color.parseColor("#94A3B8") : Color.parseColor("#64748B");
+        }
+
+        SystemPalette built = new SystemPalette(bg, card, topBar, accent, textPrimary, textSecondary);
+        cachedSystemPalette = built;
+        cachedSystemPaletteNight = night;
+        cachedSystemPaletteTs = now;
+        return built;
+    }
+
     public static int resolveEffectiveTheme(Context context, int theme) {
         if (theme != PrefsManager.THEME_SYSTEM) {
             return theme;
@@ -72,14 +235,7 @@ public class ThemeHelper {
 
     public static int getBgColor(Context context, int theme) {
         if (theme == PrefsManager.THEME_SYSTEM && context != null) {
-            boolean night = resolveEffectiveTheme(context, theme) == PrefsManager.THEME_DARK;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    return context.getColor(night ? android.R.color.system_neutral1_900 : android.R.color.system_neutral1_50);
-                } catch (Throwable ignored) {
-                }
-            }
-            return night ? Color.parseColor("#111418") : Color.parseColor("#F5F7FA");
+            return resolveSystemPalette(context).bg;
         }
         if (theme == PrefsManager.THEME_DARK) return Color.parseColor("#111622");
         if (theme == PrefsManager.THEME_NEON) return Color.parseColor("#060B18");
@@ -100,14 +256,7 @@ public class ThemeHelper {
 
     public static int getCardColor(Context context, int theme) {
         if (theme == PrefsManager.THEME_SYSTEM && context != null) {
-            boolean night = resolveEffectiveTheme(context, theme) == PrefsManager.THEME_DARK;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    return context.getColor(night ? android.R.color.system_neutral1_800 : android.R.color.system_neutral1_0);
-                } catch (Throwable ignored) {
-                }
-            }
-            return night ? Color.parseColor("#1C222B") : Color.parseColor("#FFFFFF");
+            return resolveSystemPalette(context).card;
         }
         if (theme == PrefsManager.THEME_DARK) return Color.parseColor("#1B2332");
         if (theme == PrefsManager.THEME_NEON) return Color.parseColor("#0D162B");
@@ -143,9 +292,7 @@ public class ThemeHelper {
 
     public static int getPrimaryTextColor(Context context, int theme) {
         if (theme == PrefsManager.THEME_SYSTEM && context != null) {
-            return resolveEffectiveTheme(context, theme) == PrefsManager.THEME_DARK
-                    ? Color.parseColor("#F1F5F9")
-                    : Color.parseColor("#0F172A");
+            return resolveSystemPalette(context).textPrimary;
         }
         return getPrimaryTextColor(theme);
     }
@@ -166,9 +313,7 @@ public class ThemeHelper {
 
     public static int getSecondaryTextColor(Context context, int theme) {
         if (theme == PrefsManager.THEME_SYSTEM && context != null) {
-            return resolveEffectiveTheme(context, theme) == PrefsManager.THEME_DARK
-                    ? Color.parseColor("#94A3B8")
-                    : Color.parseColor("#64748B");
+            return resolveSystemPalette(context).textSecondary;
         }
         return getSecondaryTextColor(theme);
     }
@@ -187,15 +332,19 @@ public class ThemeHelper {
         return Color.parseColor("#1E40AF");
     }
 
+    public static int getThemePreviewAccentColor(Context context, int theme) {
+        if (theme == PrefsManager.THEME_SYSTEM && context != null) {
+            return resolveSystemPalette(context).accent;
+        }
+        return getAccentColor(theme);
+    }
+
     public static int getAccentColor(Context context, int theme) {
         if (context != null) {
             int custom = PrefsManager.getCustomAccentColor(context);
             if (custom != 0) return custom;
-            if (theme == PrefsManager.THEME_SYSTEM && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    return context.getColor(android.R.color.system_accent1_500);
-                } catch (Throwable ignored) {
-                }
+            if (theme == PrefsManager.THEME_SYSTEM) {
+                return resolveSystemPalette(context).accent;
             }
         }
         return getAccentColor(theme);
@@ -217,7 +366,7 @@ public class ThemeHelper {
 
     public static int getTopBarColor(Context context, int theme) {
         if (theme == PrefsManager.THEME_SYSTEM && context != null) {
-            return getCardColor(context, theme);
+            return resolveSystemPalette(context).topBar;
         }
         return getTopBarColor(theme);
     }
@@ -238,7 +387,11 @@ public class ThemeHelper {
     public static void overrideOpenTransition(Activity activity) {
         if (activity == null) return;
         try {
-            activity.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+            if (PrefsManager.isReduceAnimations(activity)) {
+                activity.overridePendingTransition(0, 0);
+            } else {
+                activity.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+            }
         } catch (Throwable ignored) {
         }
     }
@@ -246,7 +399,11 @@ public class ThemeHelper {
     public static void overrideCloseTransition(Activity activity) {
         if (activity == null) return;
         try {
-            activity.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+            if (PrefsManager.isReduceAnimations(activity)) {
+                activity.overridePendingTransition(0, 0);
+            } else {
+                activity.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+            }
         } catch (Throwable ignored) {
         }
     }
