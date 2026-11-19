@@ -222,11 +222,25 @@ public final class GlassSideDrawerHelper {
         popup.setOutsideTouchable(true);
 
         final boolean[] dismissing = new boolean[]{false};
+        final boolean reduceAnim = PrefsManager.isReduceAnimations(activity);
         final float slideSign = anchorOnLeftSide ? -1f : 1f;
 
         final Runnable dismissWithAnim = () -> {
             if (dismissing[0]) return;
             dismissing[0] = true;
+            if (reduceAnim) {
+                if (anchor != null) {
+                    anchor.animate().cancel();
+                    anchor.setRotation(0f);
+                    anchor.setScaleX(1f);
+                    anchor.setScaleY(1f);
+                }
+                try {
+                    if (popup.isShowing()) popup.dismiss();
+                } catch (Throwable ignored) {
+                }
+                return;
+            }
             if (anchor != null) {
                 anchor.animate().rotation(0f).scaleX(1f).scaleY(1f)
                         .setDuration(190).setInterpolator(new DecelerateInterpolator()).start();
@@ -260,7 +274,14 @@ public final class GlassSideDrawerHelper {
 
         popup.setOnDismissListener(() -> {
             if (anchor != null) {
-                anchor.animate().rotation(0f).scaleX(1f).scaleY(1f).setDuration(150).start();
+                if (reduceAnim) {
+                    anchor.animate().cancel();
+                    anchor.setRotation(0f);
+                    anchor.setScaleX(1f);
+                    anchor.setScaleY(1f);
+                } else {
+                    anchor.animate().rotation(0f).scaleX(1f).scaleY(1f).setDuration(150).start();
+                }
             }
         });
 
@@ -388,12 +409,17 @@ public final class GlassSideDrawerHelper {
                 }
 
                 row.setOnClickListener(v -> {
-                    AutoTransition transition = new AutoTransition();
-                    transition.setDuration(180);
-                    TransitionManager.beginDelayedTransition(drawerCard, transition);
                     boolean opening = subContainer.getVisibility() != View.VISIBLE;
-                    subContainer.setVisibility(opening ? View.VISIBLE : View.GONE);
-                    ivArrow.animate().rotation(opening ? 180f : 0f).setDuration(180).start();
+                    if (!reduceAnim) {
+                        AutoTransition transition = new AutoTransition();
+                        transition.setDuration(180);
+                        TransitionManager.beginDelayedTransition(drawerCard, transition);
+                        subContainer.setVisibility(opening ? View.VISIBLE : View.GONE);
+                        ivArrow.animate().rotation(opening ? 180f : 0f).setDuration(180).start();
+                    } else {
+                        subContainer.setVisibility(opening ? View.VISIBLE : View.GONE);
+                        ivArrow.setRotation(opening ? 180f : 0f);
+                    }
                 });
 
                 listContainer.addView(row);
@@ -410,21 +436,31 @@ public final class GlassSideDrawerHelper {
             }
         }
 
-        drawerCard.setTranslationX(slideSign * (drawerW + 24 * d));
-        drawerCard.setAlpha(0f);
+        if (reduceAnim) {
+            drawerCard.setTranslationX(0f);
+            drawerCard.setAlpha(1f);
+            backdrop.setAlpha(1f);
+            popup.showAtLocation(decor, Gravity.NO_GRAVITY, 0, 0);
+            if (anchor != null) {
+                anchor.setRotation(90f);
+            }
+        } else {
+            drawerCard.setTranslationX(slideSign * (drawerW + 24 * d));
+            drawerCard.setAlpha(0f);
 
-        popup.showAtLocation(decor, Gravity.NO_GRAVITY, 0, 0);
+            popup.showAtLocation(decor, Gravity.NO_GRAVITY, 0, 0);
 
-        if (anchor != null) {
-            anchor.animate().rotation(90f).scaleX(0.92f).scaleY(0.92f)
-                    .setDuration(220).setInterpolator(new DecelerateInterpolator()).start();
+            if (anchor != null) {
+                anchor.animate().rotation(90f).scaleX(0.92f).scaleY(0.92f)
+                        .setDuration(220).setInterpolator(new DecelerateInterpolator()).start();
+            }
+            backdrop.animate().alpha(1f).setDuration(200).start();
+            drawerCard.animate()
+                    .translationX(0f)
+                    .alpha(1f)
+                    .setDuration(230)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
         }
-        backdrop.animate().alpha(1f).setDuration(200).start();
-        drawerCard.animate()
-                .translationX(0f)
-                .alpha(1f)
-                .setDuration(230)
-                .setInterpolator(new DecelerateInterpolator())
-                .start();
     }
 }

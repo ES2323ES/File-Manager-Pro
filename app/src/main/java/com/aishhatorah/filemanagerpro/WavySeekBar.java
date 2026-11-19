@@ -52,12 +52,14 @@ public class WavySeekBar extends View {
     private long lastWaveTickMs = 0L;
     private boolean thumbOnlyTouch = false;
     private boolean showTickDots = true;
+    private boolean animationsEnabled = true;
 
     private OnSeekBarChangeListener listener;
 
     public WavySeekBar(Context context) {
         super(context);
         setLayoutDirection(LAYOUT_DIRECTION_LTR);
+        animationsEnabled = !PrefsManager.isReduceAnimations(context);
 
         applyDimensions(false);
 
@@ -135,6 +137,16 @@ public class WavySeekBar extends View {
     public void setShowTickDots(boolean showTickDots) {
         this.showTickDots = showTickDots;
         invalidate();
+    }
+
+    public void setAnimationsEnabled(boolean enabled) {
+        if (this.animationsEnabled != enabled) {
+            this.animationsEnabled = enabled;
+            if (!enabled) {
+                lastWaveTickMs = 0L;
+            }
+            invalidate();
+        }
     }
 
     public void setMax(int max) {
@@ -217,7 +229,7 @@ public class WavySeekBar extends View {
         }
 
         if (thumbX > startX) {
-            if (playing) {
+            if (playing && animationsEnabled) {
                 long now = SystemClock.uptimeMillis();
                 if (lastWaveTickMs == 0L) {
                     lastWaveTickMs = now;

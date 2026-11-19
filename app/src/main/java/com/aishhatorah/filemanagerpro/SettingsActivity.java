@@ -54,6 +54,7 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        ThemeHelper.invalidateSystemPaletteCache();
         renderSettingsUi();
     }
 
@@ -213,6 +214,8 @@ public class SettingsActivity extends AppCompatActivity {
                         dark,
                         () -> {
                             PrefsManager.setThemeMode(this, tId);
+                            PrefsManager.setCustomAccentColor(this, 0);
+                            ThemeHelper.invalidateSystemPaletteCache();
                             renderSettingsUi();
                         });
                 tRow.addView(cardItem);
@@ -265,7 +268,7 @@ public class SettingsActivity extends AppCompatActivity {
                 dot.setLayoutParams(dlp);
                 GradientDrawable gd = new GradientDrawable();
                 gd.setShape(GradientDrawable.OVAL);
-                gd.setColor(swColor == 0 ? ThemeHelper.getAccentColor(theme) : swColor);
+                gd.setColor(swColor == 0 ? ThemeHelper.getThemePreviewAccentColor(this, theme) : swColor);
                 boolean sel = currentCustomAccent == swColor;
                 gd.setStroke(sel ? dp(3) : dp(1), sel ? textPrimary : divider);
                 dot.setBackground(gd);
@@ -341,6 +344,14 @@ public class SettingsActivity extends AppCompatActivity {
             }
         });
         themeCard.addView(sbScale);
+
+        addSwitchRow(themeCard,
+                "הפחתת אנימציות",
+                "",
+                PrefsManager.isReduceAnimations(this),
+                textPrimary, textSecondary,
+                checked -> PrefsManager.setReduceAnimations(this, checked));
+
         body.addView(themeCard);
 
         // 2. מנועי צפייה, נגן מדיה ומחוות
@@ -846,7 +857,7 @@ public class SettingsActivity extends AppCompatActivity {
         card.setPadding(dp(6), dp(8), dp(6), dp(8));
 
         int previewBg = ThemeHelper.getBgColor(this, themeId);
-        int previewAccent = ThemeHelper.getAccentColor(themeId);
+        int previewAccent = ThemeHelper.getThemePreviewAccentColor(this, themeId);
         boolean previewDark = ThemeHelper.isDarkSurface(this, themeId);
 
         GradientDrawable cardBg = new GradientDrawable();
