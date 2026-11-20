@@ -55,7 +55,7 @@ public class AudioPlayerManager {
     private int currentIndex = -1;
     private Bitmap currentArtwork;
     private float playbackSpeed = 1.0f;
-    private int repeatMode = REPEAT_OFF;
+    private int repeatMode = REPEAT_FOLDER;
     private boolean prepared = false;
 
     private long sleepEndEpochMs = 0L;
@@ -328,6 +328,35 @@ public class AudioPlayerManager {
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    public int getSelectedEqPresetIndex() {
+        return selectedPresetIndex;
+    }
+
+    public void resetEqualizerToDefault() {
+        selectedPresetIndex = -1;
+        customBandLevels = null;
+        try {
+            if (equalizer != null) {
+                short count = equalizer.getNumberOfBands();
+                for (short i = 0; i < count; i++) {
+                    equalizer.setBandLevel(i, (short) 0);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        bassStrength = 0;
+        try {
+            if (bassBoost != null) {
+                if (bassBoost.getStrengthSupported()) {
+                    bassBoost.setStrength((short) 0);
+                }
+                bassBoost.setEnabled(false);
+            }
+        } catch (Throwable ignored) {
+        }
+        notifyListeners();
     }
 
     // ==================== Playback Core ====================

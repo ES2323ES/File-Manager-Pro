@@ -23,6 +23,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.pdf.PdfRenderer;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
@@ -33,6 +34,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.Base64;
@@ -42,7 +44,6 @@ import android.util.TypedValue;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.MotionEvent;
-import android.webkit.MimeTypeMap;
 import android.view.ScaleGestureDetector;
 import android.view.Surface;
 import android.view.TextureView;
@@ -52,6 +53,7 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
+import android.webkit.MimeTypeMap;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.Button;
@@ -93,6 +95,9 @@ import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.extractor.ExtractorsFactory;
+import androidx.recyclerview.widget.ItemTouchHelper;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 
@@ -116,13 +121,13 @@ import java.util.zip.GZIPInputStream;
 import com.aishhatorah.filemanagerpro.AudioPaletteHelper.AudioAdaptivePalette;
 
 /**
- * מציג ונגן המדיה המובנה של File Manager Pro 0.3.6:
+ * מציג ונגן המדיה המובנה של File Manager Pro 0.3.7:
  * - תצוגת Edge-to-Edge מלאה לתמונות ווידאו מאחורי סרגלים שקופים (סעיף 25)
  * - מצב מחוות אוטומטי מול מצב כפתורים קלאסי בווידאו ותמונות (סעיפים 29, 30, 44)
  * - לחיצה ארוכה בצד ימין 2x קדימה ובצד שמאל 2x אחורה בווידאו (סעיף 44)
  * - תמונה בתוך תמונה (PiP) ופתיחה אוניברסלית דרך "פתח באמצעות" מכל אפליקציה
  * - תמיכה מלאה ב-GIF מונפש + פירוק ל-PNG + המרה ל-MP4 + יצירת GIF (סעיף 9)
- * - קביעת טפט, הצגת מקור SVG, נגן שמע עם תור/טיימר שינה/אקולייזר (סעיפים 22, 41, 42)
+ * - קביעת טפט, הצגת מקור SVG, נגן שמע עם תור בגרירה/טיימר שינה/אקולייזר (סעיפים 22, 41, 42)
  * - צפייה, חילוץ ועריכת קבצים בתוך ארכיוני ZIP/TAR/GZ כולל סיסמה (סעיף 2)
  */
 public class BuiltInViewerActivity extends AppCompatActivity {
@@ -161,7 +166,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private int currentImageIdx = 0;
     private ZoomableImageView activeZoomImageView = null;
     private int imageLoadGeneration = 0;
-    private final android.util.LruCache<String, DecodedPhoto> photoCache = new android.util.LruCache<>(5);
+    private final android.util.LruCache<String, DecodedPhoto> photoCache = new android.util.LruCache<String, DecodedPhoto>(
+            (int) Math.max(4096, Math.min(32768, Runtime.getRuntime().maxMemory() / 1024L / 10L))) {
+        @Override
+        protected int sizeOf(String key, DecodedPhoto value) {
+            if (value == null || value.bitmap == null || value.bitmap.isRecycled()) return 1;
+            return Math.max(1, value.bitmap.getByteCount() / 1024);
+        }
+    };
     private Runnable archiveNavigateUpHandler = null;
 
     private boolean isAudioMode = false;
@@ -243,6 +255,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private ParcelFileDescriptor pdfDescriptor;
     private PdfRenderer pdfRenderer;
+    private Bitmap activePdfBitmap;
     private int currentPdfPage = 0;
 
     private String archivePassword = "";
@@ -270,6 +283,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIncomingIntent(intent, false);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (isImageMode || isVideoMode) {
+            applyMediaImmersiveAndLayoutState();
+        }
     }
 
     private void handleIncomingIntent(Intent intent, boolean isInitialCreate) {
@@ -334,7 +355,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     externalCopiedCacheFile = copied;
                     openResolvedTargetFile(copied);
                 } else {
-                    Toast.makeText(this, "לא ניתן לפתוח קובץ זה", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "לא ניתן לפתוח קובץ חיצוני זה", Toast.LENGTH_SHORT).show();
                     if (isInitialCreate) finish();
                 }
             });
@@ -342,6 +363,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void openResolvedTargetFile(File file) {
+        if (file == null || !file.exists()) {
+            finish();
+            return;
+        }
         String lower = file.getName().toLowerCase(Locale.ROOT);
         if (FileOpenWithHelper.ACTION_INTERNAL_CODE.equals(forceType)
                 || (forceType == null && !MediaFormatHelper.isImageFile(lower)
@@ -569,8 +594,23 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             browser.putExtra(FileBrowserActivity.EXTRA_TITLE, songFolder.getName());
             browser.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(browser);
+            finish();
+            ThemeHelper.overrideCloseTransition(this);
+            return;
         }
         finish();
+        if (isAudioMode) {
+            try {
+                if (PrefsManager.isReduceAnimations(this)) {
+                    overridePendingTransition(0, 0);
+                } else {
+                    overridePendingTransition(0, R.anim.slide_out_bottom);
+                }
+            } catch (Throwable ignored) {
+            }
+        } else {
+            ThemeHelper.overrideCloseTransition(this);
+        }
     }
 
     private void buildViewerUiForCurrentFile() {
@@ -680,17 +720,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 });
             } else {
                 renderVideoPlayerOverlay(stageRoot, cardColor, textPrimary, textSecondary, accent, theme);
+                final int baseVPad = isLandscape ? dp(6) : dp(8);
+                int statusFloor = resolveStatusBarHeightFallback();
+                lastVideoTopInsetPx = statusFloor;
                 if (topBar != null) {
+                    topBar.setPadding(dp(10), statusFloor + baseVPad, dp(10), baseVPad);
                     FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
                     stageRoot.addView(topBar, topLp);
                 }
-                final int baseVPad = isLandscape ? dp(6) : dp(8);
                 ViewCompat.setOnApplyWindowInsetsListener(stageRoot, (v, insets) -> {
                     Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-                    lastVideoTopInsetPx = sys.top;
+                    int effectiveTop = Math.max(sys.top, statusFloor);
+                    lastVideoTopInsetPx = effectiveTop;
                     if (topBar != null) {
-                        topBar.setPadding(dp(10) + sys.left, sys.top + baseVPad, dp(10) + sys.right, baseVPad);
+                        topBar.setPadding(dp(10) + sys.left, effectiveTop + baseVPad, dp(10) + sys.right, baseVPad);
                     }
                     if (activeMediaBottomPanel != null) {
                         ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) activeMediaBottomPanel.getLayoutParams();
@@ -713,6 +757,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
 
             setContentView(stageRoot);
+            ViewCompat.requestApplyInsets(stageRoot);
             applyMediaImmersiveAndLayoutState();
             return;
         }
@@ -811,31 +856,47 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                 final View stage = audioStagePlayerView;
                                 int slideDist = Math.max(dp(180), getHeight() / 2);
                                 int triggerThreshold = dp(64);
+                                boolean reduce = PrefsManager.isReduceAnimations(BuiltInViewerActivity.this);
                                 if (stage != null && Math.abs(dy) > triggerThreshold) {
                                     final boolean goingPreviousDown = dy > 0;
-                                    float exitY = goingPreviousDown ? slideDist : -slideDist;
-                                    float enterFromY = goingPreviousDown ? -slideDist : slideDist;
-                                    stage.animate()
-                                            .translationY(exitY)
-                                            .alpha(0f)
-                                            .setDuration(150)
-                                            .withEndAction(() -> {
-                                                if (goingPreviousDown) {
-                                                    audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
-                                                } else {
-                                                    audioMgr.playNext(BuiltInViewerActivity.this);
-                                                }
-                                                stage.setTranslationY(enterFromY);
-                                                stage.setAlpha(0f);
-                                                stage.animate()
-                                                        .translationY(0f)
-                                                        .alpha(1f)
-                                                        .setDuration(220)
-                                                        .start();
-                                            })
-                                            .start();
+                                    if (reduce) {
+                                        stage.setTranslationY(0f);
+                                        stage.setAlpha(1f);
+                                        if (goingPreviousDown) {
+                                            audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
+                                        } else {
+                                            audioMgr.playNext(BuiltInViewerActivity.this);
+                                        }
+                                    } else {
+                                        float exitY = goingPreviousDown ? slideDist : -slideDist;
+                                        float enterFromY = goingPreviousDown ? -slideDist : slideDist;
+                                        stage.animate()
+                                                .translationY(exitY)
+                                                .alpha(0f)
+                                                .setDuration(150)
+                                                .withEndAction(() -> {
+                                                    if (goingPreviousDown) {
+                                                        audioMgr.playPreviousTrackImmediate(BuiltInViewerActivity.this);
+                                                    } else {
+                                                        audioMgr.playNext(BuiltInViewerActivity.this);
+                                                    }
+                                                    stage.setTranslationY(enterFromY);
+                                                    stage.setAlpha(0f);
+                                                    stage.animate()
+                                                            .translationY(0f)
+                                                            .alpha(1f)
+                                                            .setDuration(220)
+                                                            .start();
+                                                })
+                                                .start();
+                                    }
                                 } else if (stage != null) {
-                                    stage.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                                    if (reduce) {
+                                        stage.setTranslationY(0f);
+                                        stage.setAlpha(1f);
+                                    } else {
+                                        stage.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                                    }
                                 }
                                 audioSwipeMode[0] = 0;
                                 return true;
@@ -945,7 +1006,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 }
             };
             lastHeaderTitleName = targetFile.getName();
-            tvMarqueeTitle.setText("   " + lastHeaderTitleName + "   •   " + lastHeaderTitleName + "   ");
+            tvMarqueeTitle.setText(lastHeaderTitleName);
             tvMarqueeTitle.setTextSize(ThemeHelper.spScaled(this, isLandscape ? 13.5f : 14.5f));
             tvMarqueeTitle.setTypeface(Typeface.DEFAULT_BOLD);
             tvMarqueeTitle.setTextColor(effectiveText);
@@ -984,7 +1045,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
             btnTopRightVideoMenu = createCleanBorderlessIconButton(R.drawable.ic_menu_hamburger, dp(42), Color.WHITE);
             btnTopRightVideoMenu.setContentDescription("אפשרויות");
-            btnTopRightVideoMenu.setOnClickListener(v -> showVideoSettingsDialog(theme));
+            btnTopRightVideoMenu.setOnClickListener(v -> showVideoSettingsDialog(v, theme));
             bar.addView(btnTopRightVideoMenu);
             btnTopRightVideoSettings = null;
         } else {
@@ -1009,7 +1070,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             btnTopRightVideoSettings.setPadding(dp(8), dp(5), dp(8), dp(5));
             btnTopRightVideoSettings.setVisibility(isImageMode ? View.VISIBLE : View.GONE);
             btnTopRightVideoSettings.setOnClickListener(v -> {
-                if (isImageMode) showImageOptionsDialog();
+                if (isImageMode) showImageOptionsDialog(v);
             });
             bar.addView(btnTopRightVideoSettings);
         }
@@ -1031,13 +1092,17 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         if (tvMarqueeTitle != null && name != null) {
             if (name.equals(lastHeaderTitleName)) return;
             lastHeaderTitleName = name;
-            if (isVideoMode || isAudioMode) {
-                tvMarqueeTitle.setText(name);
-            } else {
-                tvMarqueeTitle.setText("   " + name + "   •   " + name + "   ");
+            tvMarqueeTitle.setText(name);
+            if (!isVideoMode && !isAudioMode) {
                 tvMarqueeTitle.setSelected(true);
             }
         }
+    }
+
+    private int resolveStatusBarHeightFallback() {
+        int resId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        int px = resId > 0 ? getResources().getDimensionPixelSize(resId) : 0;
+        return Math.max(px, dp(28));
     }
 
     // ==================== מציג תמונות + GIF + SVG + טפט ====================
@@ -1063,7 +1128,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         final WebView fallbackSvgWebView = new WebView(this);
-        fallbackSvgWebView.setBackgroundColor(Color.TRANSPARENT);
+        fallbackSvgWebView.setBackgroundColor(Color.parseColor("#E2E8F0"));
         fallbackSvgWebView.setVisibility(View.GONE);
         WebSettings ws = fallbackSvgWebView.getSettings();
         ws.setSupportZoom(true);
@@ -1072,6 +1137,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
         ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
+        ws.setJavaScriptEnabled(false);
         GestureDetector webSingleTap = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
@@ -1110,20 +1177,24 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         stageRoot.addView(btnFloatNext, nextFlp);
         activeImageNextFloat = btnFloatNext;
 
+        int scrimOverlayColor = ColorUtils.setAlphaComponent(
+                ColorUtils.blendARGB(ThemeHelper.getTopBarColor(this, theme), Color.parseColor("#0A0F1C"), 0.55f),
+                192);
+
         FrameLayout topOverlay = new FrameLayout(this);
         topOverlay.setClickable(true);
-        topOverlay.setBackgroundColor(Color.argb(172, 24, 34, 54));
+        topOverlay.setBackgroundColor(scrimOverlayColor);
         topOverlay.setPadding(dp(12), dp(26), dp(12), dp(8));
 
         ImageButton btnImgBack = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(44), Color.WHITE);
         btnImgBack.setContentDescription("חזרה");
         btnImgBack.setOnClickListener(v -> proceedCloseOrNavigateBack());
-        topOverlay.addView(btnImgBack, new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.LEFT));
+        topOverlay.addView(btnImgBack, new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.RIGHT));
 
         ImageButton btnImgHamburger = createCleanBorderlessIconButton(R.drawable.ic_menu_hamburger, dp(44), Color.WHITE);
         btnImgHamburger.setContentDescription("אפשרויות");
-        btnImgHamburger.setOnClickListener(v -> showImageOptionsDialog());
-        topOverlay.addView(btnImgHamburger, new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.RIGHT));
+        btnImgHamburger.setOnClickListener(v -> showImageOptionsDialog(v));
+        topOverlay.addView(btnImgHamburger, new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.LEFT));
 
         FrameLayout.LayoutParams topOverlayLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
@@ -1135,7 +1206,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bottomActionsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bottomActionsRow.setGravity(Gravity.CENTER);
         bottomActionsRow.setClickable(true);
-        bottomActionsRow.setBackgroundColor(Color.argb(172, 24, 34, 54));
+        bottomActionsRow.setBackgroundColor(scrimOverlayColor);
         bottomActionsRow.setPadding(dp(12), dp(10), dp(12), dp(14));
         activeMediaBottomPanel = bottomActionsRow;
 
@@ -1185,6 +1256,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             for (int off : offsets) {
                 int nIdx = (currentImageIdx + off + imagePlaylist.size()) % imagePlaylist.size();
                 File neighbor = imagePlaylist.get(nIdx);
+                if (neighbor.length() > 16L * 1024L * 1024L) continue;
                 String nLow = neighbor.getName().toLowerCase(Locale.ROOT);
                 if (MediaFormatHelper.isSvgFile(nLow) || MediaFormatHelper.isGifFile(nLow)) continue;
                 String cacheKey = neighbor.getAbsolutePath() + ":" + neighbor.lastModified();
@@ -1214,19 +1286,28 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             boolean isSvg = MediaFormatHelper.isSvgFile(nameLow);
             if (isSvg) {
                 zoomView.setVisibility(View.GONE);
+                fallbackSvgWebView.setBackgroundColor(Color.parseColor("#E2E8F0"));
                 fallbackSvgWebView.setVisibility(View.VISIBLE);
+                fallbackSvgWebView.onResume();
                 btnProImageEditor.setVisibility(View.GONE);
                 btnWallpaper.setVisibility(View.GONE);
-                try {
-                    byte[] rawBytes = readFileBytesForViewer(imgFile, nameLow.endsWith(".svgz"));
-                    String b64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP);
-                    String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=20'/>"
-                            + "<style>html,body{margin:0;padding:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#000;}"
-                            + "img{max-width:98%;max-height:98%;object-fit:contain;}</style></head>"
-                            + "<body><img src='data:image/svg+xml;base64," + b64 + "'/></body></html>";
-                    fallbackSvgWebView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
-                } catch (Exception ignored) {
-                }
+                final boolean compressedSvg = nameLow.endsWith(".svgz");
+                executor.execute(() -> {
+                    try {
+                        byte[] rawBytes = readFileBytesForViewer(imgFile, compressedSvg);
+                        final String html = buildSvgViewerHtml(rawBytes);
+                        uiHandler.post(() -> {
+                            if (gen != imageLoadGeneration || isFinishing()) return;
+                            fallbackSvgWebView.loadDataWithBaseURL("https://svg.local/", html, "text/html", "UTF-8", null);
+                            preloadNeighbors.run();
+                        });
+                    } catch (Exception e) {
+                        uiHandler.post(() -> {
+                            if (gen != imageLoadGeneration || isFinishing()) return;
+                            Toast.makeText(this, "שגיאה בטעינת SVG: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                        });
+                    }
+                });
                 return;
             }
 
@@ -1280,15 +1361,17 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         preloadNeighbors.run();
                     } else {
                         zoomView.setVisibility(View.GONE);
+                        fallbackSvgWebView.setBackgroundColor(Color.BLACK);
                         fallbackSvgWebView.setVisibility(View.VISIBLE);
+                        fallbackSvgWebView.onResume();
                         try {
                             byte[] rawBytes = readFileBytesForViewer(imgFile, false);
                             String b64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP);
                             String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=20'/>"
                                     + "<style>html,body{margin:0;padding:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#000;}"
-                                    + "img{max-width:98%;max-height:98%;object-fit:contain;}</style></head>"
+                                    + "img{max-width:96vw;max-height:84vh;object-fit:contain;}</style></head>"
                                     + "<body><img src='data:image/*;base64," + b64 + "'/></body></html>";
-                            fallbackSvgWebView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+                            fallbackSvgWebView.loadDataWithBaseURL("https://img.local/", html, "text/html", "UTF-8", null);
                         } catch (Exception ignored) {
                         }
                     }
@@ -1339,99 +1422,101 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         loadCurrentImageIntoStage.run();
     }
 
-    private void showImageOptionsDialog() {
-        List<String> opts = new ArrayList<>();
+    private void showImageOptionsDialog(View anchor) {
         String lower = targetFile.getName().toLowerCase(Locale.ROOT);
         boolean isSvg = MediaFormatHelper.isSvgFile(lower);
         boolean isGif = MediaFormatHelper.isGifFile(lower);
+        boolean autoMode = PrefsManager.isAutoGestureMode(this);
 
-        opts.add("קבע כטפט (מסך בית / נעילה)");
+        List<GlassSideDrawerHelper.DrawerItem> drawerItems = new ArrayList<>();
+        drawerItems.add(GlassSideDrawerHelper.DrawerItem.action(
+                "קבע כטפט (מסך בית / נעילה)", R.drawable.ic_wallpaper, () -> {
+                    Intent wi = new Intent(this, WallpaperCropActivity.class);
+                    wi.putExtra(WallpaperCropActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
+                    startActivity(wi);
+                }));
         if (isSvg) {
-            opts.add("הצג קוד מקור SVG");
+            drawerItems.add(GlassSideDrawerHelper.DrawerItem.action(
+                    "הצג קוד מקור SVG", R.drawable.ic_code, () -> {
+                        Intent ci = new Intent(this, CodeEditorActivity.class);
+                        ci.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, targetFile.getAbsolutePath());
+                        startActivity(ci);
+                    }));
         }
         if (isGif) {
-            opts.add("פירוק GIF לתמונות PNG נפרדות");
-            opts.add("המרת GIF לסרטון MP4");
+            drawerItems.add(GlassSideDrawerHelper.DrawerItem.action(
+                    "פירוק GIF לתמונות PNG נפרדות", R.drawable.ic_images, () -> {
+                        Toast.makeText(this, "מפרק פריימים...", Toast.LENGTH_SHORT).show();
+                        executor.execute(() -> {
+                            try {
+                                File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
+                                File outDir = StorageUtils.uniqueDestinationFile(parent, targetFile.getName() + "_frames");
+                                int count = GifToolsHelper.splitGifToPngs(targetFile, outDir);
+                                uiHandler.post(() -> Toast.makeText(this,
+                                        "פורקו " + count + " תמונות אל " + outDir.getName(), Toast.LENGTH_LONG).show());
+                            } catch (Exception e) {
+                                uiHandler.post(() -> Toast.makeText(this, "שגיאה בפירוק GIF: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                            }
+                        });
+                    }));
+            drawerItems.add(GlassSideDrawerHelper.DrawerItem.action(
+                    "המרת GIF לסרטון MP4", R.drawable.ic_video_cutter, () -> {
+                        Toast.makeText(this, "ממיר GIF ל-MP4...", Toast.LENGTH_SHORT).show();
+                        executor.execute(() -> {
+                            try {
+                                File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
+                                File outMp4 = StorageUtils.uniqueDestinationFile(parent, targetFile.getName() + ".mp4");
+                                GifToolsHelper.convertGifToMp4(targetFile, outMp4);
+                                uiHandler.post(() -> Toast.makeText(this,
+                                        "נשמר סרטון: " + outMp4.getName(), Toast.LENGTH_LONG).show());
+                            } catch (Exception e) {
+                                uiHandler.post(() -> Toast.makeText(this, "שגיאה בהמרה: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                            }
+                        });
+                    }));
         } else if (!isSvg) {
-            opts.add("צור GIF מתמונות התיקייה");
-        }
-        boolean autoMode = PrefsManager.isAutoGestureMode(this);
-        opts.add("מצב מחוות אוטומטי: " + (autoMode ? "מופעל (הקשה בצדדים)" : "כבוי (כפתורים צפים)"));
-        opts.add("שיתוף קובץ");
-        opts.add("מחיקה");
-
-        ThemedDialogHelper.showThemedMenu(this, "אפשרויות תמונה", targetFile.getName(), opts, idx -> {
-            String sel = opts.get(idx);
-            if (sel.startsWith("קבע כטפט")) {
-                Intent wi = new Intent(this, WallpaperCropActivity.class);
-                wi.putExtra(WallpaperCropActivity.EXTRA_IMAGE_PATH, targetFile.getAbsolutePath());
-                startActivity(wi);
-            } else if (sel.equals("הצג קוד מקור SVG")) {
-                Intent ci = new Intent(this, CodeEditorActivity.class);
-                ci.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, targetFile.getAbsolutePath());
-                startActivity(ci);
-            } else if (sel.startsWith("פירוק GIF")) {
-                Toast.makeText(this, "מפרק פריימים...", Toast.LENGTH_SHORT).show();
-                executor.execute(() -> {
-                    try {
-                        File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
-                        File outDir = StorageUtils.uniqueDestinationFile(parent, targetFile.getName() + "_frames");
-                        int count = GifToolsHelper.splitGifToPngs(targetFile, outDir);
-                        uiHandler.post(() -> Toast.makeText(this,
-                                "פורקו " + count + " תמונות אל " + outDir.getName(), Toast.LENGTH_LONG).show());
-                    } catch (Exception e) {
-                        uiHandler.post(() -> Toast.makeText(this, "שגיאה בפירוק GIF: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                    }
-                });
-            } else if (sel.startsWith("המרת GIF")) {
-                Toast.makeText(this, "ממיר GIF ל-MP4...", Toast.LENGTH_SHORT).show();
-                executor.execute(() -> {
-                    try {
-                        File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
-                        File outMp4 = StorageUtils.uniqueDestinationFile(parent, targetFile.getName() + ".mp4");
-                        GifToolsHelper.convertGifToMp4(targetFile, outMp4);
-                        uiHandler.post(() -> Toast.makeText(this,
-                                "נשמר סרטון: " + outMp4.getName(), Toast.LENGTH_LONG).show());
-                    } catch (Exception e) {
-                        uiHandler.post(() -> Toast.makeText(this, "שגיאה בהמרה: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                    }
-                });
-            } else if (sel.startsWith("צור GIF")) {
-                if (imagePlaylist.size() < 2) {
-                    Toast.makeText(this, "נדרשות לפחות 2 תמונות בתיקייה ליצירת GIF", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                Toast.makeText(this, "יוצר אנימציית GIF מתמונות התיקייה...", Toast.LENGTH_SHORT).show();
-                executor.execute(() -> {
-                    try {
-                        List<Bitmap> frames = new ArrayList<>();
-                        int limit = Math.min(12, imagePlaylist.size());
-                        for (int i = 0; i < limit; i++) {
-                            BitmapFactory.Options o = new BitmapFactory.Options();
-                            o.inSampleSize = 2;
-                            Bitmap b = BitmapFactory.decodeFile(imagePlaylist.get(i).getAbsolutePath(), o);
-                            if (b != null) frames.add(b);
+            drawerItems.add(GlassSideDrawerHelper.DrawerItem.action(
+                    "צור GIF מתמונות התיקייה", R.drawable.ic_images, () -> {
+                        if (imagePlaylist.size() < 2) {
+                            Toast.makeText(this, "נדרשות לפחות 2 תמונות בתיקייה ליצירת GIF", Toast.LENGTH_SHORT).show();
+                            return;
                         }
-                        File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
-                        File outGif = StorageUtils.uniqueDestinationFile(parent, "animation.gif");
-                        GifToolsHelper.imagesToGif(frames, 550, 640, outGif);
-                        for (Bitmap b : frames) b.recycle();
-                        uiHandler.post(() -> Toast.makeText(this, "נוצר GIF: " + outGif.getName(), Toast.LENGTH_LONG).show());
-                    } catch (Exception e) {
-                        uiHandler.post(() -> Toast.makeText(this, "שגיאה ביצירת GIF: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                    }
-                });
-            } else if (sel.startsWith("מצב מחוות אוטומטי")) {
-                boolean next = !autoMode;
-                PrefsManager.setAutoGestureMode(this, next);
-                applyMediaImmersiveAndLayoutState();
-                Toast.makeText(this, next ? "מצב מחוות אוטומטי הופעל" : "מצב מחוות אוטומטי כובה", Toast.LENGTH_SHORT).show();
-            } else if (sel.equals("שיתוף קובץ")) {
-                shareCurrentFile();
-            } else if (sel.equals("מחיקה")) {
-                confirmDeleteViewedFile();
-            }
-        });
+                        Toast.makeText(this, "יוצר אנימציית GIF מתמונות התיקייה...", Toast.LENGTH_SHORT).show();
+                        executor.execute(() -> {
+                            try {
+                                List<Bitmap> frames = new ArrayList<>();
+                                int limit = Math.min(12, imagePlaylist.size());
+                                for (int i = 0; i < limit; i++) {
+                                    BitmapFactory.Options o = new BitmapFactory.Options();
+                                    o.inSampleSize = 2;
+                                    Bitmap b = BitmapFactory.decodeFile(imagePlaylist.get(i).getAbsolutePath(), o);
+                                    if (b != null) frames.add(b);
+                                }
+                                File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
+                                File outGif = StorageUtils.uniqueDestinationFile(parent, "animation.gif");
+                                GifToolsHelper.imagesToGif(frames, 550, 640, outGif);
+                                for (Bitmap b : frames) b.recycle();
+                                uiHandler.post(() -> Toast.makeText(this, "נוצר GIF: " + outGif.getName(), Toast.LENGTH_LONG).show());
+                            } catch (Exception e) {
+                                uiHandler.post(() -> Toast.makeText(this, "שגיאה ביצירת GIF: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                            }
+                        });
+                    }));
+        }
+
+        drawerItems.add(GlassSideDrawerHelper.DrawerItem.action(
+                autoMode ? "כבה מצב מחוות" : "הפעל מצב מחוות",
+                R.drawable.ic_settings, () -> {
+                    boolean next = !autoMode;
+                    PrefsManager.setAutoGestureMode(this, next);
+                    applyMediaImmersiveAndLayoutState();
+                    Toast.makeText(this, next ? "מצב מחוות הופעל" : "מצב מחוות כובה", Toast.LENGTH_SHORT).show();
+                }));
+
+        drawerItems.add(GlassSideDrawerHelper.DrawerItem.destructive(
+                "מחיקה", R.drawable.ic_delete, this::confirmDeleteViewedFile));
+
+        GlassSideDrawerHelper.show(this, anchor, targetFile.getName(), drawerItems, true);
     }
 
     private void confirmDeleteViewedFile() {
@@ -1453,7 +1538,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private DecodedPhoto decodeUltraClearPhoto(File file) {
         DecodedPhoto out = new DecodedPhoto();
-        final int MAX_EDGE = 4096;
+        final int MAX_EDGE = 3072;
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
@@ -1466,7 +1551,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     ImageDecoder.Source src = ImageDecoder.createSource(file);
                     out.bitmap = ImageDecoder.decodeBitmap(src, (decoder, info, s) -> {
                         decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                        decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_DEFAULT);
+                        decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
                         int w = info.getSize().getWidth();
                         int h = info.getSize().getHeight();
                         out.origWidth = w;
@@ -1478,6 +1563,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         }
                     });
                     if (out.bitmap != null) return out;
+                } catch (OutOfMemoryError oom) {
+                    System.gc();
                 } catch (Exception ignored) {
                 }
             }
@@ -1487,22 +1574,30 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 while (out.origWidth / sample > MAX_EDGE || out.origHeight / sample > MAX_EDGE) {
                     sample *= 2;
                 }
-                BitmapFactory.Options loadOpts = new BitmapFactory.Options();
-                loadOpts.inSampleSize = sample;
-                loadOpts.inPreferredConfig = Bitmap.Config.ARGB_8888;
-                loadOpts.inScaled = false;
-                loadOpts.inDither = false;
-                out.bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), loadOpts);
+                for (int attempt = 0; attempt < 3 && out.bitmap == null; attempt++) {
+                    try {
+                        BitmapFactory.Options loadOpts = new BitmapFactory.Options();
+                        loadOpts.inSampleSize = sample;
+                        loadOpts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                        loadOpts.inScaled = false;
+                        loadOpts.inDither = false;
+                        out.bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), loadOpts);
+                    } catch (OutOfMemoryError oom) {
+                        System.gc();
+                        sample *= 2;
+                    }
+                }
             }
         } catch (OutOfMemoryError oom) {
+            System.gc();
             try {
                 BitmapFactory.Options fallback = new BitmapFactory.Options();
-                fallback.inSampleSize = 2;
-                fallback.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                fallback.inSampleSize = 4;
+                fallback.inPreferredConfig = Bitmap.Config.RGB_565;
                 out.bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), fallback);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         }
         return out;
     }
@@ -1532,6 +1627,89 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 }
             }
         }
+    }
+
+    private String buildSvgViewerHtml(byte[] rawBytes) {
+        String svgText = new String(rawBytes, StandardCharsets.UTF_8);
+        if (!svgText.isEmpty() && svgText.charAt(0) == '\uFEFF') {
+            svgText = svgText.substring(1);
+        }
+        // Strip XML prolog, DOCTYPE and any script tags before inline embedding
+        String cleaned = svgText.trim()
+                .replaceAll("(?is)<\\?xml[^>]*\\?>", "")
+                .replaceAll("(?is)<!DOCTYPE[^>]*>", "")
+                .replaceAll("(?is)<script\\b[^>]*>.*?</script>", "")
+                .trim();
+
+        int svgStart = cleaned.toLowerCase(Locale.ROOT).indexOf("<svg");
+        if (svgStart >= 0) {
+            cleaned = cleaned.substring(svgStart);
+            int openEnd = cleaned.indexOf('>');
+            if (openEnd > 4) {
+                String openTag = cleaned.substring(0, openEnd + 1);
+                String rest = cleaned.substring(openEnd + 1);
+                String lowerTag = openTag.toLowerCase(Locale.ROOT);
+                StringBuilder patchedTag = new StringBuilder(openTag.substring(0, openEnd));
+                if (!lowerTag.contains("xmlns=")) {
+                    patchedTag.append(" xmlns=\"http://www.w3.org/2000/svg\"");
+                }
+                if (!lowerTag.contains("viewbox=")) {
+                    Double w = extractSvgNumericAttr(openTag, "width");
+                    Double h = extractSvgNumericAttr(openTag, "height");
+                    if (w != null && h != null && w > 0 && h > 0) {
+                        patchedTag.append(" viewBox=\"0 0 ")
+                                .append(w.doubleValue() == Math.rint(w) ? String.valueOf(w.longValue()) : String.valueOf(w))
+                                .append(' ')
+                                .append(h.doubleValue() == Math.rint(h) ? String.valueOf(h.longValue()) : String.valueOf(h))
+                                .append('"');
+                    }
+                }
+                if (!lowerTag.contains("preserveaspectratio=")) {
+                    patchedTag.append(" preserveAspectRatio=\"xMidYMid meet\"");
+                }
+                patchedTag.append('>');
+                cleaned = patchedTag.toString() + rest;
+            }
+            return "<!DOCTYPE html><html><head>"
+                    + "<meta charset='utf-8'/>"
+                    + "<meta name='viewport' content='width=device-width,initial-scale=1.0,maximum-scale=20.0,user-scalable=yes'/>"
+                    + "<style>"
+                    + "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;"
+                    + "background-color:#E2E8F0;"
+                    + "background-image:linear-gradient(45deg,#CBD5E1 25%,transparent 25%),"
+                    + "linear-gradient(-45deg,#CBD5E1 25%,transparent 25%),"
+                    + "linear-gradient(45deg,transparent 75%,#CBD5E1 75%),"
+                    + "linear-gradient(-45deg,transparent 75%,#CBD5E1 75%);"
+                    + "background-size:24px 24px;"
+                    + "background-position:0 0,0 12px,12px -12px,-12px 0;}"
+                    + ".stage{box-sizing:border-box;width:100vw;height:100vh;padding:72px 16px 84px 16px;"
+                    + "display:flex;align-items:center;justify-content:center;}"
+                    + ".stage>svg{display:block;width:100% !important;height:100% !important;max-width:92vw;max-height:78vh;}"
+                    + "</style></head><body><div class='stage'>" + cleaned + "</div></body></html>";
+        }
+
+        // Fallback via data URI if input has non-standard wrapper
+        String b64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP);
+        return "<!DOCTYPE html><html><head>"
+                + "<meta charset='utf-8'/>"
+                + "<meta name='viewport' content='width=device-width,initial-scale=1.0,maximum-scale=20.0,user-scalable=yes'/>"
+                + "<style>html,body{margin:0;padding:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#E2E8F0;}"
+                + "img{width:90vw;height:78vh;object-fit:contain;}</style></head>"
+                + "<body><img src='data:image/svg+xml;base64," + b64 + "'/></body></html>";
+    }
+
+    private Double extractSvgNumericAttr(String openTag, String attrName) {
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\b" + attrName + "\\s*=\\s*[\"']\\s*([0-9]+(?:\\.[0-9]+)?)(?:px|pt)?\\s*[\"']",
+                            java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(openTag);
+            if (m.find()) {
+                return Double.parseDouble(m.group(1));
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private byte[] readFileBytesForViewer(File file, boolean gunzip) throws Exception {
@@ -1665,6 +1843,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         final WavySeekBar seekBar = new WavySeekBar(this);
+        seekBar.setShowTickDots(false);
+        seekBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(this));
         seekBar.setColors(accent, ColorUtils.setAlphaComponent(textPrimary, 56), accent);
         controlsColumn.addView(seekBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1711,12 +1891,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         controlsColumn.addView(transportRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // שורה 2 מתחת לנגן/השהה: ימין (+ תפריט כלים), אמצע (אייקון מהירות בלבד), שמאל (אייקון חזרה בלבד)
+        // שורה 2 מתחת לנגן/השהה: ימין (שלוש נקודות תפריט כלים), אמצע (אייקון מהירות בלבד), שמאל (אייקון חזרה בלבד)
         FrameLayout secondRow = new FrameLayout(this);
         secondRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         secondRow.setPadding(dp(14), dp(2), dp(14), dp(2));
 
-        final ImageButton btnMorePlus = createCleanBorderlessIconButton(R.drawable.ic_add, secRowBtnPx, textPrimary);
+        final ImageButton btnMorePlus = createCleanBorderlessIconButton(R.drawable.ic_more_dots, secRowBtnPx, textPrimary);
         btnMorePlus.setContentDescription("כלים נוספים");
         secondRow.addView(btnMorePlus, new FrameLayout.LayoutParams(
                 secRowBtnPx, secRowBtnPx, Gravity.RIGHT | Gravity.CENTER_VERTICAL));
@@ -1813,7 +1993,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         btnNextSong.setOnClickListener(v -> mgr.playNext(this));
         btnPlayPause.setOnClickListener(v -> mgr.togglePlayPause(this));
 
-        btnSpeedCenter.setOnClickListener(v -> showSpeedPickerDialog("בחירת מהירות השיר", mgr.getPlaybackSpeed(), chosen -> {
+        btnSpeedCenter.setOnClickListener(v -> showSpeedPickerDialog(v, "בחירת מהירות השיר", mgr.getPlaybackSpeed(), chosen -> {
             mgr.setPlaybackSpeed(this, chosen);
             btnSpeedCenter.setColorFilter(Math.abs(chosen - 1.0f) >= 0.02f ? activePalHolder[0].accent : activePalHolder[0].textPrimary);
         }));
@@ -1826,6 +2006,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         });
 
         btnMorePlus.setOnClickListener(v -> {
+            final View anchorBtn = v;
             AudioAdaptivePalette pal = activePalHolder[0];
             LinearLayout iconStrip = new LinearLayout(this);
             iconStrip.setOrientation(LinearLayout.HORIZONTAL);
@@ -1849,7 +2030,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             bQueue.setContentDescription("תור ניגון");
             bQueue.setOnClickListener(iv -> {
                 if (popupRef[0] != null) popupRef[0].dismiss();
-                showAudioQueueDialog();
+                showAudioQueueDialog(anchorBtn);
             });
 
             int sleepTint = mgr.getSleepTimerRemainingMs() > 0 ? pal.accent : pal.textPrimary;
@@ -1857,14 +2038,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             bSleep.setContentDescription("טיימר שינה");
             bSleep.setOnClickListener(iv -> {
                 if (popupRef[0] != null) popupRef[0].dismiss();
-                showSleepTimerDialog();
+                showSleepTimerDialog(anchorBtn);
             });
 
             ImageButton bEq = createCleanBorderlessIconButton(R.drawable.ic_equalizer, iconSize, pal.textPrimary);
             bEq.setContentDescription("אקולייזר");
             bEq.setOnClickListener(iv -> {
                 if (popupRef[0] != null) popupRef[0].dismiss();
-                showEqualizerDialog();
+                showEqualizerDialog(anchorBtn);
             });
 
             ImageButton bCut = createCleanBorderlessIconButton(R.drawable.ic_audio_cutter, iconSize, pal.textPrimary);
@@ -1948,6 +2129,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
 
             boolean playingNow = mgr.isPlaying();
+            seekBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(this));
             seekBar.setPlaying(playingNow);
             int playRes = playingNow ? R.drawable.ic_pause : R.drawable.ic_play;
             if (lastPlayRes[0] != playRes) {
@@ -1972,6 +2154,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (!audioTickerActive) return;
                 int dur = mgr.getDurationMs();
                 int pos = mgr.getCurrentPositionMs();
+                seekBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(BuiltInViewerActivity.this));
                 seekBar.setPlaying(mgr.isPlaying());
                 seekBar.setMax(Math.max(1, dur));
                 seekBar.setProgress(pos);
@@ -1990,174 +2173,425 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         });
     }
 
-    private void showAudioQueueDialog() {
-        AudioPlayerManager mgr = AudioPlayerManager.getInstance();
-        int theme = PrefsManager.getThemeMode(this);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
-        int accent = ThemeHelper.getAccentColor(this, theme);
+    private void showAudioQueueDialog(View anchor) {
+        final AudioPlayerManager mgr = AudioPlayerManager.getInstance();
+        final int theme = PrefsManager.getThemeMode(this);
+        final int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        final int accent = ThemeHelper.getAccentColor(this, theme);
+        final boolean dark = ThemeHelper.isDarkSurface(this, theme);
 
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout listLayout = new LinearLayout(this);
-        listLayout.setOrientation(LinearLayout.VERTICAL);
-        scroll.addView(listLayout);
+        final List<File> queue = new ArrayList<>(mgr.getPlaylistSnapshot());
+        final RecyclerView rv = new RecyclerView(this);
+        rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
-        final Runnable[] rebuild = new Runnable[1];
-        rebuild[0] = () -> {
-            listLayout.removeAllViews();
-            List<File> queue = mgr.getPlaylistSnapshot();
-            int curIdx = mgr.getCurrentIndex();
-            for (int i = 0; i < queue.size(); i++) {
-                final int idx = i;
-                File track = queue.get(i);
-                LinearLayout row = new LinearLayout(this);
+        final ItemTouchHelper[] helperRef = new ItemTouchHelper[1];
+
+        RecyclerView.Adapter<RecyclerView.ViewHolder> adapter = new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            class QueueVH extends RecyclerView.ViewHolder {
+                final LinearLayout row;
+                final ImageView handle;
+                final TextView title;
+                final ImageButton del;
+
+                QueueVH(LinearLayout r, ImageView h, TextView t, ImageButton d) {
+                    super(r);
+                    this.row = r;
+                    this.handle = h;
+                    this.title = t;
+                    this.del = d;
+                }
+            }
+
+            @NonNull
+            @Override
+            public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+                LinearLayout row = new LinearLayout(parent.getContext());
                 row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(dp(8), dp(8), dp(8), dp(8));
-                if (i == curIdx) {
-                    GradientDrawable hl = new GradientDrawable();
-                    hl.setCornerRadius(dp(8));
-                    hl.setColor(Color.argb(36, Color.red(accent), Color.green(accent), Color.blue(accent)));
-                    row.setBackground(hl);
-                }
+                row.setPadding(dp(10), dp(8), dp(10), dp(8));
+                RecyclerView.LayoutParams rLp = new RecyclerView.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                rLp.setMargins(0, dp(2), 0, dp(2));
+                row.setLayoutParams(rLp);
 
-                TextView tvName = new TextView(this);
-                tvName.setText((i + 1) + ". " + track.getName());
-                tvName.setTextColor(i == curIdx ? accent : textPrimary);
-                tvName.setTextSize(13f);
-                tvName.setTypeface(i == curIdx ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                ImageView drag = new ImageView(parent.getContext());
+                drag.setImageResource(R.drawable.ic_drag_handle);
+                row.addView(drag, new LinearLayout.LayoutParams(dp(22), dp(22)));
+
+                TextView tvName = new TextView(parent.getContext());
+                tvName.setTextSize(ThemeHelper.spScaled(BuiltInViewerActivity.this, 13f));
                 tvName.setMaxLines(1);
-                tvName.setEllipsize(TextUtils.TruncateAt.END);
-                tvName.setOnClickListener(v -> {
-                    mgr.playTrackAt(this, idx);
-                    rebuild[0].run();
-                });
-                row.addView(tvName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                tvName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                tLp.setMarginStart(dp(8));
+                tLp.setMarginEnd(dp(6));
+                row.addView(tvName, tLp);
 
-                if (i > 0) {
-                    ImageButton up = createCleanBorderlessIconButton(R.drawable.ic_chevron_up, dp(32), accent);
-                    up.setContentDescription("הזז למעלה");
-                    up.setOnClickListener(v -> {
-                        mgr.moveQueueItem(idx, idx - 1);
-                        rebuild[0].run();
-                    });
-                    row.addView(up);
+                ImageButton del = createCleanBorderlessIconButton(R.drawable.ic_close, dp(28), Color.parseColor("#DC2626"));
+                del.setContentDescription("הסר מהתור");
+                row.addView(del);
+                return new QueueVH(row, drag, tvName, del);
+            }
+
+            @Override
+            public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+                QueueVH h = (QueueVH) holder;
+                File track = queue.get(position);
+                int curIdx = mgr.getCurrentIndex();
+                boolean isCurrent = position == curIdx;
+
+                GradientDrawable rowBg = new GradientDrawable();
+                rowBg.setCornerRadius(dp(11));
+                if (isCurrent) {
+                    rowBg.setColor(ColorUtils.setAlphaComponent(accent, dark ? 48 : 26));
+                    rowBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 130));
+                } else {
+                    rowBg.setColor(ColorUtils.setAlphaComponent(ThemeHelper.getBgColor(BuiltInViewerActivity.this, theme), dark ? 140 : 170));
                 }
-                if (i < queue.size() - 1) {
-                    ImageButton dn = createCleanBorderlessIconButton(R.drawable.ic_chevron_down, dp(32), accent);
-                    dn.setContentDescription("הזז למטה");
-                    dn.setOnClickListener(v -> {
-                        mgr.moveQueueItem(idx, idx + 1);
-                        rebuild[0].run();
-                    });
-                    row.addView(dn);
-                }
-                if (i != curIdx && queue.size() > 1) {
-                    ImageButton del = createCleanBorderlessIconButton(R.drawable.ic_close, dp(32), Color.parseColor("#DC2626"));
-                    del.setContentDescription("הסר מהתור");
-                    del.setOnClickListener(v -> {
-                        mgr.removeFromQueue(idx);
-                        rebuild[0].run();
-                    });
-                    row.addView(del);
-                }
-                listLayout.addView(row);
+                h.row.setBackground(rowBg);
+                h.handle.setColorFilter(accent);
+                h.title.setText((position + 1) + ". " + track.getName());
+                h.title.setTextColor(isCurrent ? accent : textPrimary);
+                h.title.setTypeface(isCurrent ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+
+                h.handle.setOnTouchListener((v, ev) -> {
+                    if (ev.getActionMasked() == MotionEvent.ACTION_DOWN && helperRef[0] != null) {
+                        helperRef[0].startDrag(h);
+                    }
+                    return false;
+                });
+                h.row.setOnClickListener(v -> {
+                    int pos = h.getAdapterPosition();
+                    if (pos >= 0 && pos < queue.size()) {
+                        mgr.playTrackAt(BuiltInViewerActivity.this, pos);
+                        notifyDataSetChanged();
+                    }
+                });
+                h.del.setVisibility((!isCurrent && queue.size() > 1) ? View.VISIBLE : View.GONE);
+                h.del.setOnClickListener(v -> {
+                    int pos = h.getAdapterPosition();
+                    if (pos >= 0 && pos < queue.size() && pos != mgr.getCurrentIndex() && queue.size() > 1) {
+                        mgr.removeFromQueue(pos);
+                        queue.remove(pos);
+                        notifyItemRemoved(pos);
+                        notifyItemRangeChanged(Math.min(pos, queue.size()), queue.size() - Math.min(pos, queue.size()));
+                    }
+                });
+            }
+
+            @Override
+            public int getItemCount() {
+                return queue.size();
             }
         };
-        rebuild[0].run();
+        rv.setAdapter(adapter);
 
-        ThemedDialogHelper.showCustomDialog(this, "תור ניגון (סדר השמעה)",
-                "הקש על שיר להשמעה מיידית או הזז למעלה/למטה:",
-                scroll, "סגור", null, null, null, false);
+        ItemTouchHelper touchHelper = new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(
+                ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
+            @Override
+            public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder, @NonNull RecyclerView.ViewHolder target) {
+                int from = viewHolder.getAdapterPosition();
+                int to = target.getAdapterPosition();
+                if (from < 0 || to < 0 || from >= queue.size() || to >= queue.size()) return false;
+                Collections.swap(queue, from, to);
+                mgr.moveQueueItem(from, to);
+                adapter.notifyItemMoved(from, to);
+                return true;
+            }
+
+            @Override
+            public void clearView(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder) {
+                super.clearView(recyclerView, viewHolder);
+                adapter.notifyDataSetChanged();
+            }
+
+            @Override
+            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
+            }
+        });
+        helperRef[0] = touchHelper;
+        touchHelper.attachToRecyclerView(rv);
+
+        int maxRvHeight = Math.round(getResources().getDisplayMetrics().heightPixels * 0.44f);
+        int estimatedH = queue.size() * dp(48);
+        LinearLayout rvHost = new LinearLayout(this);
+        rvHost.setOrientation(LinearLayout.VERTICAL);
+        rvHost.addView(rv, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                estimatedH > maxRvHeight ? maxRvHeight : ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        GlassAnchoredPopoverHelper.showPanel(
+                this,
+                anchor,
+                "תור ניגון (" + queue.size() + ")",
+                "גרור לשינוי סדר או הקש להשמעה מיידית",
+                null,
+                rvHost,
+                316,
+                false,
+                null
+        );
     }
 
-    private void showSleepTimerDialog() {
+    private void showSleepTimerDialog(View anchor) {
         List<String> opts = Arrays.asList("כבה טיימר שינה", "15 דקות", "30 דקות", "45 דקות", "60 דקות");
         int[] mins = {0, 15, 30, 45, 60};
-        ThemedDialogHelper.showThemedMenu(this, "טיימר שינה",
-                "האפליקציה תעצור את השמע אוטומטית בתום הזמן:", opts, idx -> {
+        ThemedDialogHelper.showThemedMenu(this, anchor, "טיימר שינה",
+                "האפליקציה תעצור את השמע בתום הזמן:", opts, idx -> {
                     AudioPlayerManager.getInstance().setSleepTimerMinutes(this, mins[idx]);
                     Toast.makeText(this, mins[idx] == 0 ? "טיימר שינה כובה" : ("השמע ייעצר בעוד " + mins[idx] + " דקות"),
                             Toast.LENGTH_SHORT).show();
                 });
     }
 
-    private void showEqualizerDialog() {
-        AudioPlayerManager mgr = AudioPlayerManager.getInstance();
-        int bandCount = mgr.getEqBandCount();
+    private static String formatEqDb(short millibels) {
+        if (Math.abs(millibels) < 50) return "0 dB";
+        float db = millibels / 100f;
+        return (db > 0f ? "+" : "") + String.format(Locale.US, "%.1f dB", db);
+    }
+
+    private void showEqualizerDialog(View anchor) {
+        final AudioPlayerManager mgr = AudioPlayerManager.getInstance();
+        final int bandCount = mgr.getEqBandCount();
         if (bandCount <= 0) {
             Toast.makeText(this, "אקולייזר זמין רק בזמן ניגון פעיל במכשיר זה", Toast.LENGTH_SHORT).show();
             return;
         }
-        int theme = PrefsManager.getThemeMode(this);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
-        int accent = ThemeHelper.getAccentColor(this, theme);
+        final int theme = PrefsManager.getThemeMode(this);
+        final int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
+        final int textSecondary = ThemeHelper.getSecondaryTextColor(this, theme);
+        final int accent = ThemeHelper.getAccentColor(this, theme);
+        final boolean dark = ThemeHelper.isDarkSurface(this, theme);
 
         ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         scroll.addView(panel);
 
-        List<String> presets = mgr.getEqPresetNames();
-        if (!presets.isEmpty()) {
-            Button btnPreset = ThemedDialogHelper.createThemedButton(this, "בחר פרופיל אקולייזר מובנה", theme, false, false);
-            btnPreset.setOnClickListener(v -> ThemedDialogHelper.showThemedMenu(
-                    this, "פרופילי אקולייזר", "בחר סגנון סאונד:", presets, idx -> {
-                        mgr.applyEqPreset(idx);
-                        Toast.makeText(this, "הופעל פרופיל: " + presets.get(idx), Toast.LENGTH_SHORT).show();
-                    }));
-            panel.addView(btnPreset);
-        }
+        final List<String> presets = mgr.getEqPresetNames();
+        final TextView[] presetChipRef = new TextView[1];
 
-        short minLvl = mgr.getEqMinLevel();
-        short maxLvl = mgr.getEqMaxLevel();
-        int span = Math.max(1, maxLvl - minLvl);
+        final short minLvl = mgr.getEqMinLevel();
+        final short maxLvl = mgr.getEqMaxLevel();
+        final int span = Math.max(1, maxLvl - minLvl);
+
+        final SeekBar[] bandSeekBars = new SeekBar[bandCount];
+        final TextView[] bandDbViews = new TextView[bandCount];
+        final SeekBar[] bassSeekRef = new SeekBar[1];
+        final TextView[] bassValRef = new TextView[1];
+
+        final Runnable syncEqViews = () -> {
+            for (short b = 0; b < bandCount; b++) {
+                short lvl = mgr.getEqBandLevel(b);
+                if (bandSeekBars[b] != null) {
+                    bandSeekBars[b].setProgress(Math.max(0, Math.min(span, lvl - minLvl)));
+                }
+                if (bandDbViews[b] != null) {
+                    bandDbViews[b].setText(formatEqDb(lvl));
+                }
+            }
+            short bass = mgr.getBassBoostStrength();
+            if (bassSeekRef[0] != null) {
+                bassSeekRef[0].setProgress(bass);
+            }
+            if (bassValRef[0] != null) {
+                bassValRef[0].setText(Math.round(bass / 10f) + "%");
+            }
+            if (presetChipRef[0] != null) {
+                int selPreset = mgr.getSelectedEqPresetIndex();
+                String presetLabel = (selPreset >= 0 && selPreset < presets.size())
+                        ? presets.get(selPreset)
+                        : "ברירת מחדל / מותאם";
+                presetChipRef[0].setText("פרופיל אקולייזר: " + presetLabel);
+            }
+        };
+
+        if (!presets.isEmpty()) {
+            LinearLayout presetBtn = new LinearLayout(this);
+            presetBtn.setOrientation(LinearLayout.HORIZONTAL);
+            presetBtn.setGravity(Gravity.CENTER_VERTICAL);
+            presetBtn.setPadding(dp(10), dp(8), dp(10), dp(8));
+            GradientDrawable pBg = new GradientDrawable();
+            pBg.setCornerRadius(dp(11));
+            pBg.setColor(ColorUtils.setAlphaComponent(accent, dark ? 30 : 18));
+            pBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 95));
+            presetBtn.setBackground(pBg);
+
+            ImageView ivTune = new ImageView(this);
+            ivTune.setImageResource(R.drawable.ic_equalizer);
+            ivTune.setColorFilter(accent);
+            LinearLayout.LayoutParams itLp = new LinearLayout.LayoutParams(dp(17), dp(17));
+            itLp.setMarginEnd(dp(8));
+            presetBtn.addView(ivTune, itLp);
+
+            TextView tvPreset = new TextView(this);
+            tvPreset.setTextColor(textPrimary);
+            tvPreset.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+            tvPreset.setTypeface(Typeface.DEFAULT_BOLD);
+            tvPreset.setMaxLines(1);
+            tvPreset.setEllipsize(TextUtils.TruncateAt.END);
+            presetBtn.addView(tvPreset, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            presetChipRef[0] = tvPreset;
+
+            ImageView ivChev = new ImageView(this);
+            ivChev.setImageResource(R.drawable.ic_chevron_down);
+            ivChev.setColorFilter(textSecondary);
+            presetBtn.addView(ivChev, new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+            LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            pbLp.bottomMargin = dp(8);
+            panel.addView(presetBtn, pbLp);
+
+            presetBtn.setOnClickListener(pv -> {
+                List<GlassAnchoredPopoverHelper.OptionItem> pItems = new ArrayList<>();
+                int activePreset = mgr.getSelectedEqPresetIndex();
+                for (int i = 0; i < presets.size(); i++) {
+                    final int idx = i;
+                    pItems.add(GlassAnchoredPopoverHelper.OptionItem.selectable(
+                            presets.get(i),
+                            R.drawable.ic_equalizer,
+                            i == activePreset,
+                            () -> {
+                                mgr.applyEqPreset(idx);
+                                syncEqViews.run();
+                                Toast.makeText(this, "הופעל פרופיל: " + presets.get(idx), Toast.LENGTH_SHORT).show();
+                            }
+                    ));
+                }
+                GlassAnchoredPopoverHelper.showMenu(this, pv, "פרופילי אקולייזר", null, pItems, false);
+            });
+        }
 
         for (short b = 0; b < bandCount; b++) {
             final short bandIdx = b;
+            LinearLayout rowHdr = new LinearLayout(this);
+            rowHdr.setOrientation(LinearLayout.HORIZONTAL);
+            rowHdr.setGravity(Gravity.CENTER_VERTICAL);
+            rowHdr.setPadding(dp(2), dp(6), dp(2), dp(1));
+
             TextView tvBand = new TextView(this);
             tvBand.setText(mgr.getEqCenterFreqHz(bandIdx) + " Hz");
             tvBand.setTextColor(textPrimary);
-            tvBand.setTextSize(12.5f);
-            tvBand.setPadding(0, dp(8), 0, dp(2));
-            panel.addView(tvBand);
+            tvBand.setTextSize(ThemeHelper.spScaled(this, 12f));
+            tvBand.setTypeface(Typeface.DEFAULT_BOLD);
+            rowHdr.addView(tvBand, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView tvDb = new TextView(this);
+            tvDb.setTextColor(textSecondary);
+            tvDb.setTextSize(ThemeHelper.spScaled(this, 11.5f));
+            tvDb.setTypeface(Typeface.MONOSPACE);
+            rowHdr.addView(tvDb);
+            bandDbViews[b] = tvDb;
+            panel.addView(rowHdr);
 
             SeekBar sb = new SeekBar(this);
             sb.setMax(span);
-            sb.setProgress(mgr.getEqBandLevel(bandIdx) - minLvl);
             ThemeHelper.applySeekBarTint(sb, accent);
             sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int p, boolean fromUser) {
-                    if (fromUser) mgr.setEqBandLevel(bandIdx, (short) (minLvl + p));
+                    if (fromUser) {
+                        short level = (short) (minLvl + p);
+                        mgr.setEqBandLevel(bandIdx, level);
+                        tvDb.setText(formatEqDb(level));
+                        if (presetChipRef[0] != null) {
+                            presetChipRef[0].setText("פרופיל אקולייזר: מותאם אישית");
+                        }
+                    }
                 }
                 @Override public void onStartTrackingTouch(SeekBar seekBar) {}
                 @Override public void onStopTrackingTouch(SeekBar seekBar) {}
             });
+            bandSeekBars[b] = sb;
             panel.addView(sb);
         }
+
+        LinearLayout bassHdr = new LinearLayout(this);
+        bassHdr.setOrientation(LinearLayout.HORIZONTAL);
+        bassHdr.setGravity(Gravity.CENTER_VERTICAL);
+        bassHdr.setPadding(dp(2), dp(9), dp(2), dp(2));
 
         TextView tvBass = new TextView(this);
         tvBass.setText("הדגשת בס (Bass Boost)");
         tvBass.setTextColor(accent);
+        tvBass.setTextSize(ThemeHelper.spScaled(this, 12.5f));
         tvBass.setTypeface(Typeface.DEFAULT_BOLD);
-        tvBass.setPadding(0, dp(10), 0, dp(2));
-        panel.addView(tvBass);
+        bassHdr.addView(tvBass, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView tvBassVal = new TextView(this);
+        tvBassVal.setTextColor(accent);
+        tvBassVal.setTextSize(ThemeHelper.spScaled(this, 11.5f));
+        tvBassVal.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        bassHdr.addView(tvBassVal);
+        bassValRef[0] = tvBassVal;
+        panel.addView(bassHdr);
 
         SeekBar sbBass = new SeekBar(this);
         sbBass.setMax(1000);
-        sbBass.setProgress(mgr.getBassBoostStrength());
         ThemeHelper.applySeekBarTint(sbBass, accent);
         sbBass.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int p, boolean fromUser) {
-                if (fromUser) mgr.setBassBoostStrength((short) p);
+                if (fromUser) {
+                    mgr.setBassBoostStrength((short) p);
+                    tvBassVal.setText(Math.round(p / 10f) + "%");
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+        bassSeekRef[0] = sbBass;
         panel.addView(sbBass);
 
-        ThemedDialogHelper.showCustomDialog(this, "אקולייזר והדגשת בס", null, scroll, "סגור", null, null, null, false);
+        syncEqViews.run();
+
+        // כפתור איפוס לברירת מחדל בראש הפאנל
+        LinearLayout resetChip = new LinearLayout(this);
+        resetChip.setOrientation(LinearLayout.HORIZONTAL);
+        resetChip.setGravity(Gravity.CENTER_VERTICAL);
+        resetChip.setPadding(dp(9), dp(5), dp(9), dp(5));
+        GradientDrawable resetBg = new GradientDrawable();
+        resetBg.setCornerRadius(dp(10));
+        resetBg.setColor(ColorUtils.setAlphaComponent(accent, dark ? 34 : 20));
+        resetBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 90));
+        resetChip.setBackground(resetBg);
+
+        ImageView ivReset = new ImageView(this);
+        ivReset.setImageResource(R.drawable.ic_reset);
+        ivReset.setColorFilter(accent);
+        LinearLayout.LayoutParams irLp = new LinearLayout.LayoutParams(dp(14), dp(14));
+        irLp.setMarginEnd(dp(5));
+        resetChip.addView(ivReset, irLp);
+
+        TextView tvReset = new TextView(this);
+        tvReset.setText("איפוס לברירת מחדל");
+        tvReset.setTextColor(accent);
+        tvReset.setTextSize(ThemeHelper.spScaled(this, 11.2f));
+        tvReset.setTypeface(Typeface.DEFAULT_BOLD);
+        resetChip.addView(tvReset);
+
+        resetChip.setOnClickListener(rvClick -> {
+            mgr.resetEqualizerToDefault();
+            syncEqViews.run();
+            Toast.makeText(this, "האקולייזר אופס לברירת מחדל", Toast.LENGTH_SHORT).show();
+        });
+
+        GlassAnchoredPopoverHelper.showPanel(
+                this,
+                anchor,
+                "אקולייזר והדגשת בס",
+                null,
+                resetChip,
+                scroll,
+                320,
+                false,
+                null
+        );
     }
 
     // ==================== נגן וידאו מתקדם (Edge-to-Edge, מחוות אוטומטיות / כפתורים, 2x בהחזקה) ====================
@@ -2203,16 +2637,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         tvVideoCenterScrubTime = createCleanCenterTimeOverlay();
         videoViewport.addView(tvVideoCenterScrubTime);
 
-        setupVideoAdvancedTouchGestures(videoViewport, tvVideoDoubleTapBadge);
+        setupVideoAdvancedTouchGestures(videoViewport, tvVideoDoubleTapBadge, accent);
 
         stageRoot.addView(videoViewport, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // עיגול תכלת במרכז הווידאו בלבד ללא כפתורים צדדיים
-        int skyBlueColor = Color.parseColor("#38BDF8");
+        // כפתור ניגון מרכזי בצבע הדגש של ערכת הנושא
         final ImageButton btnCenterPlayPause = createResponsiveRoundIconButton(
-                R.drawable.ic_play, dp(62), 0, true, skyBlueColor, theme);
-        btnCenterPlayPause.setColorFilter(Color.WHITE);
+                R.drawable.ic_play, dp(62), 0, true, accent, theme);
+        btnCenterPlayPause.setColorFilter(ThemeHelper.getOnAccentTextColor(accent));
         btnCenterPlayPause.setContentDescription("נגן / השהה");
         activeVideoCenterOverlay = btnCenterPlayPause;
 
@@ -2302,6 +2735,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         timeBar.addView(tvVidPos);
 
         final WavySeekBar videoSeek = new WavySeekBar(this);
+        videoSeek.setShowTickDots(false);
         videoSeek.setColors(accent, Color.argb(95, 255, 255, 255), Color.WHITE);
         timeBar.addView(videoSeek, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -2464,7 +2898,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             syncVidButtons.run();
         });
         btnVidRotate.setOnClickListener(v -> toggleScreenOrientation());
-        btnVidSpeed.setOnClickListener(v -> showSpeedPickerDialog("בחירת מהירות הסרטון", videoSpeed, chosen -> {
+        btnVidSpeed.setOnClickListener(v -> showSpeedPickerDialog(v, "בחירת מהירות הסרטון", videoSpeed, chosen -> {
             videoSpeed = chosen;
             speedModifiedFromDefault = true;
             applyVideoSpeedInternal(isVideoPlayingSafely());
@@ -3288,6 +3722,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 currentVideoPixelRatio = 1.0f;
                 hasAppliedVideoMatrix = false;
                 updateVideoAspectRatioMatrix();
+                revealVideoSurfaceIfReady();
                 boolean autoStart = !suppressNextVideoAutoPlay;
                 try {
                     if (autoStart) {
@@ -3350,12 +3785,90 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     // מחוות וידאו מתקדמות: זום חד ועמוק מכל נקודה/פינה עד 20x באמצעות מטריצת GPU + גרירה חלקה + כיבוי בזמן נעילה
-    private void setupVideoAdvancedTouchGestures(FrameLayout viewport, TextView badge) {
+    // וכן החלקה אנכית בצד ימין לעוצמת שמע (ווליום) ובצד שמאל לבהירות מסך
+    private void setupVideoAdvancedTouchGestures(FrameLayout viewport, TextView badge, int accentColor) {
+        final LinearLayout gestureHud = new LinearLayout(this);
+        gestureHud.setOrientation(LinearLayout.HORIZONTAL);
+        gestureHud.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        gestureHud.setGravity(Gravity.CENTER_VERTICAL);
+        gestureHud.setPadding(dp(14), dp(9), dp(14), dp(9));
+        GradientDrawable hudBg = new GradientDrawable();
+        hudBg.setCornerRadius(dp(18));
+        hudBg.setColor(Color.argb(198, 12, 18, 32));
+        hudBg.setStroke(Math.max(1, dp(1)), Color.argb(72, 255, 255, 255));
+        gestureHud.setBackground(hudBg);
+        gestureHud.setElevation(dp(8));
+        gestureHud.setVisibility(View.GONE);
+
+        final ImageView ivHudIcon = new ImageView(this);
+        ivHudIcon.setColorFilter(Color.WHITE);
+        LinearLayout.LayoutParams hiLp = new LinearLayout.LayoutParams(dp(20), dp(20));
+        hiLp.rightMargin = dp(10);
+        gestureHud.addView(ivHudIcon, hiLp);
+
+        final int barTrackW = dp(92);
+        final int barTrackH = dp(6);
+        FrameLayout hudTrack = new FrameLayout(this);
+        GradientDrawable trackBg = new GradientDrawable();
+        trackBg.setCornerRadius(dp(3));
+        trackBg.setColor(Color.argb(75, 255, 255, 255));
+        hudTrack.setBackground(trackBg);
+
+        final View hudFill = new View(this);
+        GradientDrawable fillBg = new GradientDrawable();
+        fillBg.setCornerRadius(dp(3));
+        fillBg.setColor(accentColor);
+        hudFill.setBackground(fillBg);
+        hudTrack.addView(hudFill, new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT));
+        gestureHud.addView(hudTrack, new LinearLayout.LayoutParams(barTrackW, barTrackH));
+
+        final TextView tvHudPct = new TextView(this);
+        tvHudPct.setTextColor(Color.WHITE);
+        tvHudPct.setTextSize(12.5f);
+        tvHudPct.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tvHudPct.setMinWidth(dp(42));
+        tvHudPct.setGravity(Gravity.RIGHT);
+        LinearLayout.LayoutParams hpLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hpLp.leftMargin = dp(10);
+        gestureHud.addView(tvHudPct, hpLp);
+
+        FrameLayout.LayoutParams hudLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        hudLp.topMargin = Math.max(dp(92), lastVideoTopInsetPx + dp(66));
+        viewport.addView(gestureHud, hudLp);
+
+        final Runnable hideHudRunnable = () -> {
+            if (gestureHud.getVisibility() != View.VISIBLE) return;
+            if (PrefsManager.isReduceAnimations(this)) {
+                gestureHud.setVisibility(View.GONE);
+            } else {
+                gestureHud.animate().alpha(0f).setDuration(220)
+                        .withEndAction(() -> gestureHud.setVisibility(View.GONE)).start();
+            }
+        };
+
+        final AudioManager audioMgr = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+
         final PointF lastPan = new PointF();
         final int[] activePanPointerId = new int[]{MotionEvent.INVALID_POINTER_ID};
         final float[] prevFocusX = new float[]{0f};
         final float[] prevFocusY = new float[]{0f};
         final boolean[] wasScalingSinceDown = new boolean[]{false};
+
+        final int touchSlopPx = ViewConfiguration.get(this).getScaledTouchSlop();
+        final float[] swipeDownRawX = new float[]{0f};
+        final float[] swipeDownRawY = new float[]{0f};
+        final float[] swipeDownLocalX = new float[]{0f};
+        final boolean[] gestureMovedBeyondSlop = new boolean[]{false};
+        // 0=none, 1=horizontal seek, 2=vertical volume (right side), 3=vertical brightness (left side)
+        final int[] swipeMode = new int[]{0};
+        final int[] horizontalSwipeStartPosMs = new int[]{0};
+        final int[] horizontalSwipeTargetMs = new int[]{0};
+        final long[] lastSwipeLiveSeekMs = new long[]{0L};
+        final float[] verticalStartFraction = new float[]{0.5f};
+        final int[] lastAppliedVolStep = new int[]{-1};
 
         final ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this,
                 new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -3363,6 +3876,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     public boolean onScaleBegin(@NonNull ScaleGestureDetector detector) {
                         if (isVideoLocked) return false;
                         wasScalingSinceDown[0] = true;
+                        swipeMode[0] = 0;
                         stopVideoHoldGestures(badge);
                         prevFocusX[0] = detector.getFocusX();
                         prevFocusY[0] = detector.getFocusY();
@@ -3413,14 +3927,18 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                     @Override
                     public boolean onSingleTapConfirmed(@NonNull MotionEvent e) {
-                        if (isVideoLocked || wasScalingSinceDown[0]) return true;
+                        if (isVideoLocked || wasScalingSinceDown[0] || gestureMovedBeyondSlop[0] || swipeMode[0] != 0) {
+                            return true;
+                        }
                         toggleMediaControlsVisibility();
                         return true;
                     }
 
                     @Override
                     public boolean onDoubleTap(@NonNull MotionEvent e) {
-                        if (isVideoLocked || wasScalingSinceDown[0]) return true;
+                        if (isVideoLocked || wasScalingSinceDown[0] || !PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)) {
+                            return true;
+                        }
                         float w = Math.max(1f, viewport.getWidth());
                         float normX = e.getX() / w;
                         if (normX > 0.34f && normX < 0.66f) {
@@ -3441,7 +3959,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                     @Override
                     public void onLongPress(@NonNull MotionEvent e) {
-                        if (isVideoLocked || wasScalingSinceDown[0]) return;
+                        if (isVideoLocked || wasScalingSinceDown[0] || gestureMovedBeyondSlop[0]
+                                || swipeMode[0] != 0 || !PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)) {
+                            return;
+                        }
                         if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
                         float w = Math.max(1f, viewport.getWidth());
                         float normX = e.getX() / w;
@@ -3467,20 +3988,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     }
                 });
 
-        final int touchSlopPx = ViewConfiguration.get(this).getScaledTouchSlop();
-        final float[] swipeDownRawX = new float[]{0f};
-        final float[] swipeDownRawY = new float[]{0f};
-        final boolean[] isHorizontalSwipeSeek = new boolean[]{false};
-        final int[] horizontalSwipeStartPosMs = new int[]{0};
-        final int[] horizontalSwipeTargetMs = new int[]{0};
-        final long[] lastSwipeLiveSeekMs = new long[]{0L};
-
         viewport.setOnTouchListener((v, event) -> {
             if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
             if (isVideoLocked) {
                 stopVideoHoldGestures(badge);
                 if (tvVideoCenterScrubTime != null) tvVideoCenterScrubTime.setVisibility(View.GONE);
-                isHorizontalSwipeSeek[0] = false;
+                gestureHud.setVisibility(View.GONE);
+                swipeMode[0] = 0;
                 return true;
             }
 
@@ -3490,19 +4004,24 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     wasScalingSinceDown[0] = false;
-                    isHorizontalSwipeSeek[0] = false;
+                    gestureMovedBeyondSlop[0] = false;
+                    swipeMode[0] = 0;
+                    lastAppliedVolStep[0] = -1;
                     activePanPointerId[0] = event.getPointerId(0);
                     lastPan.set(event.getX(), event.getY());
                     swipeDownRawX[0] = event.getRawX();
                     swipeDownRawY[0] = event.getRawY();
+                    swipeDownLocalX[0] = event.getX();
                     horizontalSwipeStartPosMs[0] = getCurrentVideoPositionMs();
                     horizontalSwipeTargetMs[0] = horizontalSwipeStartPosMs[0];
                     break;
 
                 case MotionEvent.ACTION_POINTER_DOWN:
                     wasScalingSinceDown[0] = true;
-                    isHorizontalSwipeSeek[0] = false;
+                    swipeMode[0] = 0;
                     if (tvVideoCenterScrubTime != null) tvVideoCenterScrubTime.setVisibility(View.GONE);
+                    uiHandler.removeCallbacks(hideHudRunnable);
+                    gestureHud.setVisibility(View.GONE);
                     stopVideoHoldGestures(badge);
                     break;
 
@@ -3515,20 +4034,52 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             float y = event.getY(ptrIdx);
                             float dx = x - lastPan.x;
                             float dy = y - lastPan.y;
+                            if (Math.hypot(dx, dy) > 2f) {
+                                gestureMovedBeyondSlop[0] = true;
+                            }
                             videoTransX += dx;
                             videoTransY += dy;
                             clampVideoTranslation();
                             updateVideoAspectRatioMatrix();
                             lastPan.set(x, y);
-                        } else if (!wasScalingSinceDown[0] && !isHold2xForwardActive && !isHold2xRewindActive && videoPrepared) {
+                        } else if (!wasScalingSinceDown[0] && !isHold2xForwardActive && !isHold2xRewindActive) {
                             float dx = event.getRawX() - swipeDownRawX[0];
                             float dy = event.getRawY() - swipeDownRawY[0];
-                            if (!isHorizontalSwipeSeek[0]
-                                    && Math.abs(dx) > touchSlopPx * 1.5f
-                                    && Math.abs(dx) > Math.abs(dy) * 1.3f) {
-                                isHorizontalSwipeSeek[0] = true;
+                            if (!gestureMovedBeyondSlop[0] && Math.hypot(dx, dy) > touchSlopPx) {
+                                gestureMovedBeyondSlop[0] = true;
                             }
-                            if (isHorizontalSwipeSeek[0]) {
+                            if (swipeMode[0] == 0) {
+                                if (videoPrepared && PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)
+                                        && Math.abs(dx) > touchSlopPx * 1.5f
+                                        && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                                    swipeMode[0] = 1;
+                                } else if (Math.abs(dy) > touchSlopPx * 1.25f
+                                        && Math.abs(dy) > Math.abs(dx) * 1.25f) {
+                                    boolean rightHalf = swipeDownLocalX[0] >= (Math.max(1f, viewport.getWidth()) * 0.5f);
+                                    if (rightHalf && audioMgr != null) {
+                                        swipeMode[0] = 2;
+                                        int maxV = Math.max(1, audioMgr.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                                        int curV = audioMgr.getStreamVolume(AudioManager.STREAM_MUSIC);
+                                        verticalStartFraction[0] = curV / (float) maxV;
+                                        lastAppliedVolStep[0] = curV;
+                                    } else {
+                                        swipeMode[0] = 3;
+                                        WindowManager.LayoutParams lp = getWindow().getAttributes();
+                                        float curB = lp != null ? lp.screenBrightness : -1f;
+                                        if (curB < 0f) {
+                                            try {
+                                                int sysB = Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, 128);
+                                                curB = Math.max(0.01f, Math.min(1.0f, sysB / 255f));
+                                            } catch (Throwable t) {
+                                                curB = 0.5f;
+                                            }
+                                        }
+                                        verticalStartFraction[0] = Math.max(0.01f, Math.min(1.0f, curB));
+                                    }
+                                }
+                            }
+
+                            if (swipeMode[0] == 1) {
                                 int dur = getEffectiveVideoDurationMs();
                                 float width = Math.max(1f, viewport.getWidth());
                                 int deltaMs = Math.round((dx / width) * 90_000f);
@@ -3549,6 +4100,52 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                     lastSwipeLiveSeekMs[0] = now;
                                     seekVideoToMs(target);
                                 }
+                            } else if (swipeMode[0] == 2 && audioMgr != null) {
+                                float rangePx = Math.max(dp(150), viewport.getHeight() * 0.55f);
+                                float frac = Math.max(0f, Math.min(1f, verticalStartFraction[0] + (-dy / rangePx)));
+                                int maxV = Math.max(1, audioMgr.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                                int targetStep = Math.max(0, Math.min(maxV, Math.round(frac * maxV)));
+                                if (targetStep != lastAppliedVolStep[0]) {
+                                    lastAppliedVolStep[0] = targetStep;
+                                    try {
+                                        audioMgr.setStreamVolume(AudioManager.STREAM_MUSIC, targetStep, 0);
+                                    } catch (Throwable ignored) {
+                                    }
+                                }
+                                int pct = Math.round(frac * 100f);
+                                uiHandler.removeCallbacks(hideHudRunnable);
+                                FrameLayout.LayoutParams gLp = (FrameLayout.LayoutParams) gestureHud.getLayoutParams();
+                                gLp.topMargin = Math.max(dp(92), lastVideoTopInsetPx + dp(66));
+                                gestureHud.setLayoutParams(gLp);
+                                gestureHud.animate().cancel();
+                                gestureHud.setAlpha(1f);
+                                gestureHud.setVisibility(View.VISIBLE);
+                                ivHudIcon.setImageResource(R.drawable.ic_audio);
+                                tvHudPct.setText(pct + "%");
+                                ViewGroup.LayoutParams fillLp = hudFill.getLayoutParams();
+                                fillLp.width = Math.max(0, Math.round(barTrackW * frac));
+                                hudFill.setLayoutParams(fillLp);
+                            } else if (swipeMode[0] == 3) {
+                                float rangePx = Math.max(dp(150), viewport.getHeight() * 0.55f);
+                                float frac = Math.max(0.01f, Math.min(1f, verticalStartFraction[0] + (-dy / rangePx)));
+                                WindowManager.LayoutParams lp = getWindow().getAttributes();
+                                if (lp != null) {
+                                    lp.screenBrightness = frac;
+                                    getWindow().setAttributes(lp);
+                                }
+                                int pct = Math.max(1, Math.round(frac * 100f));
+                                uiHandler.removeCallbacks(hideHudRunnable);
+                                FrameLayout.LayoutParams gLp = (FrameLayout.LayoutParams) gestureHud.getLayoutParams();
+                                gLp.topMargin = Math.max(dp(92), lastVideoTopInsetPx + dp(66));
+                                gestureHud.setLayoutParams(gLp);
+                                gestureHud.animate().cancel();
+                                gestureHud.setAlpha(1f);
+                                gestureHud.setVisibility(View.VISIBLE);
+                                ivHudIcon.setImageResource(R.drawable.ic_brightness);
+                                tvHudPct.setText(pct + "%");
+                                ViewGroup.LayoutParams fillLp = hudFill.getLayoutParams();
+                                fillLp.width = Math.max(0, Math.round(barTrackW * frac));
+                                hudFill.setLayoutParams(fillLp);
                             }
                         }
                     }
@@ -3575,8 +4172,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     activePanPointerId[0] = MotionEvent.INVALID_POINTER_ID;
-                    if (isHorizontalSwipeSeek[0]) {
-                        isHorizontalSwipeSeek[0] = false;
+                    if (swipeMode[0] == 1) {
                         if (tvVideoCenterScrubTime != null) {
                             tvVideoCenterScrubTime.setVisibility(View.GONE);
                         }
@@ -3585,7 +4181,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
                             seekVideoToMs(horizontalSwipeTargetMs[0]);
                         }
+                    } else if (swipeMode[0] == 2 || swipeMode[0] == 3) {
+                        uiHandler.removeCallbacks(hideHudRunnable);
+                        uiHandler.postDelayed(hideHudRunnable, 520L);
                     }
+                    swipeMode[0] = 0;
+                    gestureMovedBeyondSlop[0] = false;
                     stopVideoHoldGestures(badge);
                     break;
             }
@@ -3629,8 +4230,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         badge.animate().cancel();
         badge.setAlpha(1f);
         badge.setVisibility(View.VISIBLE);
-        badge.animate().alpha(0f).setStartDelay(400).setDuration(220)
-                .withEndAction(() -> badge.setVisibility(View.GONE)).start();
+        if (PrefsManager.isReduceAnimations(this)) {
+            uiHandler.postDelayed(() -> badge.setVisibility(View.GONE), 480);
+        } else {
+            badge.animate().alpha(0f).setStartDelay(400).setDuration(220)
+                    .withEndAction(() -> badge.setVisibility(View.GONE)).start();
+        }
     }
 
     private void resetVideoZoom() {
@@ -3770,172 +4375,87 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
     }
 
-    private void showVideoSettingsDialog(int theme) {
-        String muteStatus = videoMuted ? "מושתק (לחץ להפעלת קול)" : "פעיל (לחץ להשתקה)";
-        String autoNextStatus = videoAutoNext ? "פעיל" : "כבוי";
+    private void showVideoSettingsDialog(View anchor, int theme) {
         boolean autoGestures = PrefsManager.isAutoGestureMode(this);
-        String repeatLabel = videoRepeatMode == AudioPlayerManager.REPEAT_ONE
-                ? "חזרה על הסרטון עצמו"
-                : (videoRepeatMode == AudioPlayerManager.REPEAT_FOLDER ? "חזרה על כל התיקייה" : "ללא חזרה");
-
-        List<String> items = Arrays.asList(
-                "תמונה בתוך תמונה (PiP)",
-                "מהירות הסרטון (" + formatSpeedLabel(videoSpeed) + ")",
-                "מצב חזרה (" + repeatLabel + ")",
-                "שמע הסרטון: " + muteStatus,
-                "מעבר אוטומטי לסרטון הבא: " + autoNextStatus,
-                "מצב מחוות אוטומטי: " + (autoGestures ? "פועל (נקי)" : "כבוי (כפתורים)"),
-                "סיבוב מסך מלא (אופקי / אנכי)",
-                "איפוס זום תצוגה (100%)",
-                "ייצוא קטע פתיחה ל-GIF מונפש",
-                "עורך וידאו והפחתת משקל",
-                "שיתוף קובץ"
-        );
-
-        ThemedDialogHelper.showThemedMenu(
-                this,
-                "הגדרות ואפשרויות הוידאו",
-                targetFile.getName(),
-                items,
-                idx -> {
-                    switch (idx) {
-                        case 0:
-                            enterPictureInPictureSafe();
-                            break;
-                        case 1:
-                            showSpeedPickerDialog("בחירת מהירות הסרטון", videoSpeed, chosen -> {
-                                videoSpeed = chosen;
-                                speedModifiedFromDefault = true;
-                                applyVideoSpeedInternal(isVideoPlayingSafely());
-                                if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
-                            });
-                            break;
-                        case 2:
-                            showRepeatPickerDialog("מצב חזרה בוידאו", videoRepeatMode, false, chosen -> {
-                                videoRepeatMode = chosen;
-                                if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
-                            });
-                            break;
-                        case 3:
-                            videoMuted = !videoMuted;
-                            float vol = videoMuted ? 0f : 1f;
-                            if (exoPlayer != null) {
-                                exoPlayer.setVolume(vol);
-                            }
-                            if (videoPlayer != null) {
-                                videoPlayer.setVolume(vol, vol);
-                            }
-                            Toast.makeText(this, videoMuted ? "שמע הסרטון הושתק" : "שמע הסרטון הופעל", Toast.LENGTH_SHORT).show();
-                            break;
-                        case 4:
-                            videoAutoNext = !videoAutoNext;
-                            Toast.makeText(this, videoAutoNext ? "מעבר אוטומטי הופעל" : "מעבר אוטומטי כובה", Toast.LENGTH_SHORT).show();
-                            break;
-                        case 5:
-                            boolean nextMode = !autoGestures;
-                            PrefsManager.setAutoGestureMode(this, nextMode);
-                            Toast.makeText(this, nextMode ? "מצב מחוות אוטומטי הופעל" : "מצב כפתורים קלאסי הופעל", Toast.LENGTH_SHORT).show();
-                            break;
-                        case 6:
-                            toggleScreenOrientation();
-                            break;
-                        case 7:
-                            resetVideoZoom();
-                            Toast.makeText(this, "הזום אופס ל-100%", Toast.LENGTH_SHORT).show();
-                            break;
-                        case 8:
-                            Toast.makeText(this, "מייצר GIF מהסרטון...", Toast.LENGTH_SHORT).show();
-                            executor.execute(() -> {
-                                try {
-                                    File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
-                                    File outGif = StorageUtils.uniqueDestinationFile(parent, targetFile.getName() + ".gif");
-                                    GifToolsHelper.videoToGif(this, targetFile, outGif, 480, 10);
-                                    uiHandler.post(() -> Toast.makeText(this, "נוצר GIF: " + outGif.getName(), Toast.LENGTH_LONG).show());
-                                } catch (Exception e) {
-                                    uiHandler.post(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                                }
-                            });
-                            break;
-                        case 9: {
-                            Intent vei = new Intent(this, ProVideoEditorActivity.class);
-                            vei.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, targetFile.getAbsolutePath());
-                            startActivity(vei);
-                            break;
+        List<GlassSideDrawerHelper.DrawerItem> items = new ArrayList<>();
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                "תמונה בתוך תמונה (PiP)", R.drawable.ic_pip, this::enterPictureInPictureSafe));
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                "שמע הסרטון: " + (videoMuted ? "מושתק (לחץ להפעלה)" : "פעיל (לחץ להשתקה)"),
+                R.drawable.ic_audio, () -> {
+                    videoMuted = !videoMuted;
+                    float vol = videoMuted ? 0f : 1f;
+                    if (exoPlayer != null) exoPlayer.setVolume(vol);
+                    if (videoPlayer != null) videoPlayer.setVolume(vol, vol);
+                    Toast.makeText(this, videoMuted ? "שמע הסרטון הושתק" : "שמע הסרטון הופעל", Toast.LENGTH_SHORT).show();
+                }));
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                "מעבר אוטומטי לסרטון הבא: " + (videoAutoNext ? "פעיל" : "כבוי"),
+                R.drawable.ic_skip_next, () -> {
+                    videoAutoNext = !videoAutoNext;
+                    Toast.makeText(this, videoAutoNext ? "מעבר אוטומטי הופעל" : "מעבר אוטומטי כובה", Toast.LENGTH_SHORT).show();
+                }));
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                autoGestures ? "כבה מצב מחוות" : "הפעל מצב מחוות",
+                R.drawable.ic_settings, () -> {
+                    boolean nextMode = !autoGestures;
+                    PrefsManager.setAutoGestureMode(this, nextMode);
+                    applyMediaImmersiveAndLayoutState();
+                    Toast.makeText(this, nextMode ? "מצב מחוות הופעל" : "מצב מחוות כובה", Toast.LENGTH_SHORT).show();
+                }));
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                "ייצוא קטע פתיחה ל-GIF", R.drawable.ic_images, () -> {
+                    Toast.makeText(this, "מייצר GIF מהסרטון...", Toast.LENGTH_SHORT).show();
+                    executor.execute(() -> {
+                        try {
+                            File parent = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
+                            File outGif = StorageUtils.uniqueDestinationFile(parent, targetFile.getName() + ".gif");
+                            GifToolsHelper.videoToGif(this, targetFile, outGif, 480, 10);
+                            uiHandler.post(() -> Toast.makeText(this, "נוצר GIF: " + outGif.getName(), Toast.LENGTH_LONG).show());
+                        } catch (Exception e) {
+                            uiHandler.post(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
                         }
-                        case 10:
-                            shareCurrentFile();
-                            break;
-                    }
-                }
-        );
+                    });
+                }));
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                "עורך וידאו והפחתת משקל", R.drawable.ic_video_cutter, () -> {
+                    Intent vei = new Intent(this, ProVideoEditorActivity.class);
+                    vei.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, targetFile.getAbsolutePath());
+                    startActivity(vei);
+                }));
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                "שיתוף קובץ", R.drawable.ic_share, this::shareCurrentFile));
+
+        GlassSideDrawerHelper.show(this, anchor, targetFile.getName(), items, true);
     }
 
     private interface SpeedSelectedCallback {
         void onSpeedChosen(float speed);
     }
 
-    private void showSpeedPickerDialog(String title, float current, SpeedSelectedCallback cb) {
+    private void showSpeedPickerDialog(View anchor, String title, float current, SpeedSelectedCallback cb) {
         final float[] values = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
-        int theme = PrefsManager.getThemeMode(this);
-        int bgColor = ThemeHelper.getCardColor(this, theme);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
-        int accent = ThemeHelper.getAccentColor(this, theme);
-
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        container.setGravity(Gravity.CENTER_HORIZONTAL);
-        container.setMinimumWidth(0);
-        container.setPadding(dp(10), dp(8), dp(10), dp(8));
-
-        GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setCornerRadius(dp(16));
-        cardBg.setColor(bgColor);
-        container.setBackground(cardBg);
-
-        AlertDialog dlg = new AlertDialog.Builder(this)
-                .setView(container)
-                .create();
-
+        List<GlassAnchoredPopoverHelper.OptionItem> items = new ArrayList<>();
         for (float v : values) {
             boolean selected = Math.abs(v - current) < 0.02f;
             String label = v == 1.0f
-                    ? "1.0x"
+                    ? "1.0x (רגיל)"
                     : String.format(Locale.US, "%.2fx", v).replaceAll("0x$", "x");
-            TextView tv = new TextView(this);
-            tv.setText(label);
-            tv.setTextSize(selected ? 18.5f : 16f);
-            tv.setTypeface(Typeface.MONOSPACE, selected ? Typeface.BOLD : Typeface.NORMAL);
-            tv.setTextColor(selected ? accent : textPrimary);
-            tv.setGravity(Gravity.CENTER);
-            tv.setPadding(dp(14), dp(7), dp(14), dp(7));
-            tv.setBackgroundColor(Color.TRANSPARENT);
-            tv.setOnClickListener(view -> {
-                dlg.dismiss();
-                cb.onSpeedChosen(v);
-            });
-            container.addView(tv, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            items.add(GlassAnchoredPopoverHelper.OptionItem.selectable(
+                    label,
+                    R.drawable.ic_speed,
+                    selected,
+                    () -> cb.onSpeedChosen(v)
+            ));
         }
-
-        if (dlg.getWindow() != null) {
-            dlg.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-        }
-        dlg.show();
-        if (dlg.getWindow() != null) {
-            dlg.getWindow().setLayout(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            View decor = dlg.getWindow().getDecorView();
-            if (decor != null) {
-                decor.setMinimumWidth(0);
-                decor.setPadding(0, 0, 0, 0);
-            }
-        }
+        GlassAnchoredPopoverHelper.showMenu(this, anchor, title, null, items, false);
     }
 
     private interface RepeatSelectedCallback {
         void onRepeatChosen(int repeatMode);
     }
 
-    private void showRepeatPickerDialog(String title, int currentMode, boolean isAudio, RepeatSelectedCallback cb) {
+    private void showRepeatPickerDialog(View anchor, String title, int currentMode, boolean isAudio, RepeatSelectedCallback cb) {
         String itemLabel = isAudio ? "חזרה על השיר עצמו" : "חזרה על הסרטון עצמו";
         String folderLabel = isAudio ? "חזרה על כל הקבצים בתיקייה" : "חזרה על כל הסרטונים בתיקייה";
         List<String> opts = Arrays.asList(
@@ -3943,7 +4463,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 itemLabel + (currentMode == AudioPlayerManager.REPEAT_ONE ? "  (פעיל)" : ""),
                 folderLabel + (currentMode == AudioPlayerManager.REPEAT_FOLDER ? "  (פעיל)" : "")
         );
-        ThemedDialogHelper.showThemedMenu(this, title, "בחר אופן חזרה בסיום הניגון:", opts, cb::onRepeatChosen);
+        ThemedDialogHelper.showThemedMenu(this, anchor, title, "בחר אופן חזרה בסיום הניגון:", opts, cb::onRepeatChosen);
     }
 
     private interface DoubleTapSeekAction {
@@ -4005,20 +4525,26 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         badge.setText(forwardRight ? "\u200E+10 ש׳" : "\u200E-10 ש׳");
         badge.animate().cancel();
         badge.setAlpha(1f);
-        badge.setScaleX(0.85f);
-        badge.setScaleY(0.85f);
         badge.setVisibility(View.VISIBLE);
-        badge.animate()
-                .scaleX(1.05f)
-                .scaleY(1.05f)
-                .setDuration(140)
-                .withEndAction(() -> badge.animate()
-                        .alpha(0f)
-                        .setStartDelay(380)
-                        .setDuration(200)
-                        .withEndAction(() -> badge.setVisibility(View.GONE))
-                        .start())
-                .start();
+        if (PrefsManager.isReduceAnimations(this)) {
+            badge.setScaleX(1f);
+            badge.setScaleY(1f);
+            uiHandler.postDelayed(() -> badge.setVisibility(View.GONE), 500);
+        } else {
+            badge.setScaleX(0.85f);
+            badge.setScaleY(0.85f);
+            badge.animate()
+                    .scaleX(1.05f)
+                    .scaleY(1.05f)
+                    .setDuration(140)
+                    .withEndAction(() -> badge.animate()
+                            .alpha(0f)
+                            .setStartDelay(380)
+                            .setDuration(200)
+                            .withEndAction(() -> badge.setVisibility(View.GONE))
+                            .start())
+                    .start();
+        }
     }
 
     private ImageButton createResponsiveRoundIconButton(int drawableRes, int sizePx, int marginPx, boolean primaryFilled, int accent, int theme) {
@@ -4346,13 +4872,35 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             Runnable renderPage = () -> {
                 if (pdfRenderer == null || totalPages == 0) return;
                 try (PdfRenderer.Page page = pdfRenderer.openPage(currentPdfPage)) {
-                    float scale = Math.max(2.5f, Math.min(4.0f, 2200f / Math.max(1, page.getWidth())));
-                    int w = Math.max(1, Math.round(page.getWidth() * scale));
-                    int h = Math.max(1, Math.round(page.getHeight() * scale));
-                    Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                    bmp.eraseColor(Color.WHITE);
-                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                    pageImage.setImageBitmap(bmp);
+                    int pw = Math.max(1, page.getWidth());
+                    int ph = Math.max(1, page.getHeight());
+                    float scale = Math.max(2.0f, Math.min(4.0f, 2400f / Math.max(pw, ph)));
+                    final double maxPixels = 8_000_000.0;
+                    double estPixels = (pw * (double) scale) * (ph * (double) scale);
+                    if (estPixels > maxPixels) {
+                        scale *= (float) Math.sqrt(maxPixels / estPixels);
+                    }
+                    Bitmap bmp = null;
+                    for (int attempt = 0; attempt < 3 && bmp == null; attempt++) {
+                        int w = Math.max(1, Math.min(2800, Math.round(pw * scale)));
+                        int h = Math.max(1, Math.min(2800, Math.round(ph * scale)));
+                        try {
+                            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                        } catch (OutOfMemoryError oom) {
+                            System.gc();
+                            scale *= 0.65f;
+                        }
+                    }
+                    if (bmp != null) {
+                        bmp.eraseColor(Color.WHITE);
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                        Bitmap oldBmp = activePdfBitmap;
+                        activePdfBitmap = bmp;
+                        pageImage.setImageBitmap(bmp);
+                        if (oldBmp != null && oldBmp != bmp && !oldBmp.isRecycled()) {
+                            oldBmp.recycle();
+                        }
+                    }
                     tvPageIndicator.setText((currentPdfPage + 1) + " / " + totalPages);
                     boolean hasPrev = currentPdfPage > 0;
                     boolean hasNext = currentPdfPage < totalPages - 1;
@@ -4360,6 +4908,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     btnPrev.setAlpha(hasPrev ? 1f : 0.35f);
                     btnNext.setEnabled(hasNext);
                     btnNext.setAlpha(hasNext ? 1f : 0.35f);
+                } catch (Throwable t) {
+                    AppLogger.error(this, "PdfViewer", "Failed rendering PDF page " + currentPdfPage, t);
+                    Toast.makeText(this, "שגיאה בטעינת עמוד ה-PDF", Toast.LENGTH_SHORT).show();
                 }
             };
             renderPage.run();
@@ -4636,13 +5187,17 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void runFullExtraction(Button btnExtract) {
         btnExtract.setEnabled(false);
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this, "חילוץ ארכיון", targetFile.getName(), true);
         executor.execute(() -> {
             try {
                 String baseName = targetFile.getName().replaceAll("(?i)\\.(tar\\.gz|tgz|zip|tar|gz|jar|cbz|apk|apkx|apk\\+|apks|apkm|xapk|apkp)$", "");
                 File outDir = StorageUtils.uniqueDestinationFile(
                         targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir(),
                         baseName + "_מחולץ");
-                int count = ArchiveUtils.extractArchive(targetFile, outDir, archivePassword);
+                int count = ArchiveUtils.extractArchive(targetFile, outDir, archivePassword,
+                        (itemName, done, total) -> progress.updateCounts(itemName, done, total, outDir.getName()));
+                progress.finish();
                 uiHandler.post(() -> {
                     btnExtract.setEnabled(true);
                     ThemedDialogHelper.showCustomDialog(this, "החילוץ הושלם בהצלחה",
@@ -4650,6 +5205,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             null, "הבנתי", this::finish, null, null, false);
                 });
             } catch (Exception e) {
+                progress.finish();
                 String msg = e.getMessage() != null ? e.getMessage() : "";
                 uiHandler.post(() -> {
                     btnExtract.setEnabled(true);
@@ -4684,13 +5240,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                byte[] bytes = ArchiveUtils.readEntryBytes(targetFile, item.name, archivePassword);
+                CacheCleanupManager.cleanupArchivePreviewDir(this);
                 File previewDir = new File(getCacheDir(), "arch_preview");
                 previewDir.mkdirs();
-                File tmp = new File(previewDir, new File(item.name).getName());
-                try (FileOutputStream fos = new FileOutputStream(tmp)) {
-                    fos.write(bytes);
-                }
+                String cleanLeaf = new File(item.name).getName();
+                if (cleanLeaf.isEmpty()) cleanLeaf = "entry_" + System.currentTimeMillis();
+                File tmp = new File(previewDir, cleanLeaf);
+                ArchiveUtils.extractEntryToFile(targetFile, item.name, archivePassword, tmp);
                 uiHandler.post(() -> FileOpenWithHelper.tryOpenByDefaultOrBuiltin(this, tmp));
             } catch (Exception e) {
                 String msg = e.getMessage() != null ? e.getMessage() : "";
@@ -4787,12 +5343,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         cleanupActiveRemuxedCache();
         cleanupExternalCopiedCache();
 
+        if (isFinishing()) {
+            CacheCleanupManager.cleanupArchivePreviewDir(this);
+            CacheCleanupManager.cleanupPreviewFileIfManagedCache(this, targetFile);
+        }
+
         if (pdfRenderer != null) {
             try { pdfRenderer.close(); } catch (Exception ignored) {}
         }
         if (pdfDescriptor != null) {
             try { pdfDescriptor.close(); } catch (Exception ignored) {}
         }
+        if (activePdfBitmap != null && !activePdfBitmap.isRecycled()) {
+            activePdfBitmap.recycle();
+        }
+        activePdfBitmap = null;
         photoCache.evictAll();
         executor.shutdownNow();
     }

@@ -92,7 +92,80 @@ public final class FileOpenWithHelper {
         return true;
     }
 
+    public static void openExternalFileDirect(Activity activity, File file, String mimeHint, Runnable onClosedDialogOnly) {
+        if (activity == null || file == null || !file.exists()) {
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+        String name = file.getName();
+        String lower = name.toLowerCase(Locale.ROOT);
+        String mime = mimeHint != null ? mimeHint.toLowerCase(Locale.ROOT) : "";
+
+        if (MediaFormatHelper.isInstallableAppPackage(name)
+                || "application/vnd.android.package-archive".equals(mime)
+                || "application/x-apks".equals(mime)
+                || "application/x-apk".equals(mime)) {
+            AppPackageInstaller.inspectAndInstall(activity, file, onClosedDialogOnly);
+            return;
+        }
+
+        if (MediaFormatHelper.isVideoFile(name) || mime.startsWith("video/")) {
+            executeOpenAction(activity, file, ACTION_INTERNAL_VIDEO);
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+        if (MediaFormatHelper.isImageFile(name) || mime.startsWith("image/")) {
+            executeOpenAction(activity, file, ACTION_INTERNAL_IMAGE);
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+        if (MediaFormatHelper.isAudioFile(name) || mime.startsWith("audio/")) {
+            executeOpenAction(activity, file, ACTION_INTERNAL_AUDIO);
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+        if (MediaFormatHelper.isZipOrArchiveFile(name)
+                || "application/zip".equals(mime)
+                || "application/x-zip-compressed".equals(mime)
+                || "application/x-tar".equals(mime)
+                || "application/gzip".equals(mime)
+                || "application/x-gzip".equals(mime)
+                || "application/java-archive".equals(mime)) {
+            executeOpenAction(activity, file, ACTION_INTERNAL_ARCHIVE);
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+        if (MediaFormatHelper.isPdfFile(name)
+                || "application/pdf".equals(mime)
+                || MediaFormatHelper.isDocumentFile(name)
+                || lower.endsWith(".docx") || lower.endsWith(".xlsx") || lower.endsWith(".pptx")
+                || lower.endsWith(".odt") || lower.endsWith(".ods") || lower.endsWith(".odp")) {
+            if ((MediaFormatHelper.isTextFile(name) || MediaFormatHelper.isCodeOrSyntaxFile(name))
+                    && !MediaFormatHelper.isPdfFile(name)
+                    && !"application/pdf".equals(mime)) {
+                executeOpenAction(activity, file, ACTION_INTERNAL_CODE);
+            } else {
+                Intent i = new Intent(activity, BuiltInViewerActivity.class);
+                i.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
+                activity.startActivity(i);
+            }
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+        if (MediaFormatHelper.isTextFile(name) || MediaFormatHelper.isCodeOrSyntaxFile(name) || mime.startsWith("text/")) {
+            executeOpenAction(activity, file, ACTION_INTERNAL_CODE);
+            if (onClosedDialogOnly != null) onClosedDialogOnly.run();
+            return;
+        }
+
+        showOpenAsDialog(activity, file, onClosedDialogOnly);
+    }
+
     public static void showOpenAsDialog(Activity activity, File file) {
+        showOpenAsDialog(activity, file, null);
+    }
+
+    public static void showOpenAsDialog(Activity activity, File file, Runnable onFinished) {
         String ext = MediaFormatHelper.getExtensionNormalized(file.getName());
         int theme = PrefsManager.getThemeMode(activity);
         int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
@@ -130,7 +203,7 @@ public final class FileOpenWithHelper {
         }
         panel.addView(rg);
 
-        ThemedDialogHelper.showCustomDialog(
+        android.app.AlertDialog dlg = ThemedDialogHelper.showCustomDialog(
                 activity,
                 "פתיחה באמצעות — " + file.getName(),
                 "בחר כיצד לפתוח את הקובץ. תוכל לבחור \"תמיד\" כדי לשמור לסיומת זו:",
@@ -140,6 +213,7 @@ public final class FileOpenWithHelper {
                     int sel = rg.getCheckedRadioButtonId() - 1000;
                     if (sel < 0 || sel >= actions.length) sel = 0;
                     executeOpenAction(activity, file, actions[sel]);
+                    if (onFinished != null) onFinished.run();
                 },
                 ext.isEmpty() ? null : "תמיד (" + ext + ")",
                 () -> {
@@ -147,9 +221,13 @@ public final class FileOpenWithHelper {
                     if (sel < 0 || sel >= actions.length) sel = 0;
                     PrefsManager.setDefaultOpenAction(activity, ext, actions[sel]);
                     executeOpenAction(activity, file, actions[sel]);
+                    if (onFinished != null) onFinished.run();
                 },
                 true
         );
+        if (dlg != null && onFinished != null) {
+            dlg.setOnCancelListener(d -> onFinished.run());
+        }
     }
 
     public static void executeOpenAction(Activity activity, File file, String action) {

@@ -1,6 +1,7 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.app.Application;
+import android.content.ComponentCallbacks2;
 
 import java.util.concurrent.Executors;
 
@@ -11,10 +12,10 @@ public class FileManagerApp extends Application {
         super.onCreate();
         AppLogger.init(this);
         AppLogger.installUncaughtHandler(this);
-        AppLogger.info(this, "App", "Application started v" + BuildConfig.VERSION_NAME);
 
         Executors.newSingleThreadExecutor().execute(() -> {
             try {
+                CacheCleanupManager.pruneCaches(this);
                 RecycleBinManager.migrateLegacyTrashIfNeeded(this);
                 FileScanCache.prewarm(this);
                 FileIndexDatabase.getInstance(this).clearAndRebuildSync(this);
@@ -22,5 +23,14 @@ public class FileManagerApp extends Application {
                 AppLogger.warn(this, "Startup", "Background prewarm warning: " + t.getMessage());
             }
         });
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+            FileThumbnailLoader.clearMemoryCache();
+            ThemeHelper.invalidateWallpaperCache();
+        }
     }
 }

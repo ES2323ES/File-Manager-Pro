@@ -647,9 +647,11 @@ public class VideoCutterActivity extends AppCompatActivity {
         final VideoCompressor.QualityPreset preset = selectedPreset;
         final boolean compress = preset != VideoCompressor.QualityPreset.ORIGINAL;
         btnCutVideo.setEnabled(false);
-        Toast.makeText(this,
-                compress ? "חותך ודוחס להפחתת משקל..." : (isMtsOrTsSource ? "חותך וממיר קטע MTS ל-MP4..." : "חותך סרטון..."),
-                Toast.LENGTH_SHORT).show();
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this,
+                compress ? "חיתוך ודחיסת וידאו" : (isMtsOrTsSource ? "חיתוך והמרת MTS ל-MP4" : "חיתוך ושמירת סרטון"),
+                resolvedSourceFile != null ? resolvedSourceFile.getName() : "מעבד וידאו...",
+                true);
 
         final long startUs = startMs * 1000L;
         final long endUs = (durationMs > 0L && endMs >= durationMs - 250L) ? Long.MAX_VALUE : (endMs * 1000L);
@@ -671,6 +673,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                             : endUs;
 
                     if (compressInput == null || !compressInput.isFile()) {
+                        progress.updateIndeterminate(outFile.getName(), "טוען קובץ מקור...");
                         tempSrcCopy = new File(getCacheDir(), "cut_comp_src_" + System.currentTimeMillis() + ".mp4");
                         try (InputStream in = getContentResolver().openInputStream(selectedVideoUri);
                              FileOutputStream out = new FileOutputStream(tempSrcCopy)) {
@@ -689,7 +692,10 @@ public class VideoCutterActivity extends AppCompatActivity {
                                 tempRemuxMp4,
                                 startUs,
                                 endUs,
-                                pct -> runOnUiThread(() -> btnCutVideo.setText("מכין MTS לדחיסה... " + pct + "%"))
+                                pct -> {
+                                    progress.updatePercent(outFile.getName(), pct / 2, "הכנת MTS");
+                                    runOnUiThread(() -> btnCutVideo.setText("מכין MTS לדחיסה... " + pct + "%"));
+                                }
                         );
                         compressInput = tempRemuxMp4;
                         compStartUs = 0L;
@@ -706,8 +712,12 @@ public class VideoCutterActivity extends AppCompatActivity {
                             false,
                             1.0f,
                             preset,
-                            pct -> runOnUiThread(() -> btnCutVideo.setText("דוחס ומפחית משקל... " + pct + "%"))
+                            pct -> {
+                                progress.updatePercent(outFile.getName(), pct, preset.labelHe);
+                                runOnUiThread(() -> btnCutVideo.setText("דוחס ומפחית משקל... " + pct + "%"));
+                            }
                     );
+                    progress.finish();
 
                     long origLen = finalSrcRef != null && finalSrcRef.exists() ? finalSrcRef.length() : 0L;
                     long newLen = outFile.length();
@@ -734,6 +744,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                         );
                     });
                 } catch (Exception e) {
+                    progress.finish();
                     if (outFile.exists()) outFile.delete();
                     runOnUiThread(() -> {
                         btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
@@ -754,8 +765,12 @@ public class VideoCutterActivity extends AppCompatActivity {
                             outFile,
                             startUs,
                             endUs,
-                            pct -> runOnUiThread(() -> btnCutVideo.setText("חותך סרטון MTS... " + pct + "%"))
+                            pct -> {
+                                progress.updatePercent(outFile.getName(), pct, "המרת MTS");
+                                runOnUiThread(() -> btnCutVideo.setText("חותך סרטון MTS... " + pct + "%"));
+                            }
                     );
+                    progress.finish();
                     runOnUiThread(() -> {
                         btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
                         lastCutVideoFile = outFile;
@@ -778,6 +793,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                         );
                     });
                 } catch (Exception e) {
+                    progress.finish();
                     if (outFile.exists()) outFile.delete();
                     runOnUiThread(() -> {
                         btnCutVideo.setText("חתוך וייצא סרטון לתיקיית הסרטונים");
@@ -820,6 +836,9 @@ public class VideoCutterActivity extends AppCompatActivity {
 
                 ByteBuffer buffer = ByteBuffer.allocate(maxBufferSize);
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+                long effectiveEndUs = endUs == Long.MAX_VALUE ? Math.max(startUs + 500_000L, durationMs * 1000L) : endUs;
+                long totalSpanUs = Math.max(1L, effectiveEndUs - startUs);
+                int lastPct = -1;
 
                 while (true) {
                     int sampleSize = extractor.readSampleData(buffer, 0);
@@ -836,11 +855,18 @@ public class VideoCutterActivity extends AppCompatActivity {
                         info.flags = (flags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
                                 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
                         muxer.writeSampleData(indexMap.get(trackIndex), buffer, info);
+                        int pct = (int) Math.min(99L, ((sampleTime - startUs) * 100L) / totalSpanUs);
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            progress.updatePercent(outFile.getName(), pct, "");
+                        }
                     }
                     extractor.advance();
                 }
 
+                progress.updatePercent(outFile.getName(), 100, "");
                 muxer.stop();
+                progress.finish();
                 final File finalOut = outFile;
                 runOnUiThread(() -> {
                     lastCutVideoFile = finalOut;
@@ -860,6 +886,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                     );
                 });
             } catch (Exception e) {
+                progress.finish();
                 if (outFile.exists()) outFile.delete();
                 runOnUiThread(() -> {
                     btnCutVideo.setEnabled(true);

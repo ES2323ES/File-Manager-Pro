@@ -983,8 +983,10 @@ public class ProImageEditorActivity extends AppCompatActivity {
     }
 
     private void rebuildTransformedBitmap() {
-        if (originalBitmap == null) return;
+        if (originalBitmap == null || originalBitmap.isRecycled()) return;
+        Bitmap oldTransformed = transformedBitmap;
         Bitmap src = originalBitmap;
+        Bitmap cropTemp = null;
 
         if (cropMode != 0) {
             int w = src.getWidth();
@@ -1010,7 +1012,8 @@ public class ProImageEditorActivity extends AppCompatActivity {
             }
             int x = Math.max(0, (w - targetW) / 2);
             int y = Math.max(0, (h - targetH) / 2);
-            src = Bitmap.createBitmap(src, x, y, Math.max(1, targetW), Math.max(1, targetH));
+            cropTemp = Bitmap.createBitmap(src, x, y, Math.max(1, targetW), Math.max(1, targetH));
+            src = cropTemp;
         }
 
         Matrix m = new Matrix();
@@ -1019,10 +1022,18 @@ public class ProImageEditorActivity extends AppCompatActivity {
         }
         m.postScale(flipH ? -1f : 1f, flipV ? -1f : 1f);
 
-        transformedBitmap = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+        Bitmap nextTransformed = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+        transformedBitmap = nextTransformed;
         canvasView.setImageBitmap(transformedBitmap);
         canvasView.updateColorFilter();
         canvasView.invalidate();
+
+        if (cropTemp != null && cropTemp != originalBitmap && cropTemp != nextTransformed && !cropTemp.isRecycled()) {
+            cropTemp.recycle();
+        }
+        if (oldTransformed != null && oldTransformed != originalBitmap && oldTransformed != nextTransformed && !oldTransformed.isRecycled()) {
+            oldTransformed.recycle();
+        }
     }
 
     private static ColorMatrix buildColorMatrix(int preset, float bOffset, float cFactor, float sFactor) {
@@ -1232,5 +1243,20 @@ public class ProImageEditorActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         executor.shutdownNow();
+        if (canvasView != null) {
+            canvasView.setImageDrawable(null);
+        }
+        if (transformedBitmap != null && transformedBitmap != originalBitmap && !transformedBitmap.isRecycled()) {
+            transformedBitmap.recycle();
+        }
+        transformedBitmap = null;
+        if (originalBitmap != null && !originalBitmap.isRecycled()) {
+            originalBitmap.recycle();
+        }
+        originalBitmap = null;
+        if (filterThumbBitmap != null && !filterThumbBitmap.isRecycled()) {
+            filterThumbBitmap.recycle();
+        }
+        filterThumbBitmap = null;
     }
 }
