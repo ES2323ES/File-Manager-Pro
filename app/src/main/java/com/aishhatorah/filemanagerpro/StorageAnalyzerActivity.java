@@ -196,7 +196,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         }
     }
 
-    private void showHeavyFileActions(File f) {
+    private void showHeavyFileActions(File f, View anchor) {
         List<String> options = Arrays.asList(
                 "פתיחה בתוך האפליקציה",
                 "העבר לסל המיחזור (" + StorageUtils.formatSize(f.length()) + ")",
@@ -204,6 +204,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         );
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 f.getName(),
                 "משקל: " + StorageUtils.formatSize(f.length()) + "\n" + f.getAbsolutePath(),
                 options,
@@ -270,11 +271,11 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
             // סעיף ד + סעיף ח: האייקון האמיתי משמאל פותח בלחיצה את אפשרויות העריכה
             FileThumbnailLoader.bindFileIcon(StorageAnalyzerActivity.this, f, h.ivIcon);
 
-            View.OnClickListener openMenu = v -> showHeavyFileActions(f);
+            View.OnClickListener openMenu = v -> showHeavyFileActions(f, v);
             h.ivIcon.setOnClickListener(openMenu);
             h.rowCard.setOnClickListener(openMenu);
             h.rowCard.setOnLongClickListener(v -> {
-                showHeavyFileActions(f);
+                showHeavyFileActions(f, v);
                 return true;
             });
         }

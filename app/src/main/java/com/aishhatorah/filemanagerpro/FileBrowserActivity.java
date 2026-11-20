@@ -2282,7 +2282,7 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
         }
         if (MODE_RECYCLE_BIN.equals(currentMode)) {
-            showFileOperationsMenu(file);
+            showFileOperationsMenu(file, null);
             return;
         }
         if (file.isDirectory()) {
@@ -2344,12 +2344,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     // ==================== תפריט אפשרויות קובץ (לחיצה ארוכה / אייקון ברשימה) ====================
-    private void showFileOperationsMenu(File file) {
+    private void showFileOperationsMenu(File file, View anchor) {
         String subInfo = file.isDirectory() ? "תיקייה" : StorageUtils.formatSize(file.length());
 
         if (MODE_RECYCLE_BIN.equals(currentMode)) {
             ThemedDialogHelper.showThemedMenu(
-                    this, file.getName(), "פריט בסל המיחזור",
+                    this, anchor, file.getName(), "פריט בסל המיחזור",
                     Arrays.asList("שחזר למיקום המקורי", "מחיקה לצמיתות", "פרטי פריט"),
                     which -> {
                         if (which == 0) {
@@ -2403,6 +2403,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 file.getName(),
                 subInfo,
                 actions,
@@ -2526,7 +2527,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         });
     }
 
-    private void showInstalledAppMenu(InstalledAppEntry app) {
+    private void showInstalledAppMenu(InstalledAppEntry app, View anchor) {
         List<String> opts = new ArrayList<>();
         if (app.sourceApk != null && app.sourceApk.exists()) {
             opts.add("גיבוי APK לתיקיית ההורדות");
@@ -2538,6 +2539,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 app.appName,
                 app.packageName + "  •  " + app.versionName,
                 opts,
@@ -2786,15 +2788,21 @@ public class FileBrowserActivity extends AppCompatActivity {
                 h.ivIcon.setClickable(true);
                 h.ivIcon.setOnClickListener(v -> {
                     if (multiSelectMode) onFileClicked(f);
-                    else showFileOperationsMenu(f);
+                    else showFileOperationsMenu(f, v);
                 });
             }
-            h.rowCard.setOnClickListener(v -> onFileClicked(f));
+            h.rowCard.setOnClickListener(v -> {
+                if (MODE_RECYCLE_BIN.equals(currentMode) && !multiSelectMode) {
+                    showFileOperationsMenu(f, v);
+                } else {
+                    onFileClicked(f);
+                }
+            });
             h.rowCard.setOnLongClickListener(v -> {
                 if (multiSelectMode) {
                     onFileClicked(f);
                 } else {
-                    showFileOperationsMenu(f);
+                    showFileOperationsMenu(f, v);
                 }
                 return true;
             });
@@ -2861,8 +2869,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             } catch (Throwable t) {
                 h.ivIcon.setImageResource(R.drawable.ic_apps);
             }
-            h.ivIcon.setOnClickListener(v -> showInstalledAppMenu(app));
-            h.rowCard.setOnClickListener(v -> showInstalledAppMenu(app));
+            h.ivIcon.setOnClickListener(v -> showInstalledAppMenu(app, v));
+            h.rowCard.setOnClickListener(v -> showInstalledAppMenu(app, v));
         }
 
         @Override

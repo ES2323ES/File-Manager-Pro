@@ -537,7 +537,7 @@ public class SettingsActivity extends AppCompatActivity {
                 checked -> PrefsManager.setShowFolderSizes(this, checked));
 
         displayCard.addView(createSubtleButton("שינוי מיון ברירת מחדל (" + friendlySortSummary() + ")", accent, dark,
-                v -> showSortModeDialog()));
+                v -> showSortModeDialog(v)));
         body.addView(displayCard);
 
         // 5. אפליקציות ברירת מחדל (רשימה מוטמעת + X לכל פריט)
@@ -995,13 +995,14 @@ public class SettingsActivity extends AppCompatActivity {
         return b;
     }
 
-    private void showSortModeDialog() {
+    private void showSortModeDialog(View anchor) {
+        int curMode = PrefsManager.getSortMode(this);
         final String[] modes = {
-                "לפי שם (עברית תחילה)",
-                "לפי משקל קובץ",
-                "לפי תאריך שינוי",
-                "לפי סוג קובץ",
-                "לפי תאריך יצירה",
+                "לפי שם (עברית תחילה)" + (curMode == PrefsManager.SORT_NAME ? "  (פעיל)" : ""),
+                "לפי משקל קובץ" + (curMode == PrefsManager.SORT_SIZE ? "  (פעיל)" : ""),
+                "לפי תאריך שינוי" + (curMode == PrefsManager.SORT_DATE ? "  (פעיל)" : ""),
+                "לפי סוג קובץ" + (curMode == PrefsManager.SORT_TYPE ? "  (פעיל)" : ""),
+                "לפי תאריך יצירה" + (curMode == PrefsManager.SORT_CREATED ? "  (פעיל)" : ""),
                 PrefsManager.isSortAscending(this)
                         ? "החלף לסדר יורד (מהגדול/חדש)"
                         : "החלף לסדר עולה (א-ת / מהקטן)"
@@ -1015,6 +1016,7 @@ public class SettingsActivity extends AppCompatActivity {
         };
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 "מיון ברירת מחדל",
                 "בחר שדה מיון או החלף את כיוון המיון:",
                 Arrays.asList(modes),
