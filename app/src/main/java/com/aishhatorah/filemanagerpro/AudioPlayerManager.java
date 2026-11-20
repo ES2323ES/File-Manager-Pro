@@ -330,6 +330,35 @@ public class AudioPlayerManager {
         }
     }
 
+    public int getSelectedEqPresetIndex() {
+        return selectedPresetIndex;
+    }
+
+    public void resetEqualizerToDefault() {
+        selectedPresetIndex = -1;
+        customBandLevels = null;
+        try {
+            if (equalizer != null) {
+                short count = equalizer.getNumberOfBands();
+                for (short i = 0; i < count; i++) {
+                    equalizer.setBandLevel(i, (short) 0);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        bassStrength = 0;
+        try {
+            if (bassBoost != null) {
+                if (bassBoost.getStrengthSupported()) {
+                    bassBoost.setStrength((short) 0);
+                }
+                bassBoost.setEnabled(false);
+            }
+        } catch (Throwable ignored) {
+        }
+        notifyListeners();
+    }
+
     // ==================== Playback Core ====================
 
     public void playOrAttachFile(Context context, File file) {
