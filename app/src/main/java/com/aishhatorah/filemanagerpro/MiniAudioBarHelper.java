@@ -101,7 +101,7 @@ public class MiniAudioBarHelper {
         final WavySeekBar songWavyBar = new WavySeekBar(activity);
         songWavyBar.setCompactStyle(true);
         songWavyBar.setThumbOnlyTouch(true);
-        songWavyBar.setShowTickDots(true);
+        songWavyBar.setShowTickDots(false);
         songWavyBar.setMax(1000);
         songWavyBar.setProgress(0);
         songWavyBar.setPlaying(false);
