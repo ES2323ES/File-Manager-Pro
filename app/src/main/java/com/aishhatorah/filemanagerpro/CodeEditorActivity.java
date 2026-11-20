@@ -158,13 +158,17 @@ public class CodeEditorActivity extends AppCompatActivity {
         rootLayout.setOrientation(LinearLayout.VERTICAL);
         rootLayout.setBackgroundColor(bg);
 
-        // סרגל עליון נקי: חזרה, שם הקובץ, ביטול וביצוע מחדש ושמירה בלבד
+        float density = getResources().getDisplayMetrics().density;
+        int glassFill = ThemeHelper.getGlassCardFillColor(this, theme, true);
+        int dividerColor = ThemeHelper.getDividerColor(this, theme);
+
+        // סרגל עליון נקי ומאוזן: חזרה, שם הקובץ, ביטול וביצוע מחדש ושמירה
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
-        topBar.setPadding(14, 12, 14, 12);
+        topBar.setPadding(dp(10), dp(8), dp(10), dp(8));
 
         ImageButton btnBack = makeIconBtn(R.drawable.ic_arrow_back, textPrimary, v -> handleBackAttempt());
         topBar.addView(btnBack);
@@ -172,18 +176,36 @@ public class CodeEditorActivity extends AppCompatActivity {
         tvTitle = new TextView(this);
         tvTitle.setText(displayTitle);
         tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(15f);
+        tvTitle.setTextSize(15.5f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setSingleLine(true);
         tvTitle.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tLp.setMarginStart(10);
-        tLp.setMarginEnd(6);
+        tLp.setMarginStart(dp(6));
+        tLp.setMarginEnd(dp(6));
         topBar.addView(tvTitle, tLp);
 
         if (!readOnlyMode) {
-            topBar.addView(makeIconBtn(R.drawable.ic_undo, textPrimary, v -> undo()));
-            topBar.addView(makeIconBtn(R.drawable.ic_redo, textPrimary, v -> redo()));
+            LinearLayout historyGroup = new LinearLayout(this);
+            historyGroup.setOrientation(LinearLayout.HORIZONTAL);
+            historyGroup.setGravity(Gravity.CENTER_VERTICAL);
+            GradientDrawable histBg = new GradientDrawable();
+            histBg.setCornerRadius(dp(12));
+            histBg.setColor(ColorUtils.setAlphaComponent(textPrimary, darkBg ? 18 : 10));
+            historyGroup.setBackground(histBg);
+            historyGroup.setPadding(dp(2), dp(1), dp(2), dp(1));
+
+            ImageButton btnUndo = makeIconBtn(R.drawable.ic_undo, textPrimary, v -> undo());
+            btnUndo.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
+            ImageButton btnRedo = makeIconBtn(R.drawable.ic_redo, textPrimary, v -> redo());
+            btnRedo.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
+            historyGroup.addView(btnUndo);
+            historyGroup.addView(btnRedo);
+
+            LinearLayout.LayoutParams histLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            histLp.setMarginEnd(dp(8));
+            topBar.addView(historyGroup, histLp);
         }
 
         if (!readOnlyMode) {
@@ -192,24 +214,32 @@ public class CodeEditorActivity extends AppCompatActivity {
             btnSave.setTextColor(ThemeHelper.getOnAccentTextColor(accent));
             btnSave.setTextSize(13f);
             btnSave.setTypeface(Typeface.DEFAULT_BOLD);
-            btnSave.setPadding(22, 11, 22, 11);
+            btnSave.setGravity(Gravity.CENTER);
+            btnSave.setPadding(dp(14), dp(7), dp(14), dp(7));
             GradientDrawable saveBg = new GradientDrawable();
-            saveBg.setCornerRadius(14f);
+            saveBg.setCornerRadius(dp(12));
             saveBg.setColor(accent);
             btnSave.setBackground(saveBg);
+            btnSave.setElevation(dp(2));
             btnSave.setOnClickListener(v -> saveContent());
             topBar.addView(btnSave);
         }
         rootLayout.addView(topBar);
 
-        int glassFill = ThemeHelper.getGlassCardFillColor(this, theme, true);
-        int dividerColor = ThemeHelper.getDividerColor(this, theme);
-        float density = getResources().getDisplayMetrics().density;
-
-        // שורת כלים קבועה מתחת לסרגל העליון בסגנון האפליקציה: מידע, תחביר, קידוד, חיפוש, שבירת שורות, (ועין ב-Markdown)
+        // קפסולת כלים זכוכיתית מרחפת מתחת לסרגל העליון
         LinearLayout toolsBarContainer = new LinearLayout(this);
         toolsBarContainer.setOrientation(LinearLayout.VERTICAL);
-        toolsBarContainer.setBackgroundColor(glassFill);
+        GradientDrawable toolsCapsuleBg = new GradientDrawable();
+        toolsCapsuleBg.setCornerRadius(dp(15));
+        toolsCapsuleBg.setColor(glassFill);
+        toolsCapsuleBg.setStroke(Math.max(1, dp(1)),
+                ColorUtils.setAlphaComponent(darkBg ? Color.WHITE : accent, darkBg ? 28 : 42));
+        toolsBarContainer.setBackground(toolsCapsuleBg);
+        toolsBarContainer.setElevation(dp(3));
+
+        LinearLayout.LayoutParams capsuleLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        capsuleLp.setMargins(dp(10), dp(7), dp(10), dp(3));
 
         HorizontalScrollView toolsScroll = new HorizontalScrollView(this);
         toolsScroll.setHorizontalScrollBarEnabled(false);
@@ -218,17 +248,21 @@ public class CodeEditorActivity extends AppCompatActivity {
         LinearLayout toolsRow = new LinearLayout(this);
         toolsRow.setOrientation(LinearLayout.HORIZONTAL);
         toolsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        toolsRow.setPadding(Math.round(12 * density), Math.round(5 * density), Math.round(12 * density), Math.round(5 * density));
+        toolsRow.setPadding(dp(8), dp(4), dp(8), dp(4));
         toolsRow.setGravity(Gravity.CENTER_VERTICAL);
 
         btnInfoToggle = makeIconBtn(R.drawable.ic_info, textSecondary, v -> toggleInfoBar(accent, textSecondary));
         toolsRow.addView(btnInfoToggle);
 
-        tvLangChip = makeChip(currentLang.displayName, accent, v -> showLanguagePicker(darkBg));
+        toolsRow.addView(makeToolbarDivider(dividerColor));
+
+        tvLangChip = makeChip(currentLang.displayName, accent, true, v -> showLanguagePicker(darkBg));
         toolsRow.addView(tvLangChip);
 
-        tvEncChip = makeChip("UTF-8", textSecondary, v -> showEncodingPicker());
+        tvEncChip = makeChip("UTF-8", textSecondary, false, v -> showEncodingPicker());
         toolsRow.addView(tvEncChip);
+
+        toolsRow.addView(makeToolbarDivider(dividerColor));
 
         ImageButton btnSearchInBar = makeIconBtn(R.drawable.ic_search, textPrimary, v -> toggleFindReplaceBar());
         toolsRow.addView(btnSearchInBar);
@@ -249,17 +283,20 @@ public class CodeEditorActivity extends AppCompatActivity {
         toolsBarContainer.addView(toolsScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        View toolsDivider = new View(this);
-        toolsDivider.setBackgroundColor(dividerColor);
-        toolsBarContainer.addView(toolsDivider, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density))));
-        rootLayout.addView(toolsBarContainer);
+        rootLayout.addView(toolsBarContainer, capsuleLp);
 
         // שורת ספירה נפתחת בלחיצה על אייקון המידע (שורות / מילים / תווים בלבד)
         metaContainer = new LinearLayout(this);
         metaContainer.setOrientation(LinearLayout.VERTICAL);
-        metaContainer.setBackgroundColor(glassFill);
+        GradientDrawable metaBg = new GradientDrawable();
+        metaBg.setCornerRadius(dp(12));
+        metaBg.setColor(ColorUtils.setAlphaComponent(accent, darkBg ? 26 : 16));
+        metaBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, darkBg ? 64 : 46));
+        metaContainer.setBackground(metaBg);
         metaContainer.setVisibility(View.GONE);
+        LinearLayout.LayoutParams metaContainerLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        metaContainerLp.setMargins(dp(10), dp(2), dp(10), dp(4));
 
         metaScroll = new HorizontalScrollView(this);
         metaScroll.setHorizontalScrollBarEnabled(false);
@@ -267,24 +304,20 @@ public class CodeEditorActivity extends AppCompatActivity {
         LinearLayout metaRow = new LinearLayout(this);
         metaRow.setOrientation(LinearLayout.HORIZONTAL);
         metaRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        metaRow.setPadding(Math.round(16 * density), Math.round(6 * density), Math.round(16 * density), Math.round(6 * density));
+        metaRow.setPadding(dp(12), dp(5), dp(12), dp(5));
         metaRow.setGravity(Gravity.CENTER_VERTICAL);
 
         tvStatsBar = new TextView(this);
-        tvStatsBar.setTextColor(textSecondary);
+        tvStatsBar.setTextColor(textPrimary);
         tvStatsBar.setTextSize(12f);
+        tvStatsBar.setTypeface(Typeface.DEFAULT_BOLD);
         metaRow.addView(tvStatsBar);
 
         metaScroll.addView(metaRow, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         metaContainer.addView(metaScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        View metaDivider = new View(this);
-        metaDivider.setBackgroundColor(dividerColor);
-        metaContainer.addView(metaDivider, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density))));
-        rootLayout.addView(metaContainer);
+        rootLayout.addView(metaContainer, metaContainerLp);
 
         // שורת חיפוש והחלפה מוטמעת (כמו בחיפוש קבצים + החלפה והתאמות מרובות)
         findReplaceBar = buildInlineFindReplaceBar(theme, glassFill, textPrimary, textSecondary, accent, darkBg);
@@ -399,30 +432,53 @@ public class CodeEditorActivity extends AppCompatActivity {
         });
     }
 
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private View makeToolbarDivider(int dividerColor) {
+        View v = new View(this);
+        v.setBackgroundColor(dividerColor);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(Math.max(1, dp(1)), dp(18));
+        lp.setMarginStart(dp(5));
+        lp.setMarginEnd(dp(5));
+        v.setLayoutParams(lp);
+        return v;
+    }
+
     private ImageButton makeIconBtn(int iconRes, int tint, View.OnClickListener l) {
         ImageButton btn = new ImageButton(this);
         btn.setImageResource(iconRes);
         btn.setColorFilter(tint);
+        btn.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
         btn.setBackgroundColor(Color.TRANSPARENT);
-        btn.setPadding(14, 14, 14, 14);
+        btn.setPadding(dp(7), dp(7), dp(7), dp(7));
+        btn.setLayoutParams(new LinearLayout.LayoutParams(dp(36), dp(36)));
         btn.setOnClickListener(l);
         return btn;
     }
 
     private TextView makeChip(String text, int color, View.OnClickListener l) {
+        return makeChip(text, color, false, l);
+    }
+
+    private TextView makeChip(String text, int color, boolean emphasized, View.OnClickListener l) {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextColor(color);
         tv.setTextSize(12f);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(18, 8, 18, 8);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(dp(11), dp(5), dp(11), dp(5));
         GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(12f);
-        bg.setStroke(2, Color.argb(90, Color.red(color), Color.green(color), Color.blue(color)));
+        bg.setCornerRadius(dp(10));
+        bg.setColor(ColorUtils.setAlphaComponent(color, emphasized ? 28 : 16));
+        bg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(color, emphasized ? 105 : 68));
         tv.setBackground(bg);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMarginStart(10);
+        lp.setMarginStart(dp(4));
+        lp.setMarginEnd(dp(2));
         tv.setLayoutParams(lp);
         tv.setOnClickListener(l);
         return tv;
@@ -839,31 +895,46 @@ public class CodeEditorActivity extends AppCompatActivity {
 
     private void showLanguagePicker(boolean darkBg) {
         CodeSyntaxHighlighter.Language[] langs = CodeSyntaxHighlighter.Language.values();
-        String[] names = new String[langs.length];
-        for (int i = 0; i < langs.length; i++) names[i] = langs[i].displayName;
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("בחר שפת תחביר")
-                .setItems(names, (d, idx) -> {
-                    currentLang = langs[idx];
-                    tvLangChip.setText(currentLang.displayName);
-                    CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
-                }).show();
+        List<GlassAnchoredPopoverHelper.OptionItem> items = new ArrayList<>();
+        for (CodeSyntaxHighlighter.Language lang : langs) {
+            items.add(GlassAnchoredPopoverHelper.OptionItem.selectable(
+                    lang.displayName,
+                    R.drawable.ic_code,
+                    lang == currentLang,
+                    () -> {
+                        currentLang = lang;
+                        tvLangChip.setText(currentLang.displayName);
+                        CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
+                    }
+            ));
+        }
+        GlassAnchoredPopoverHelper.showMenu(this, tvLangChip, "שפת תחביר", null, items, false);
     }
 
     private void showEncodingPicker() {
         String[] labels = {"UTF-8", "ISO-8859-8 (עברית)", "Windows-1255 (עברית)", "UTF-16"};
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("בחר קידוד טקסט")
-                .setItems(labels, (d, idx) -> {
-                    String cs = idx == 1 ? "ISO-8859-8" : (idx == 2 ? "windows-1255" : (idx == 3 ? "UTF-16" : "UTF-8"));
-                    currentCharset = Charset.forName(cs);
-                    tvEncChip.setText(cs);
-                    if (!dirty && !readOnlyMode) {
-                        suppressHistory = true;
-                        editorView.setText(loadInitialText());
-                        suppressHistory = false;
+        String[] charsets = {"UTF-8", "ISO-8859-8", "windows-1255", "UTF-16"};
+        String currentName = currentCharset != null ? currentCharset.name() : "UTF-8";
+        List<GlassAnchoredPopoverHelper.OptionItem> items = new ArrayList<>();
+        for (int i = 0; i < labels.length; i++) {
+            final String cs = charsets[i];
+            boolean selected = currentName.equalsIgnoreCase(cs);
+            items.add(GlassAnchoredPopoverHelper.OptionItem.selectable(
+                    labels[i],
+                    R.drawable.ic_text_file,
+                    selected,
+                    () -> {
+                        currentCharset = Charset.forName(cs);
+                        tvEncChip.setText(cs);
+                        if (!dirty && !readOnlyMode) {
+                            suppressHistory = true;
+                            editorView.setText(loadInitialText());
+                            suppressHistory = false;
+                        }
                     }
-                }).show();
+            ));
+        }
+        GlassAnchoredPopoverHelper.showMenu(this, tvEncChip, "קידוד טקסט", null, items, false);
     }
 
     private void handleBackAttempt() {
