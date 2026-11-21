@@ -1,5 +1,6 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
@@ -10,6 +11,7 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -23,10 +25,12 @@ import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -39,6 +43,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -143,7 +148,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     private boolean searchBarOpen = false;
 
     private TextView tvHeaderTitle;
+    private ImageButton btnBackTop;
+    private ImageButton btnQuickSearchTop;
     private ImageButton btnHamburger;
+    private ImageButton btnMultiCancelTop;
+    private ImageButton btnMultiSelectAllTop;
+    private String normalTitleSnapshot = "";
     private HorizontalScrollView breadcrumbScroll;
     private LinearLayout breadcrumbContainer;
     private LinearLayout searchContainer;
@@ -156,7 +166,8 @@ public class FileBrowserActivity extends AppCompatActivity {
     private LinearLayout clipboardBar;
     private TextView tvClipboardStatus;
     private LinearLayout multiSelectBar;
-    private TextView tvMultiCount;
+    private ScrollView multiSelectScroll;
+    private boolean multiSheetExpanded = false;
     private SwipeRefreshLayout swipeRefresh;
     private RecyclerView recyclerView;
     private ProgressBar loadingSpinner;
@@ -212,9 +223,14 @@ public class FileBrowserActivity extends AppCompatActivity {
         topBar.setPadding(dp(8), dp(8), dp(8), dp(10));
         ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
-        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+        btnMultiCancelTop = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_close, textSecondary, "בטל בחירה מרובה", 40, 8, v -> exitMultiSelectMode());
+        btnMultiCancelTop.setVisibility(View.GONE);
+        topBar.addView(btnMultiCancelTop);
+
+        btnBackTop = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> navigateUpOrFinish());
-        topBar.addView(btnBack);
+        topBar.addView(btnBackTop);
 
         tvHeaderTitle = new TextView(this);
         tvHeaderTitle.setText(title);
@@ -228,13 +244,25 @@ public class FileBrowserActivity extends AppCompatActivity {
         titleLp.setMarginEnd(dp(4));
         topBar.addView(tvHeaderTitle, titleLp);
 
-        ImageButton btnQuickSearch = ThemeHelper.createBorderlessSvgButton(
+        btnQuickSearchTop = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_search, accent, "חיפוש", 40, 8, v -> toggleSearchBar(!searchBarOpen));
-        topBar.addView(btnQuickSearch);
+        topBar.addView(btnQuickSearchTop);
 
         btnHamburger = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_menu_hamburger, accent, "תפריט", 40, 8, v -> showHamburgerMenu());
         topBar.addView(btnHamburger);
+
+        btnMultiSelectAllTop = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_multiselect, accent, "בחר הכל", 40, 8, v -> {
+                    if (selectedPaths.size() == displayedFiles.size()) {
+                        exitMultiSelectMode();
+                    } else {
+                        for (File f : displayedFiles) selectedPaths.add(f.getAbsolutePath());
+                        updateMultiSelectUi();
+                    }
+                });
+        btnMultiSelectAllTop.setVisibility(View.GONE);
+        topBar.addView(btnMultiSelectAllTop);
 
         root.addView(topBar);
 
@@ -366,38 +394,69 @@ public class FileBrowserActivity extends AppCompatActivity {
         appsTabBar.addView(btnToggleSystemApps, sysLp);
         root.addView(appsTabBar);
 
-        // סרגל הדבקה
+        // באנר הדבקה זכוכיתי צף ומעוגל (העתקה / גזירה)
         int onAccent = ThemeHelper.getOnAccentTextColor(accent);
+        boolean isDarkClip = ThemeHelper.isDarkSurface(this, theme);
         clipboardBar = new LinearLayout(this);
         clipboardBar.setOrientation(LinearLayout.HORIZONTAL);
         clipboardBar.setGravity(Gravity.CENTER_VERTICAL);
-        clipboardBar.setBackgroundColor(accent);
-        clipboardBar.setPadding(dp(12), dp(6), dp(12), dp(6));
+        GradientDrawable clipBg = new GradientDrawable();
+        clipBg.setCornerRadius(dp(16));
+        int tintedClipSurface = ColorUtils.blendARGB(cardColor, accent, isDarkClip ? 0.22f : 0.14f);
+        clipBg.setColor(ColorUtils.setAlphaComponent(tintedClipSurface, isDarkClip ? 235 : 242));
+        clipBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 145));
+        clipboardBar.setBackground(clipBg);
+        clipboardBar.setElevation(dp(4));
+        clipboardBar.setPadding(dp(12), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams clipBarLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clipBarLp.setMargins(dp(12), dp(4), dp(12), dp(6));
+        clipboardBar.setLayoutParams(clipBarLp);
         clipboardBar.setVisibility(View.GONE);
 
+        ImageView ivClipIcon = new ImageView(this);
+        ivClipIcon.setImageResource(R.drawable.ic_paste);
+        ivClipIcon.setColorFilter(accent);
+        LinearLayout.LayoutParams ciLp = new LinearLayout.LayoutParams(dp(20), dp(20));
+        ciLp.setMarginEnd(dp(8));
+        clipboardBar.addView(ivClipIcon, ciLp);
+
         tvClipboardStatus = new TextView(this);
-        tvClipboardStatus.setTextColor(onAccent);
+        tvClipboardStatus.setTextColor(textPrimary);
+        tvClipboardStatus.setTypeface(Typeface.DEFAULT_BOLD);
         tvClipboardStatus.setTextSize(12.5f);
+        tvClipboardStatus.setMaxLines(1);
+        tvClipboardStatus.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         clipboardBar.addView(tvClipboardStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button btnPasteHere = new Button(this);
         btnPasteHere.setText("הדבק כאן");
         btnPasteHere.setAllCaps(false);
+        btnPasteHere.setTextSize(12f);
         btnPasteHere.setTextColor(onAccent);
         btnPasteHere.setTypeface(Typeface.DEFAULT_BOLD);
-        btnPasteHere.setBackgroundColor(Color.TRANSPARENT);
+        btnPasteHere.setMinHeight(0);
+        btnPasteHere.setMinimumHeight(0);
+        btnPasteHere.setPadding(dp(14), dp(6), dp(14), dp(6));
+        GradientDrawable pastePillBg = new GradientDrawable();
+        pastePillBg.setCornerRadius(dp(12));
+        pastePillBg.setColor(accent);
+        btnPasteHere.setBackground(pastePillBg);
+        btnPasteHere.setStateListAnimator(null);
+        btnPasteHere.setElevation(0f);
+        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        phLp.setMarginStart(dp(6));
+        phLp.setMarginEnd(dp(4));
+        btnPasteHere.setLayoutParams(phLp);
         btnPasteHere.setOnClickListener(v -> executePasteHere());
         clipboardBar.addView(btnPasteHere);
 
-        Button btnCancelClip = new Button(this);
-        btnCancelClip.setText("ביטול");
-        btnCancelClip.setAllCaps(false);
-        btnCancelClip.setTextColor(onAccent);
-        btnCancelClip.setBackgroundColor(Color.TRANSPARENT);
-        btnCancelClip.setOnClickListener(v -> {
-            clipboardFiles.clear();
-            updateClipboardBar();
-        });
+        ImageButton btnCancelClip = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_close, textSecondary, "בטל הדבקה", 34, 7, v -> {
+                    clipboardFiles.clear();
+                    updateClipboardBar();
+                });
         clipboardBar.addView(btnCancelClip);
         root.addView(clipboardBar);
 
@@ -473,6 +532,10 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         ItemTouchHelper swipeToMultiHelper = new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(
                 0, ItemTouchHelper.LEFT | ItemTouchHelper.RIGHT) {
+            private final Paint pillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            private boolean crossedThreshold = false;
+            private int lastSwipingPos = RecyclerView.NO_POSITION;
+
             @Override
             public int getSwipeDirs(@NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder vh) {
                 if (showingInstalledAppsTab || multiSelectMode || MODE_RECYCLE_BIN.equals(currentMode)) {
@@ -484,12 +547,87 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
 
             @Override
+            public float getSwipeThreshold(@NonNull RecyclerView.ViewHolder viewHolder) {
+                return 0.14f;
+            }
+
+            @Override
+            public float getSwipeEscapeVelocity(float defaultValue) {
+                return defaultValue * 0.55f;
+            }
+
+            @Override
             public boolean onMove(@NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder vh, @NonNull RecyclerView.ViewHolder target) {
                 return false;
             }
 
             @Override
+            public void onChildDraw(@NonNull Canvas c, @NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder vh,
+                                    float dX, float dY, int actionState, boolean isCurrentlyActive) {
+                if (actionState != ItemTouchHelper.ACTION_STATE_SWIPE) {
+                    super.onChildDraw(c, rv, vh, dX, dY, actionState, isCurrentlyActive);
+                    return;
+                }
+                View itemView = vh.itemView;
+                int pos = vh.getAdapterPosition();
+                if (pos != lastSwipingPos) {
+                    lastSwipingPos = pos;
+                    crossedThreshold = false;
+                }
+                float width = Math.max(1f, rv.getWidth());
+                float triggerDist = width * 0.14f;
+                float maxShift = width * 0.24f;
+                float absDx = Math.abs(dX);
+                float damped = Math.signum(dX) * Math.min(absDx * 0.68f, maxShift);
+
+                if (isCurrentlyActive) {
+                    boolean nowCrossed = absDx >= triggerDist;
+                    if (nowCrossed && !crossedThreshold) {
+                        crossedThreshold = true;
+                        itemView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                    } else if (!nowCrossed && crossedThreshold) {
+                        crossedThreshold = false;
+                    }
+                } else if (absDx == 0f) {
+                    crossedThreshold = false;
+                }
+
+                if (Math.abs(damped) > dp(4)) {
+                    float progress = Math.min(1f, absDx / triggerDist);
+                    float centerY = (itemView.getTop() + itemView.getBottom()) * 0.5f;
+                    float pillRadius = dp(18);
+                    float iconCenterX = dX > 0
+                            ? Math.min(itemView.getLeft() + Math.abs(damped) * 0.5f, itemView.getLeft() + dp(34))
+                            : Math.max(itemView.getRight() - Math.abs(damped) * 0.5f, itemView.getRight() - dp(34));
+
+                    pillPaint.setColor(ColorUtils.setAlphaComponent(accent, Math.round(55 + 185 * progress)));
+                    RectF pillRect = new RectF(
+                            iconCenterX - dp(20), centerY - dp(16),
+                            iconCenterX + dp(20), centerY + dp(16));
+                    c.drawRoundRect(pillRect, pillRadius, pillRadius, pillPaint);
+
+                    Drawable icon = ContextCompat.getDrawable(FileBrowserActivity.this,
+                            progress >= 0.99f ? R.drawable.ic_check : R.drawable.ic_multiselect);
+                    if (icon != null) {
+                        icon = icon.mutate();
+                        icon.setTint(ThemeHelper.getOnAccentTextColor(accent));
+                        int half = Math.round(dp(9) * (0.75f + 0.25f * progress));
+                        icon.setBounds(
+                                Math.round(iconCenterX - half), Math.round(centerY - half),
+                                Math.round(iconCenterX + half), Math.round(centerY + half));
+                        icon.setAlpha(Math.round(140 + 115 * progress));
+                        icon.draw(c);
+                    }
+                }
+
+                super.onChildDraw(c, rv, vh, damped, dY, actionState, isCurrentlyActive);
+            }
+
+            @Override
             public void onSwiped(@NonNull RecyclerView.ViewHolder vh, int direction) {
+                crossedThreshold = false;
+                lastSwipingPos = RecyclerView.NO_POSITION;
+                vh.itemView.setTranslationX(0f);
                 int pos = vh.getAdapterPosition();
                 if (pos >= 0 && pos < displayedFiles.size()) {
                     File f = displayedFiles.get(pos);
@@ -649,94 +787,148 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private LinearLayout buildMultiSelectBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.VERTICAL);
-        bar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
+        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        float topCorner = dp(24);
+        GradientDrawable sheetBg = new GradientDrawable();
+        sheetBg.setCornerRadii(new float[]{topCorner, topCorner, topCorner, topCorner, 0f, 0f, 0f, 0f});
+        int surfaceTint = ColorUtils.blendARGB(ThemeHelper.getTopBarColor(this, theme), accent, isDark ? 0.08f : 0.05f);
+        sheetBg.setColor(ColorUtils.setAlphaComponent(surfaceTint, isDark ? 242 : 246));
+        sheetBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 95));
+        sheet.setBackground(sheetBg);
+        sheet.setElevation(dp(12));
+        sheet.setPadding(dp(12), dp(8), dp(12), dp(12));
 
-        LinearLayout topInfo = new LinearLayout(this);
-        topInfo.setOrientation(LinearLayout.HORIZONTAL);
-        topInfo.setGravity(Gravity.CENTER_VERTICAL);
+        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה עליה פותחת/מקפלת את שני השורות
+        FrameLayout handleWrap = new FrameLayout(this);
+        handleWrap.setPadding(0, dp(2), 0, dp(8));
+        View dragPill = new View(this);
+        GradientDrawable pillBg = new GradientDrawable();
+        pillBg.setCornerRadius(dp(3));
+        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
+        dragPill.setBackground(pillBg);
+        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
+        handleWrap.setOnClickListener(v -> toggleMultiSheetExpanded());
+        sheet.addView(handleWrap, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        tvMultiCount = new TextView(this);
-        tvMultiCount.setTextColor(textPrimary);
-        tvMultiCount.setTypeface(Typeface.DEFAULT_BOLD);
-        tvMultiCount.setTextSize(13f);
-        topInfo.addView(tvMultiCount, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        multiSelectScroll = new ScrollView(this);
+        multiSelectScroll.setVerticalScrollBarEnabled(false);
+        multiSelectScroll.setOverScrollMode(View.OVER_SCROLL_ALWAYS);
 
-        Button btnSelectAll = new Button(this);
-        btnSelectAll.setText("בחר הכל");
-        btnSelectAll.setTextColor(accent);
-        btnSelectAll.setBackgroundColor(Color.TRANSPARENT);
-        btnSelectAll.setMinHeight(0);
-        btnSelectAll.setMinimumHeight(0);
-        btnSelectAll.setOnClickListener(v -> {
-            if (selectedPaths.size() == displayedFiles.size()) {
-                selectedPaths.clear();
-            } else {
-                for (File f : displayedFiles) selectedPaths.add(f.getAbsolutePath());
-            }
-            updateMultiSelectUi();
-        });
-        topInfo.addView(btnSelectAll);
+        LinearLayout rowsHolder = new LinearLayout(this);
+        rowsHolder.setOrientation(LinearLayout.VERTICAL);
+        rowsHolder.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
-        Button btnCancel = new Button(this);
-        btnCancel.setText("ביטול");
-        btnCancel.setTextColor(textSecondary);
-        btnCancel.setBackgroundColor(Color.TRANSPARENT);
-        btnCancel.setMinHeight(0);
-        btnCancel.setMinimumHeight(0);
-        btnCancel.setOnClickListener(v -> exitMultiSelectMode());
-        topInfo.addView(btnCancel);
-        bar.addView(topInfo);
+        // שורה 1: 3 כרטיסיות שוות
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
+        row1.setWeightSum(3f);
+        row1.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        row1.addView(createGeminiMultiCard("העתק", R.drawable.ic_copy, accent, v -> multiCopy(false)));
+        row1.addView(createGeminiMultiCard("העבר", R.drawable.ic_cut, accent, v -> multiCopy(true)));
+        row1.addView(createGeminiMultiCard("שתף", R.drawable.ic_share, accent, v -> multiShare()));
+        rowsHolder.addView(row1, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        HorizontalScrollView actionsScroll = new HorizontalScrollView(this);
-        actionsScroll.setHorizontalScrollBarEnabled(false);
-        LinearLayout actionsRow = new LinearLayout(this);
-        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        // שורה 2: 3 כרטיסיות שוות
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        row2.setWeightSum(3f);
+        row2.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        row2.addView(createGeminiMultiCard("דחיסה", R.drawable.ic_compress_chip, accent,
+                v -> promptMultiFormatCompress(getSelectedFilesList())));
+        row2.addView(createGeminiMultiCard("שינוי שם", R.drawable.ic_edit_pencil, accent,
+                v -> promptBatchRename(getSelectedFilesList())));
+        row2.addView(createGeminiMultiCard("מחק", R.drawable.ic_delete, Color.parseColor("#EF4444"),
+                v -> multiDelete()));
+        LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r2Lp.topMargin = dp(8);
+        rowsHolder.addView(row2, r2Lp);
 
-        actionsRow.addView(createMultiActionChip("העתק", R.drawable.ic_copy, v -> multiCopy(false)));
-        actionsRow.addView(createMultiActionChip("העבר", R.drawable.ic_cut, v -> multiCopy(true)));
-        actionsRow.addView(createMultiActionChip("שתף", R.drawable.ic_share, v -> multiShare()));
-        actionsRow.addView(createMultiActionChip("דחיסה", R.drawable.ic_compress_chip, v -> promptMultiFormatCompress(getSelectedFilesList())));
-        actionsRow.addView(createMultiActionChip("שינוי שם אצווה", R.drawable.ic_edit_pencil, v -> promptBatchRename(getSelectedFilesList())));
-        actionsRow.addView(createMultiActionChip("מחק", R.drawable.ic_delete, v -> multiDelete()));
-
-        actionsScroll.addView(actionsRow);
-        bar.addView(actionsScroll);
-        return bar;
+        multiSelectScroll.addView(rowsHolder, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב מלא
+        sheet.addView(multiSelectScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(100)));
+        return sheet;
     }
 
-    private Button createMultiActionChip(String label, int iconRes, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setAllCaps(false);
-        b.setTextSize(11.5f);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setTextColor(textPrimary);
-        Drawable d = ContextCompat.getDrawable(this, iconRes);
-        if (d != null) {
-            d = d.mutate();
-            int iconSz = dp(17);
-            d.setBounds(0, 0, iconSz, iconSz);
-            d.setTint(accent);
-            b.setCompoundDrawablesRelative(d, null, null, null);
-        }
-        b.setCompoundDrawablePadding(dp(4));
+    private LinearLayout createGeminiMultiCard(String label, int iconRes, int iconTint, View.OnClickListener l) {
+        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER);
+        card.setPadding(dp(6), dp(12), dp(6), dp(12));
+
         GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(9));
-        gd.setColor(cardColor);
-        gd.setStroke(Math.max(1, dp(1)), divider);
-        b.setBackground(gd);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        b.setPadding(dp(10), dp(6), dp(10), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMarginEnd(dp(6));
-        b.setLayoutParams(lp);
-        b.setOnClickListener(l);
-        return b;
+        gd.setCornerRadius(dp(16));
+        gd.setColor(ColorUtils.setAlphaComponent(cardColor, isDark ? 210 : 230));
+        gd.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(iconTint, 70));
+        card.setBackground(gd);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(82), 1f);
+        lp.setMarginStart(dp(4));
+        lp.setMarginEnd(dp(4));
+        card.setLayoutParams(lp);
+
+        FrameLayout iconBadge = new FrameLayout(this);
+        GradientDrawable badgeBg = new GradientDrawable();
+        badgeBg.setShape(GradientDrawable.OVAL);
+        badgeBg.setColor(ColorUtils.setAlphaComponent(iconTint, isDark ? 36 : 26));
+        iconBadge.setBackground(badgeBg);
+
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(iconRes);
+        iv.setColorFilter(iconTint);
+        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER);
+        iconBadge.addView(iv, ivLp);
+        card.addView(iconBadge, new LinearLayout.LayoutParams(dp(36), dp(36)));
+
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTextColor(textPrimary);
+        tv.setTextSize(12f);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setGravity(Gravity.CENTER);
+        tv.setMaxLines(1);
+        tv.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tvLp.topMargin = dp(6);
+        card.addView(tv, tvLp);
+
+        card.setOnClickListener(l);
+        return card;
+    }
+
+    private void toggleMultiSheetExpanded() {
+        if (multiSelectScroll == null) return;
+        multiSheetExpanded = !multiSheetExpanded;
+        int targetH = dp(multiSheetExpanded ? 178 : 100);
+        if (PrefsManager.isReduceAnimations(this)) {
+            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+            lp.height = targetH;
+            multiSelectScroll.setLayoutParams(lp);
+            if (!multiSheetExpanded) multiSelectScroll.scrollTo(0, 0);
+            return;
+        }
+        int startH = multiSelectScroll.getHeight() > 0 ? multiSelectScroll.getHeight() : multiSelectScroll.getLayoutParams().height;
+        ValueAnimator va = ValueAnimator.ofInt(startH, targetH);
+        va.setDuration(220L);
+        va.setInterpolator(new DecelerateInterpolator());
+        va.addUpdateListener(anim -> {
+            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+            lp.height = (int) anim.getAnimatedValue();
+            multiSelectScroll.setLayoutParams(lp);
+        });
+        va.start();
+        if (!multiSheetExpanded) {
+            multiSelectScroll.smoothScrollTo(0, 0);
+        }
     }
 
     private List<File> getSelectedFilesList() {
@@ -748,27 +940,106 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void enterMultiSelectMode(File initial) {
+        boolean wasActive = multiSelectMode;
+        if (!wasActive && tvHeaderTitle != null && tvHeaderTitle.getText() != null) {
+            normalTitleSnapshot = tvHeaderTitle.getText().toString();
+        }
         multiSelectMode = true;
         selectedPaths.clear();
         if (initial != null) selectedPaths.add(initial.getAbsolutePath());
+        multiSheetExpanded = false;
+        if (multiSelectScroll != null) {
+            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+            lp.height = dp(100);
+            multiSelectScroll.setLayoutParams(lp);
+            multiSelectScroll.scrollTo(0, 0);
+        }
         updateMultiSelectUi();
+        if (!wasActive) {
+            playMultiSelectSheetEntranceAndPeek();
+        }
+    }
+
+    private void playMultiSelectSheetEntranceAndPeek() {
+        if (multiSelectBar == null || multiSelectScroll == null) return;
+        if (PrefsManager.isReduceAnimations(this)) {
+            multiSelectBar.setTranslationY(0f);
+            multiSelectBar.setAlpha(1f);
+            multiSelectScroll.scrollTo(0, 0);
+            return;
+        }
+        multiSelectBar.setTranslationY(dp(115));
+        multiSelectBar.setAlpha(0f);
+        multiSelectBar.animate()
+                .translationY(0f)
+                .alpha(1f)
+                .setDuration(230L)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> {
+                    if (!multiSelectMode || multiSelectScroll == null) return;
+                    // קפיצה עדינה כלפי מטה וחזרה למעלה כדי להמחיש שקיימת שורה שנייה מתחת
+                    int peekTarget = dp(58);
+                    ValueAnimator down = ValueAnimator.ofInt(0, peekTarget);
+                    down.setDuration(220L);
+                    down.setInterpolator(new DecelerateInterpolator());
+                    down.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                    down.addListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            if (multiSelectScroll == null) return;
+                            ValueAnimator back = ValueAnimator.ofInt(peekTarget, 0);
+                            back.setDuration(260L);
+                            back.setStartDelay(90L);
+                            back.setInterpolator(new DecelerateInterpolator());
+                            back.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                            back.start();
+                        }
+                    });
+                    down.start();
+                })
+                .start();
     }
 
     private void exitMultiSelectMode() {
+        if (!multiSelectMode) return;
         multiSelectMode = false;
         selectedPaths.clear();
         multiSelectBar.setVisibility(View.GONE);
+        syncTopBarForMultiSelectMode();
+        if (tvHeaderTitle != null) {
+            tvHeaderTitle.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            if (!normalTitleSnapshot.isEmpty()) {
+                tvHeaderTitle.setText(normalTitleSnapshot);
+            }
+        }
         adapter.notifyDataSetChanged();
     }
 
     private void updateMultiSelectUi() {
         if (!multiSelectMode) {
             multiSelectBar.setVisibility(View.GONE);
+            syncTopBarForMultiSelectMode();
             return;
         }
         multiSelectBar.setVisibility(View.VISIBLE);
-        tvMultiCount.setText("נבחרו " + selectedPaths.size() + " פריטים");
+        syncTopBarForMultiSelectMode();
+        if (tvHeaderTitle != null) {
+            tvHeaderTitle.setGravity(Gravity.CENTER);
+            tvHeaderTitle.setText("נבחרו " + selectedPaths.size() + " פריטים");
+        }
+        if (btnMultiSelectAllTop != null) {
+            boolean allSelected = !displayedFiles.isEmpty() && selectedPaths.size() >= displayedFiles.size();
+            btnMultiSelectAllTop.setColorFilter(allSelected ? accent : textSecondary);
+        }
         adapter.notifyDataSetChanged();
+    }
+
+    private void syncTopBarForMultiSelectMode() {
+        if (btnBackTop != null) btnBackTop.setVisibility(multiSelectMode ? View.GONE : View.VISIBLE);
+        if (btnQuickSearchTop != null) btnQuickSearchTop.setVisibility(multiSelectMode ? View.GONE : View.VISIBLE);
+        if (btnHamburger != null) btnHamburger.setVisibility(multiSelectMode ? View.GONE : View.VISIBLE);
+        if (btnMultiCancelTop != null) btnMultiCancelTop.setVisibility(multiSelectMode ? View.VISIBLE : View.GONE);
+        if (btnMultiSelectAllTop != null) btnMultiSelectAllTop.setVisibility(multiSelectMode ? View.VISIBLE : View.GONE);
     }
 
     // ==================== תפריט המבורגר כווילון צד זכוכיתי ====================
@@ -2161,26 +2432,89 @@ public class FileBrowserActivity extends AppCompatActivity {
         EditText etName = createStyledInput("שם הארכיון (ללא סיומת)", baseName);
         form.addView(etName);
 
-        RadioGroup rgFmt = new RadioGroup(this);
-        rgFmt.setOrientation(RadioGroup.VERTICAL);
-        String[] fmts = {"zip", "tar", "tar.gz", "gz"};
-        String[] fmtLabels = {"ZIP (סטנדרטי + תמיכה בסיסמה)", "TAR (לא דחוס)", "TAR.GZ (דחיסת GZip גבוהה)", "GZ (קובץ בודד)"};
-        for (int i = 0; i < fmts.length; i++) {
-            RadioButton rb = new RadioButton(this);
-            rb.setId(2000 + i);
-            rb.setText(fmtLabels[i]);
-            rb.setTextColor(textPrimary);
-            if (i == 0) rb.setChecked(true);
-            rgFmt.addView(rb);
-        }
-        LinearLayout.LayoutParams rgLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rgLp.topMargin = dp(8);
-        form.addView(rgFmt, rgLp);
+        TextView tvFmtLabel = new TextView(this);
+        tvFmtLabel.setText("פורמט דחיסה");
+        tvFmtLabel.setTextColor(textSecondary);
+        tvFmtLabel.setTextSize(12f);
+        tvFmtLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvFmtLabel.setPadding(0, dp(12), 0, dp(6));
+        form.addView(tvFmtLabel);
 
-        EditText etPwd = createStyledInput("סיסמה לארכיון ZIP (אופציונלי)...", "");
+        final String[] fmts = {"zip", "tar.gz", "tar", "gz"};
+        final String[] fmtTitles = {"ZIP", "TAR.GZ", "TAR", "GZ"};
+        final String[] fmtDescs = {"סטנדרטי + סיסמה", "דחיסה גבוהה", "אריזה מהירה", "קובץ בודד"};
+        final int[] selectedFmt = new int[]{0};
+        final LinearLayout[] fmtCards = new LinearLayout[4];
+        final EditText etPwd = createStyledInput("סיסמה לארכיון ZIP (אופציונלי)...", "");
         etPwd.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        form.addView(etPwd, rgLp);
+
+        final Runnable refreshFmtCards = () -> {
+            boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+            for (int i = 0; i < fmtCards.length; i++) {
+                if (fmtCards[i] == null) continue;
+                boolean active = i == selectedFmt[0];
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(dp(12));
+                bg.setColor(active
+                        ? ColorUtils.setAlphaComponent(accent, isDark ? 45 : 28)
+                        : ColorUtils.setAlphaComponent(cardColor, isDark ? 190 : 220));
+                bg.setStroke(dp(active ? 2 : 1), active ? accent : divider);
+                fmtCards[i].setBackground(bg);
+            }
+            etPwd.setVisibility(selectedFmt[0] == 0 ? View.VISIBLE : View.GONE);
+        };
+
+        LinearLayout fmtGridRow1 = new LinearLayout(this);
+        fmtGridRow1.setOrientation(LinearLayout.HORIZONTAL);
+        fmtGridRow1.setWeightSum(2f);
+        LinearLayout fmtGridRow2 = new LinearLayout(this);
+        fmtGridRow2.setOrientation(LinearLayout.HORIZONTAL);
+        fmtGridRow2.setWeightSum(2f);
+
+        for (int i = 0; i < 4; i++) {
+            final int idx = i;
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(10), dp(8), dp(10), dp(8));
+
+            TextView tvT = new TextView(this);
+            tvT.setText(fmtTitles[i]);
+            tvT.setTextColor(textPrimary);
+            tvT.setTextSize(13.5f);
+            tvT.setTypeface(Typeface.DEFAULT_BOLD);
+            card.addView(tvT);
+
+            TextView tvD = new TextView(this);
+            tvD.setText(fmtDescs[i]);
+            tvD.setTextColor(textSecondary);
+            tvD.setTextSize(11f);
+            card.addView(tvD);
+
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            cLp.setMarginStart(dp(3));
+            cLp.setMarginEnd(dp(3));
+            card.setLayoutParams(cLp);
+            card.setOnClickListener(v -> {
+                selectedFmt[0] = idx;
+                refreshFmtCards.run();
+            });
+            fmtCards[i] = card;
+            if (i < 2) fmtGridRow1.addView(card);
+            else fmtGridRow2.addView(card);
+        }
+        form.addView(fmtGridRow1, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r2Lp.topMargin = dp(6);
+        form.addView(fmtGridRow2, r2Lp);
+
+        LinearLayout.LayoutParams pwdLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pwdLp.topMargin = dp(10);
+        form.addView(etPwd, pwdLp);
+        refreshFmtCards.run();
 
         ThemedDialogHelper.showCustomDialog(
                 this,
@@ -2189,14 +2523,14 @@ public class FileBrowserActivity extends AppCompatActivity {
                 form,
                 "צור ארכיון",
                 () -> {
-                    int idx = rgFmt.getCheckedRadioButtonId() - 2000;
+                    int idx = selectedFmt[0];
                     if (idx < 0 || idx >= fmts.length) idx = 0;
                     String fmt = fmts[idx];
                     String rawName = etName.getText().toString().trim();
                     if (rawName.isEmpty()) rawName = baseName;
                     String fullFileName = rawName.toLowerCase(Locale.ROOT).endsWith("." + fmt)
                             ? rawName : (rawName + "." + fmt);
-                    String pwd = etPwd.getText().toString();
+                    String pwd = idx == 0 && etPwd.getText() != null ? etPwd.getText().toString() : "";
                     File parent = first.getParentFile() != null
                             ? first.getParentFile()
                             : Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
@@ -2269,8 +2603,15 @@ public class FileBrowserActivity extends AppCompatActivity {
     private void onFileClicked(File file) {
         if (multiSelectMode) {
             String p = file.getAbsolutePath();
-            if (selectedPaths.contains(p)) selectedPaths.remove(p);
-            else selectedPaths.add(p);
+            if (selectedPaths.contains(p)) {
+                selectedPaths.remove(p);
+                if (selectedPaths.isEmpty()) {
+                    exitMultiSelectMode();
+                    return;
+                }
+            } else {
+                selectedPaths.add(p);
+            }
             updateMultiSelectUi();
             return;
         }
@@ -2381,7 +2722,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         List<String> actions = new ArrayList<>();
         if (isAppPkg) {
             actions.add("התקן / בדוק חבילת אפליקציה");
-            actions.add("הצג מקור ה-APK (Manifest / DEX)");
+            actions.add("הצג מקור");
         } else if (!file.isDirectory()) {
             actions.add(isZip ? "פתיחה וניהול תוכן ארכיון" : "פתיחה");
             actions.add("פתיחה באמצעות...");
@@ -2413,7 +2754,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         case "התקן / בדוק חבילת אפליקציה":
                             AppPackageInstaller.inspectAndInstall(this, file);
                             break;
-                        case "הצג מקור ה-APK (Manifest / DEX)": {
+                        case "הצג מקור": {
                             Intent i = new Intent(this, ApkSourceInspectorActivity.class);
                             i.putExtra(ApkSourceInspectorActivity.EXTRA_APK_PATH, file.getAbsolutePath());
                             startActivity(i);
@@ -2498,7 +2839,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 this, "חילוץ ארכיון", archiveFile.getName(), true);
         executor.execute(() -> {
             try {
-                String baseName = archiveFile.getName().replaceAll("(?i)\\.(tar\\.gz|tgz|zip|tar|gz|jar|cbz|apk|apkx|apk\\+|apks|apkm|xapk|apkp)$", "");
+                String baseName = archiveFile.getName().replaceAll("(?i)\\.(tar\\.gz|tgz|zip|tar|gz|rar|7z|jar|cbz|apk|apkx|apk\\+|apks|apkm|xapk|apkp)$", "");
                 File parent = archiveFile.getParentFile() != null
                         ? archiveFile.getParentFile()
                         : Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
@@ -2532,7 +2873,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (app.sourceApk != null && app.sourceApk.exists()) {
             opts.add("גיבוי APK לתיקיית ההורדות");
             opts.add("שיתוף חבילת APK");
-            opts.add("הצג מקור ה-APK (Manifest / DEX)");
+            opts.add("הצג מקור");
         }
         opts.add("פרטי אפליקציה בהגדרות");
         opts.add("הסרת התקנה");

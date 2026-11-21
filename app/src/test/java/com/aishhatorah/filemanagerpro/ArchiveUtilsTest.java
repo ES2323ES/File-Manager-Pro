@@ -264,4 +264,46 @@ public class ArchiveUtilsTest {
         assertEquals(data.length, entries.get(0).size);
         assertEquals(data.length, entries.get(0).compressedSize);
     }
+
+    @Test
+    public void extractSingleOrFolderExtractsSelectedSubsetCleanly() throws Exception {
+        File rootPack = tmp.newFolder("multi_pack");
+        File dirA = new File(rootPack, "alpha");
+        File dirB = new File(rootPack, "beta");
+        assertTrue(dirA.mkdirs());
+        assertTrue(dirB.mkdirs());
+        try (FileOutputStream fos = new FileOutputStream(new File(dirA, "a1.txt"))) {
+            fos.write("Alpha1".getBytes(StandardCharsets.UTF_8));
+        }
+        try (FileOutputStream fos = new FileOutputStream(new File(dirA, "a2.txt"))) {
+            fos.write("Alpha2".getBytes(StandardCharsets.UTF_8));
+        }
+        try (FileOutputStream fos = new FileOutputStream(new File(dirB, "b1.txt"))) {
+            fos.write("Beta1".getBytes(StandardCharsets.UTF_8));
+        }
+
+        File zipFile = new File(tmp.getRoot(), "subset.zip");
+        ArchiveUtils.compressFiles(java.util.Arrays.asList(dirA, dirB), zipFile, "zip", null);
+
+        File onlyFolderOut = tmp.newFolder("only_alpha");
+        int dirCount = ArchiveUtils.extractSingleOrFolder(zipFile, "alpha/", true, onlyFolderOut, "", null);
+        assertEquals(2, dirCount);
+        assertTrue(new File(onlyFolderOut, "alpha/a1.txt").exists());
+        assertTrue(new File(onlyFolderOut, "alpha/a2.txt").exists());
+        assertFalse(new File(onlyFolderOut, "beta/b1.txt").exists());
+
+        File onlyFileOut = tmp.newFolder("only_b1");
+        int singleCount = ArchiveUtils.extractSingleOrFolder(zipFile, "beta/b1.txt", false, onlyFileOut, "", null);
+        assertEquals(1, singleCount);
+        assertTrue(new File(onlyFileOut, "b1.txt").exists());
+        assertFalse(new File(onlyFileOut, "alpha").exists());
+
+        File tgzFile = new File(tmp.getRoot(), "subset.tar.gz");
+        ArchiveUtils.compressFiles(java.util.Arrays.asList(dirA, dirB), tgzFile, "tar.gz", null);
+        File tgzAlphaOut = tmp.newFolder("tgz_alpha");
+        int tgzDirCount = ArchiveUtils.extractSingleOrFolder(tgzFile, "alpha/", true, tgzAlphaOut, "", null);
+        assertEquals(2, tgzDirCount);
+        assertTrue(new File(tgzAlphaOut, "alpha/a1.txt").exists());
+        assertFalse(new File(tgzAlphaOut, "beta/b1.txt").exists());
+    }
 }
