@@ -1,9 +1,12 @@
 package com.aishhatorah.filemanagerpro;
 
 import android.app.AlertDialog;
+import android.app.NotificationManager;
 import android.app.PictureInPictureParams;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -226,6 +229,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private int videoRepeatMode = AudioPlayerManager.REPEAT_OFF;
     private boolean videoShuffleMode = false;
     private boolean videoMuted = false;
+    private boolean videoMutedByDeviceSilence = false;
+    private BroadcastReceiver videoSilenceReceiver = null;
+    private boolean isArchiveMode = false;
     private boolean videoAutoNext = true;
     private boolean isVideoLocked = false;
     private int lastVideoTopInsetPx = 0;
@@ -598,6 +604,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             ThemeHelper.overrideCloseTransition(this);
             return;
         }
+        if (isArchiveMode) {
+            isArchiveMode = false;
+            CacheCleanupManager.cleanupArchivePreviewDir(this);
+        }
         finish();
         if (isAudioMode) {
             try {
@@ -960,9 +970,18 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(isAudioMode ? Color.TRANSPARENT : ThemeHelper.getTopBarColor(this, theme));
+        if (isVideoMode) {
+            GradientDrawable vidTopBg = new GradientDrawable();
+            vidTopBg.setColor(Color.argb(178, 10, 15, 28));
+            float r = dp(22);
+            vidTopBg.setCornerRadii(new float[]{0f, 0f, 0f, 0f, r, r, r, r});
+            vidTopBg.setStroke(Math.max(1, dp(1)), Color.argb(55, 255, 255, 255));
+            bar.setBackground(vidTopBg);
+        } else {
+            bar.setBackgroundColor(isAudioMode ? Color.TRANSPARENT : ThemeHelper.getTopBarColor(this, theme));
+        }
         int vPad = isLandscape ? dp(6) : dp(8);
-        bar.setPadding(dp(10), vPad, dp(10), vPad);
+        bar.setPadding(dp(12), vPad, dp(12), vPad);
 
         boolean translucentOverlay = isImageMode || isVideoMode;
         int effectiveText = translucentOverlay ? Color.WHITE : textPrimary;
@@ -1181,10 +1200,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ColorUtils.blendARGB(ThemeHelper.getTopBarColor(this, theme), Color.parseColor("#0A0F1C"), 0.55f),
                 192);
 
+        float imgCorner = dp(22);
+
         FrameLayout topOverlay = new FrameLayout(this);
         topOverlay.setClickable(true);
-        topOverlay.setBackgroundColor(scrimOverlayColor);
-        topOverlay.setPadding(dp(12), dp(26), dp(12), dp(8));
+        GradientDrawable imgTopGlass = new GradientDrawable();
+        imgTopGlass.setColor(scrimOverlayColor);
+        imgTopGlass.setCornerRadii(new float[]{0f, 0f, 0f, 0f, imgCorner, imgCorner, imgCorner, imgCorner});
+        imgTopGlass.setStroke(Math.max(1, dp(1)), Color.argb(65, 255, 255, 255));
+        topOverlay.setBackground(imgTopGlass);
+        topOverlay.setPadding(dp(14), dp(26), dp(14), dp(10));
 
         ImageButton btnImgBack = createCleanBorderlessIconButton(R.drawable.ic_arrow_back, dp(44), Color.WHITE);
         btnImgBack.setContentDescription("חזרה");
@@ -1206,8 +1231,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         bottomActionsRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bottomActionsRow.setGravity(Gravity.CENTER);
         bottomActionsRow.setClickable(true);
-        bottomActionsRow.setBackgroundColor(scrimOverlayColor);
-        bottomActionsRow.setPadding(dp(12), dp(10), dp(12), dp(14));
+        GradientDrawable imgBottomGlass = new GradientDrawable();
+        imgBottomGlass.setColor(scrimOverlayColor);
+        imgBottomGlass.setCornerRadii(new float[]{imgCorner, imgCorner, imgCorner, imgCorner, 0f, 0f, 0f, 0f});
+        imgBottomGlass.setStroke(Math.max(1, dp(1)), Color.argb(65, 255, 255, 255));
+        bottomActionsRow.setBackground(imgBottomGlass);
+        bottomActionsRow.setPadding(dp(14), dp(12), dp(14), dp(14));
         activeMediaBottomPanel = bottomActionsRow;
 
         final ImageButton btnProImageEditor = createCleanBorderlessIconButton(R.drawable.ic_edit_pencil, dp(46), Color.WHITE);
@@ -2698,16 +2727,20 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         fbLp.setMargins(dp(24), 0, dp(24), 0);
         stageRoot.addView(videoFallbackBar, fbLp);
 
-        // פאנל תחתון נקי ושקוף ללא ריבועים סביב האייקונים
+        // פאנל תחתון נקי וזכוכיתי מעוגל וחלק
         LinearLayout bottomCard = new LinearLayout(this);
         bottomCard.setOrientation(LinearLayout.VERTICAL);
         bottomCard.setClickable(true);
-        bottomCard.setPadding(dp(10), dp(6), dp(10), dp(8));
+        bottomCard.setPadding(dp(14), dp(8), dp(14), dp(10));
         GradientDrawable transBottom = new GradientDrawable();
-        transBottom.setCornerRadius(dp(16));
-        transBottom.setColor(Color.argb(170, 10, 15, 28));
+        transBottom.setCornerRadius(dp(22));
+        transBottom.setColor(Color.argb(182, 10, 15, 28));
+        transBottom.setStroke(Math.max(1, dp(1)), Color.argb(60, 255, 255, 255));
         bottomCard.setBackground(transBottom);
         activeMediaBottomPanel = bottomCard;
+
+        registerVideoSilenceMonitor();
+        evaluateVideoDeviceSilence(false);
 
         // שורת אייקון נעילה מעל שורת ההתקדמות
         LinearLayout lockTopRow = new LinearLayout(this);
@@ -3430,7 +3463,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     .build();
             exoPlayer.setAudioAttributes(media3AudioAttrs, true);
             exoPlayer.setVideoSurface(activeVideoSurface);
-            exoPlayer.setVolume(videoMuted ? 0f : 1f);
+            evaluateVideoDeviceSilence(false);
+            exoPlayer.setVolume(isEffectiveVideoMuted() ? 0f : 1f);
 
             exoPlayer.addAnalyticsListener(new AnalyticsListener() {
                 @Override
@@ -3621,7 +3655,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     .build();
             exoPlayer.setAudioAttributes(media3AudioAttrs, true);
             if (activeVideoSurface != null) exoPlayer.setVideoSurface(activeVideoSurface);
-            exoPlayer.setVolume(videoMuted ? 0f : 1f);
+            exoPlayer.setVolume(isEffectiveVideoMuted() ? 0f : 1f);
             exoPlayer.addListener(new Player.Listener() {
                 @Override
                 public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
@@ -3701,7 +3735,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
             legacyMediaSourceCloser = MpegTsNormalizer.setMediaPlayerSource(videoPlayer, nextFile, useFileDescriptor);
             videoPlayer.setSurface(activeVideoSurface);
-            float vol = videoMuted ? 0f : 1f;
+            float vol = isEffectiveVideoMuted() ? 0f : 1f;
             videoPlayer.setVolume(vol, vol);
             videoPlayer.setOnVideoSizeChangedListener((mp, width, height) -> {
                 if (width > 0 && height > 0) {
@@ -3731,7 +3765,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         mp.setVolume(0f, 0f);
                         mp.start();
                         mp.pause();
-                        float restoreVol = videoMuted ? 0f : 1f;
+                        float restoreVol = isEffectiveVideoMuted() ? 0f : 1f;
                         mp.setVolume(restoreVol, restoreVol);
                         mp.seekTo(0);
                     }
@@ -4381,13 +4415,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         items.add(GlassSideDrawerHelper.DrawerItem.action(
                 "תמונה בתוך תמונה (PiP)", R.drawable.ic_pip, this::enterPictureInPictureSafe));
         items.add(GlassSideDrawerHelper.DrawerItem.action(
-                "שמע הסרטון: " + (videoMuted ? "מושתק (לחץ להפעלה)" : "פעיל (לחץ להשתקה)"),
+                "שמע הסרטון: " + (videoMuted ? "מושתק (לחץ להפעלה)" : (videoMutedByDeviceSilence ? "מושקט (מצב שקט)" : "פעיל (לחץ להשתקה)")),
                 R.drawable.ic_audio, () -> {
                     videoMuted = !videoMuted;
-                    float vol = videoMuted ? 0f : 1f;
-                    if (exoPlayer != null) exoPlayer.setVolume(vol);
-                    if (videoPlayer != null) videoPlayer.setVolume(vol, vol);
-                    Toast.makeText(this, videoMuted ? "שמע הסרטון הושתק" : "שמע הסרטון הופעל", Toast.LENGTH_SHORT).show();
+                    applyCurrentVideoVolume();
+                    Toast.makeText(this, isEffectiveVideoMuted() ? "שמע הסרטון הושתק" : "שמע הסרטון הופעל", Toast.LENGTH_SHORT).show();
                 }));
         items.add(GlassSideDrawerHelper.DrawerItem.action(
                 "מעבר אוטומטי לסרטון הבא: " + (videoAutoNext ? "פעיל" : "כבוי"),
@@ -4949,32 +4981,128 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
     }
 
-    // ==================== מציג ועורך ארכיונים אינטראקטיבי (ZIP/TAR/GZ + סיסמה) ====================
+    private boolean isEffectiveVideoMuted() {
+        return videoMuted || videoMutedByDeviceSilence;
+    }
+
+    private void applyCurrentVideoVolume() {
+        float vol = isEffectiveVideoMuted() ? 0f : 1f;
+        try {
+            if (exoPlayer != null) exoPlayer.setVolume(vol);
+            if (videoPlayer != null) videoPlayer.setVolume(vol, vol);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void evaluateVideoDeviceSilence(boolean notifyUser) {
+        boolean silenced = AudioPlayerManager.isDeviceSilenced(this);
+        if (silenced && !videoMutedByDeviceSilence) {
+            videoMutedByDeviceSilence = true;
+            applyCurrentVideoVolume();
+            if (notifyUser && isVideoMode) {
+                Toast.makeText(this, "המכשיר מושתק — הסרטון הושתק אוטומטית", Toast.LENGTH_SHORT).show();
+            }
+        } else if (!silenced && videoMutedByDeviceSilence) {
+            videoMutedByDeviceSilence = false;
+            applyCurrentVideoVolume();
+            if (notifyUser && isVideoMode && !videoMuted) {
+                Toast.makeText(this, "השתקת המכשיר בוטלה — שמע הסרטון חזר", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private void registerVideoSilenceMonitor() {
+        if (videoSilenceReceiver != null) return;
+        videoSilenceReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (isVideoMode) {
+                    evaluateVideoDeviceSilence(true);
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("android.media.VOLUME_CHANGED_ACTION");
+        filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION);
+        filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(videoSilenceReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(videoSilenceReceiver, filter);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void unregisterVideoSilenceMonitor() {
+        if (videoSilenceReceiver != null) {
+            try {
+                unregisterReceiver(videoSilenceReceiver);
+            } catch (Throwable ignored) {
+            }
+            videoSilenceReceiver = null;
+        }
+    }
+
+    // ==================== מציג ועורך ארכיונים אינטראקטיבי (ZIP/RAR/7Z/TAR/GZ + סיסמה) ====================
 
     private void renderArchiveExtractor(LinearLayout host, int cardColor, int textPrimary, int textSecondary, int accent, int theme) {
+        isArchiveMode = true;
         LinearLayout card = createSurfaceCard(cardColor);
+        GradientDrawable archCardBg = new GradientDrawable();
+        archCardBg.setCornerRadius(dp(20));
+        archCardBg.setColor(cardColor);
+        archCardBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(textSecondary, 36));
+        card.setBackground(archCardBg);
+
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        headerRow.setPadding(0, 0, 0, dp(6));
+
+        ImageView ivArchBadge = new ImageView(this);
+        ivArchBadge.setImageResource(R.drawable.ic_zip_archive);
+        ivArchBadge.setColorFilter(accent);
+        headerRow.addView(ivArchBadge, new LinearLayout.LayoutParams(dp(24), dp(24)));
+
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tcLp.setMarginStart(dp(10));
+        titleCol.setLayoutParams(tcLp);
 
         TextView tvHeader = new TextView(this);
-        tvHeader.setText("מנהל ארכיון ודחיסה מתקדם");
+        tvHeader.setText("סייר וחילוץ ארכיון");
         tvHeader.setTextColor(textPrimary);
-        tvHeader.setTextSize(16f);
+        tvHeader.setTextSize(16.5f);
         tvHeader.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(tvHeader);
+        titleCol.addView(tvHeader);
 
         final TextView tvSub = new TextView(this);
         tvSub.setText("טוען תוכן ארכיון...");
         tvSub.setTextColor(textSecondary);
         tvSub.setTextSize(12f);
-        tvSub.setPadding(0, dp(4), 0, dp(8));
-        card.addView(tvSub);
+        tvSub.setPadding(0, dp(2), 0, 0);
+        titleCol.addView(tvSub);
+        headerRow.addView(titleCol);
+        card.addView(headerRow);
 
         final TextView tvBreadcrumb = new TextView(this);
         tvBreadcrumb.setTextColor(accent);
-        tvBreadcrumb.setTextSize(12.5f);
+        tvBreadcrumb.setTextSize(12f);
         tvBreadcrumb.setTypeface(Typeface.DEFAULT_BOLD);
-        tvBreadcrumb.setPadding(0, 0, 0, dp(8));
+        tvBreadcrumb.setPadding(dp(10), dp(6), dp(10), dp(6));
         tvBreadcrumb.setTextDirection(View.TEXT_DIRECTION_LTR);
-        card.addView(tvBreadcrumb);
+        GradientDrawable crumbBg = new GradientDrawable();
+        crumbBg.setCornerRadius(dp(10));
+        crumbBg.setColor(ColorUtils.setAlphaComponent(accent, 22));
+        crumbBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 55));
+        tvBreadcrumb.setBackground(crumbBg);
+        LinearLayout.LayoutParams crumbLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        crumbLp.bottomMargin = dp(8);
+        card.addView(tvBreadcrumb, crumbLp);
 
         ScrollView scroll = new ScrollView(this);
         final LinearLayout entriesList = new LinearLayout(this);
@@ -5032,8 +5160,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 upRow.setGravity(Gravity.CENTER_VERTICAL);
                 upRow.setPadding(dp(10), dp(9), dp(10), dp(9));
                 GradientDrawable upBg = new GradientDrawable();
-                upBg.setCornerRadius(dp(10));
+                upBg.setCornerRadius(dp(12));
                 upBg.setColor(ThemeHelper.getBgColor(this, theme));
+                upBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 50));
                 upRow.setBackground(upBg);
                 LinearLayout.LayoutParams upLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -5065,13 +5194,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 row.setPadding(dp(10), dp(9), dp(10), dp(9));
 
                 GradientDrawable bg = new GradientDrawable();
-                bg.setCornerRadius(dp(10));
+                bg.setCornerRadius(dp(12));
                 bg.setColor(ThemeHelper.getBgColor(this, theme));
+                bg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(textSecondary, 28));
                 row.setBackground(bg);
 
                 LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                rLp.bottomMargin = dp(5);
+                rLp.bottomMargin = dp(6);
                 row.setLayoutParams(rLp);
 
                 ImageView ivIcon = new ImageView(this);
@@ -5082,7 +5212,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     ivIcon.setImageResource(FileThumbnailLoader.resolveFallbackDrawable(node.displayName.toLowerCase(Locale.ROOT)));
                     ivIcon.clearColorFilter();
                 }
-                row.addView(ivIcon, new LinearLayout.LayoutParams(dp(22), dp(22)));
+                row.addView(ivIcon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+
+                LinearLayout infoCol = new LinearLayout(this);
+                infoCol.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams nLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                nLp.setMarginStart(dp(10));
+                nLp.setMarginEnd(dp(8));
+                infoCol.setLayoutParams(nLp);
 
                 TextView tvName = new TextView(this);
                 tvName.setText(node.displayName);
@@ -5091,10 +5228,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 tvName.setTypeface(node.directory ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
                 tvName.setMaxLines(1);
                 tvName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-                LinearLayout.LayoutParams nLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                nLp.setMarginStart(dp(8));
-                nLp.setMarginEnd(dp(8));
-                row.addView(tvName, nLp);
+                infoCol.addView(tvName);
+
+                TextView tvMeta = new TextView(this);
+                String metaText = node.directory ? "תיקייה" : (node.size >= 0 ? StorageUtils.formatSize(node.size) : "קובץ");
+                if (node.encrypted) metaText += " • מוגן";
+                tvMeta.setText(metaText);
+                tvMeta.setTextColor(textSecondary);
+                tvMeta.setTextSize(11f);
+                infoCol.addView(tvMeta);
+                row.addView(infoCol);
 
                 if (node.encrypted) {
                     ImageView ivLock = new ImageView(this);
@@ -5105,44 +5248,56 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     row.addView(ivLock, lkLp);
                 }
 
+                ImageButton btnExtractOne = createCleanBorderlessIconButton(R.drawable.ic_downloads, dp(34), accent);
+                btnExtractOne.setContentDescription(node.directory ? "חלץ תיקייה זו" : "חלץ קובץ זה");
+                btnExtractOne.setOnClickListener(v -> runSingleNodeExtraction(node));
+                row.addView(btnExtractOne);
+
                 if (node.directory) {
-                    TextView tvDirHint = new TextView(this);
-                    tvDirHint.setText("תיקייה");
-                    tvDirHint.setTextColor(textSecondary);
-                    tvDirHint.setTextSize(11f);
-                    row.addView(tvDirHint);
                     row.setOnClickListener(v -> {
                         currentArchiveFolder[0] = node.fullPath;
                         scroll.scrollTo(0, 0);
                         renderFolder[0].run();
                     });
+                    row.setOnLongClickListener(v -> {
+                        List<GlassAnchoredPopoverHelper.OptionItem> opts = new ArrayList<>();
+                        opts.add(GlassAnchoredPopoverHelper.OptionItem.of("פתח תיקייה", R.drawable.ic_folder, () -> {
+                            currentArchiveFolder[0] = node.fullPath;
+                            scroll.scrollTo(0, 0);
+                            renderFolder[0].run();
+                        }));
+                        opts.add(GlassAnchoredPopoverHelper.OptionItem.of("חלץ תיקייה זו בלבד", R.drawable.ic_downloads,
+                                () -> runSingleNodeExtraction(node)));
+                        GlassAnchoredPopoverHelper.showMenu(this, row, node.displayName, null, opts, false);
+                        return true;
+                    });
                 } else {
-                    if (node.size >= 0) {
-                        TextView tvSize = new TextView(this);
-                        tvSize.setText(StorageUtils.formatSize(node.size));
-                        tvSize.setTextColor(textSecondary);
-                        tvSize.setTextSize(11f);
-                        row.addView(tvSize);
-                    }
                     final ArchiveUtils.ArchiveEntryInfo entryRef = node.entryInfo != null
                             ? node.entryInfo
                             : new ArchiveUtils.ArchiveEntryInfo(node.fullPath, node.size, node.compressedSize, false, node.encrypted);
                     row.setOnClickListener(v -> openArchiveEntry(entryRef, () -> openArchiveEntry(entryRef, null)));
-                    if (isZip && !node.encrypted) {
-                        row.setOnLongClickListener(v -> {
-                            ThemedDialogHelper.showCustomDialog(this, "מחיקה מהארכיון",
-                                    "האם למחוק את \"" + node.displayName + "\" מתוך ה-ZIP?", null,
-                                    "מחק", () -> executor.execute(() -> {
-                                        try {
-                                            ArchiveUtils.deleteZipEntry(targetFile, entryRef.name);
-                                            uiHandler.post(reloadArchive[0]);
-                                        } catch (Exception e) {
-                                            uiHandler.post(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                                        }
-                                    }), "ביטול", null, true);
-                            return true;
-                        });
-                    }
+                    row.setOnLongClickListener(v -> {
+                        List<GlassAnchoredPopoverHelper.OptionItem> opts = new ArrayList<>();
+                        opts.add(GlassAnchoredPopoverHelper.OptionItem.of("פתח / צפה", R.drawable.ic_visibility,
+                                () -> openArchiveEntry(entryRef, () -> openArchiveEntry(entryRef, null))));
+                        opts.add(GlassAnchoredPopoverHelper.OptionItem.of("חלץ קובץ זה בלבד", R.drawable.ic_downloads,
+                                () -> runSingleNodeExtraction(node)));
+                        if (isZip && !node.encrypted) {
+                            opts.add(GlassAnchoredPopoverHelper.OptionItem.destructive("מחק מהארכיון", R.drawable.ic_delete, true, () ->
+                                    ThemedDialogHelper.showCustomDialog(this, "מחיקה מהארכיון",
+                                            "האם למחוק את \"" + node.displayName + "\" מתוך ה-ZIP?", null,
+                                            "מחק", () -> executor.execute(() -> {
+                                                try {
+                                                    ArchiveUtils.deleteZipEntry(targetFile, entryRef.name);
+                                                    uiHandler.post(reloadArchive[0]);
+                                                } catch (Exception e) {
+                                                    uiHandler.post(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                                                }
+                                            }), "ביטול", null, true)));
+                        }
+                        GlassAnchoredPopoverHelper.showMenu(this, row, node.displayName, null, opts, false);
+                        return true;
+                    });
                 }
                 entriesList.addView(row);
             }
@@ -5150,7 +5305,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         reloadArchive[0] = () -> executor.execute(() -> {
             try {
-                List<ArchiveUtils.ArchiveEntryInfo> fetched = ArchiveUtils.listArchiveEntries(targetFile);
+                List<ArchiveUtils.ArchiveEntryInfo> fetched = ArchiveUtils.listArchiveEntries(targetFile, archivePassword);
                 boolean needsPwd = ArchiveUtils.archiveRequiresPassword(targetFile);
                 uiHandler.post(() -> {
                     allEntries.clear();
@@ -5159,7 +5314,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     renderFolder[0].run();
                 });
             } catch (Exception e) {
-                uiHandler.post(() -> tvSub.setText("שגיאה בקריאת הארכיון: " + e.getMessage()));
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                uiHandler.post(() -> {
+                    if (msg.contains("סיסמ")) {
+                        promptArchivePassword(reloadArchive[0]);
+                    } else {
+                        tvSub.setText("שגיאה בקריאת הארכיון: " + msg);
+                    }
+                });
             }
         });
         reloadArchive[0].run();
@@ -5169,6 +5331,41 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 promptArchivePassword(() -> runFullExtraction(btnExtract));
             } else {
                 runFullExtraction(btnExtract);
+            }
+        });
+    }
+
+    private void runSingleNodeExtraction(ArchiveUtils.ArchiveTreeNode node) {
+        if ((node.encrypted || ArchiveUtils.archiveRequiresPassword(targetFile)) && archivePassword.isEmpty()) {
+            promptArchivePassword(() -> runSingleNodeExtraction(node));
+            return;
+        }
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this, node.directory ? "חילוץ תיקייה" : "חילוץ קובץ", node.displayName, true);
+        executor.execute(() -> {
+            try {
+                File destDir = targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir();
+                String cleanLeaf = new File(node.displayName).getName();
+                if (cleanLeaf.isEmpty()) cleanLeaf = "extracted_item";
+                File outDir = StorageUtils.uniqueDestinationFile(destDir, cleanLeaf + "_מחולץ");
+                int count = ArchiveUtils.extractSingleOrFolder(
+                        targetFile, node.fullPath, node.directory, outDir, archivePassword,
+                        (itemName, done, total) -> progress.updateCounts(itemName, done, total, outDir.getName()));
+                progress.finish();
+                uiHandler.post(() -> Toast.makeText(this,
+                        "חולצו " + count + " פריטים אל " + outDir.getName(), Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                progress.finish();
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                uiHandler.post(() -> {
+                    if (msg.contains("סיסמ")) {
+                        archivePassword = "";
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                        promptArchivePassword(() -> runSingleNodeExtraction(node));
+                    } else {
+                        Toast.makeText(this, "שגיאה בחילוץ: " + msg, Toast.LENGTH_LONG).show();
+                    }
+                });
             }
         });
     }
@@ -5191,7 +5388,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 this, "חילוץ ארכיון", targetFile.getName(), true);
         executor.execute(() -> {
             try {
-                String baseName = targetFile.getName().replaceAll("(?i)\\.(tar\\.gz|tgz|zip|tar|gz|jar|cbz|apk|apkx|apk\\+|apks|apkm|xapk|apkp)$", "");
+                String baseName = targetFile.getName().replaceAll("(?i)\\.(tar\\.gz|tgz|zip|tar|gz|rar|7z|jar|cbz|apk|apkx|apk\\+|apks|apkm|xapk|apkp)$", "");
                 File outDir = StorageUtils.uniqueDestinationFile(
                         targetFile.getParentFile() != null ? targetFile.getParentFile() : getFilesDir(),
                         baseName + "_מחולץ");
@@ -5202,7 +5399,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     btnExtract.setEnabled(true);
                     ThemedDialogHelper.showCustomDialog(this, "החילוץ הושלם בהצלחה",
                             "חולצו " + count + " קבצים אל:\n" + outDir.getAbsolutePath(),
-                            null, "הבנתי", this::finish, null, null, false);
+                            null, "הבנתי", this::proceedCloseOrNavigateBack, null, null, false);
                 });
             } catch (Exception e) {
                 progress.finish();
@@ -5336,6 +5533,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        unregisterVideoSilenceMonitor();
         uiHandler.removeCallbacks(mtsBufferingWatchdog);
         detachAudioCallbacksOnly();
         videoTickerActive = false;
