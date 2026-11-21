@@ -130,6 +130,9 @@ public final class FileOpenWithHelper {
                 || "application/x-tar".equals(mime)
                 || "application/gzip".equals(mime)
                 || "application/x-gzip".equals(mime)
+                || "application/vnd.rar".equals(mime)
+                || "application/x-rar-compressed".equals(mime)
+                || "application/x-7z-compressed".equals(mime)
                 || "application/java-archive".equals(mime)) {
             executeOpenAction(activity, file, ACTION_INTERNAL_ARCHIVE);
             if (onClosedDialogOnly != null) onClosedDialogOnly.run();

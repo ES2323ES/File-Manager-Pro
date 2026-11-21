@@ -7,3 +7,8 @@
 -dontwarn javax.annotation.**
 -dontwarn org.xmlpull.v1.**
 -dontwarn androidx.**
+-dontwarn org.slf4j.**
+-dontwarn org.apache.commons.**
+
+-keep class net.sf.sevenzipjbinding.** { *; }
+-keep class com.github.junrar.** { *; }

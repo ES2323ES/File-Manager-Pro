@@ -36,7 +36,7 @@ public final class MediaFormatHelper {
     };
 
     private static final String[] ARCHIVE_EXTS = {
-            ".tar.gz", ".tgz", ".zip", ".tar", ".gz", ".jar", ".cbz"
+            ".tar.gz", ".tgz", ".zip", ".tar", ".gz", ".rar", ".7z", ".jar", ".cbz"
     };
 
     private static final String[] CODE_EXTS = {
@@ -138,6 +138,14 @@ public final class MediaFormatHelper {
         if (fileName == null) return false;
         String l = fileName.toLowerCase(Locale.ROOT);
         return l.endsWith(".gz") && !l.endsWith(".tar.gz");
+    }
+
+    public static boolean isRarArchive(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".rar");
+    }
+
+    public static boolean isSevenZipArchive(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".7z");
     }
 
     public static boolean isCodeOrSyntaxFile(String fileName) {

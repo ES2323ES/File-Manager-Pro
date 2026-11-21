@@ -8,17 +8,27 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * מנהל ניקוי מטמון חכם ואוטומטי:
- * מונע הצטברות של ג'יגות בזיכרון הפנימי ע"י ניקוי מיידי בגמר השימוש (תצוגת ארכיון, פתיחה חיצונית, חיתוך וכו')
- * ואכיפת תקרת גודל קשיחה (64MB) ו-TTL קצר לקבצים זמניים.
+ * מונע הצטברות של ג'יגות בזיכרון הפנימי ע"י ניקוי מיידי בגמר השימוש (תצוגת ארכיון, פתיחה חיצונית, חיתוך וכו'),
+ * סבב ניקוי אוטומטי מדי שעה, ואכיפת תקרת גודל קשיחה (64MB) ו-TTL קצר לקבצים זמניים.
  */
 public final class CacheCleanupManager {
 
     public static final long DEFAULT_TEMP_TTL_MS = 15L * 60L * 1000L; // 15 דקות
     public static final long APK_CACHE_TTL_MS = 6L * 60L * 60L * 1000L; // 6 שעות
+    public static final long HOURLY_INTERVAL_MS = 60L * 60L * 1000L; // כל שעה
     public static final long MAX_TOTAL_CACHE_BYTES = 64L * 1024L * 1024L; // תקרת 64MB למטמון
+
+    private static final AtomicBoolean HOURLY_STARTED = new AtomicBoolean(false);
+    private static final AtomicLong LAST_PRUNE_WALL_MS = new AtomicLong(0L);
+    private static ScheduledExecutorService hourlyScheduler;
 
     private static final String[] TEMP_DIR_NAMES = {
             "arch_preview",
@@ -38,6 +48,41 @@ public final class CacheCleanupManager {
     };
 
     private CacheCleanupManager() {
+    }
+
+    public static void startHourlyScheduler(Context context) {
+        if (context == null) return;
+        final Context appCtx = context.getApplicationContext();
+        if (!HOURLY_STARTED.compareAndSet(false, true)) return;
+        try {
+            hourlyScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "fmp-hourly-cache-cleaner");
+                t.setDaemon(true);
+                return t;
+            });
+            hourlyScheduler.scheduleWithFixedDelay(() -> {
+                try {
+                    pruneCaches(appCtx);
+                } catch (Throwable ignored) {
+                }
+            }, 60L, 60L, TimeUnit.MINUTES);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static void maybePruneHourly(Context context) {
+        if (context == null) return;
+        long now = System.currentTimeMillis();
+        long prev = LAST_PRUNE_WALL_MS.get();
+        if (prev > 0L && (now - prev) < HOURLY_INTERVAL_MS) return;
+        if (!LAST_PRUNE_WALL_MS.compareAndSet(prev, now)) return;
+        final Context appCtx = context.getApplicationContext();
+        Executors.newSingleThreadExecutor().execute(() -> {
+            try {
+                pruneCaches(appCtx);
+            } catch (Throwable ignored) {
+            }
+        });
     }
 
     public static void cleanupArchivePreviewDir(Context context) {
@@ -137,6 +182,7 @@ public final class CacheCleanupManager {
     public static void pruneCaches(Context context) {
         if (context == null) return;
         try {
+            LAST_PRUNE_WALL_MS.set(System.currentTimeMillis());
             cleanupDownloadedApkUpdates(context, BuildConfig.VERSION_NAME);
             pruneCacheRoots(
                     context.getCacheDir(),

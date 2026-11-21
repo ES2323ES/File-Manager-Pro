@@ -1,11 +1,25 @@
 package com.aishhatorah.filemanagerpro;
 
+import com.github.junrar.Archive;
+import com.github.junrar.rarfile.FileHeader;
+
+import net.sf.sevenzipjbinding.ExtractAskMode;
+import net.sf.sevenzipjbinding.ExtractOperationResult;
+import net.sf.sevenzipjbinding.IArchiveExtractCallback;
+import net.sf.sevenzipjbinding.IArchiveOpenCallback;
+import net.sf.sevenzipjbinding.ICryptoGetTextPassword;
+import net.sf.sevenzipjbinding.IInArchive;
+import net.sf.sevenzipjbinding.ISequentialOutStream;
+import net.sf.sevenzipjbinding.PropID;
+import net.sf.sevenzipjbinding.SevenZip;
+import net.sf.sevenzipjbinding.SevenZipException;
+import net.sf.sevenzipjbinding.impl.RandomAccessFileInStream;
+
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserFactory;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.File;
@@ -41,11 +55,12 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 /**
- * סעיף 2: מנוע דחיסה, חילוץ, צפייה ועריכה פנימית מתקדם ב-Java טהורה:
- * - תמיכה ב-ZIP, TAR, TAR.GZ / TGZ, GZ
- * - תמיכה בפתיחה ויצירה של ארכיוני ZIP מוגנים בסיסמה (ZipCrypto תקני)
- * - הגנת Zip-Slip מחמירה מפני נתיבים זדוניים
- * - קריאה, עריכה, הוספה ומחיקה של קבצים ישירות בתוך הארכיון
+ * סעיף 2: מנוע דחיסה, חילוץ, צפייה ועריכה פנימית מתקדם:
+ * - תמיכה ב-ZIP, TAR, TAR.GZ / TGZ, GZ, RAR / RAR5, 7Z
+ * - תמיכה בקבצים כבדים באמצעות הזרמה ישירה בדיסק (256KB buffer) ללא העמסה על הזיכרון
+ * - חילוץ קובץ או תיקייה בודדת ישירות מתוך כל סוג ארכיון
+ * - תמיכה בפתיחה ויצירה של ארכיוני ZIP מוגנים בסיסמה (ZipCrypto תקני) וארכיוני RAR מוצפנים
+ * - הגנת Zip-Slip / Path-Traversal מחמירה מפני נתיבים זדוניים
  */
 public class ArchiveUtils {
 
@@ -272,13 +287,16 @@ public class ArchiveUtils {
             throw new IOException("קובץ הארכיון לא נמצא");
         }
         String name = archiveFile.getName().toLowerCase(Locale.ROOT);
+        if (MediaFormatHelper.isRarArchive(name) || MediaFormatHelper.isSevenZipArchive(name)) {
+            return listSevenZipOrRarEntries(archiveFile, null);
+        }
         if (MediaFormatHelper.isTarGzArchive(name)) {
-            try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)))) {
+            try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE))) {
                 return listTarEntries(is);
             }
         }
         if (MediaFormatHelper.isTarArchive(name)) {
-            try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile))) {
+            try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE)) {
                 return listTarEntries(is);
             }
         }
@@ -292,6 +310,17 @@ public class ArchiveUtils {
             return single;
         }
         return listZipCentralDirectory(archiveFile);
+    }
+
+    public static List<ArchiveEntryInfo> listArchiveEntries(File archiveFile, String password) throws IOException {
+        if (archiveFile == null || !archiveFile.exists()) {
+            throw new IOException("קובץ הארכיון לא נמצא");
+        }
+        String name = archiveFile.getName().toLowerCase(Locale.ROOT);
+        if (MediaFormatHelper.isRarArchive(name) || MediaFormatHelper.isSevenZipArchive(name)) {
+            return listSevenZipOrRarEntries(archiveFile, password);
+        }
+        return listArchiveEntries(archiveFile);
     }
 
     public static boolean archiveRequiresPassword(File archiveFile) {
@@ -321,7 +350,7 @@ public class ArchiveUtils {
         String name = archiveFile.getName().toLowerCase(Locale.ROOT);
 
         int estTotal = 1;
-        if (cb != null) {
+        if (cb != null && !MediaFormatHelper.isRarArchive(name) && !MediaFormatHelper.isSevenZipArchive(name)) {
             try {
                 List<ArchiveEntryInfo> preview = listArchiveEntries(archiveFile);
                 int fileEntries = 0;
@@ -334,13 +363,16 @@ public class ArchiveUtils {
             }
         }
 
+        if (MediaFormatHelper.isRarArchive(name) || MediaFormatHelper.isSevenZipArchive(name)) {
+            return extractSevenZipOrRarArchive(archiveFile, destinationDir, canonicalDestDir, password, null, false, cb);
+        }
         if (MediaFormatHelper.isTarGzArchive(name)) {
-            try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)))) {
+            try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE))) {
                 return extractTarStream(is, destinationDir, canonicalDestDir, cb, estTotal);
             }
         }
         if (MediaFormatHelper.isTarArchive(name)) {
-            try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile))) {
+            try (InputStream is = new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE)) {
                 return extractTarStream(is, destinationDir, canonicalDestDir, cb, estTotal);
             }
         }
@@ -354,9 +386,9 @@ public class ArchiveUtils {
             }
             if (cb != null) cb.onProgress(outName, 0, 1);
             File outFile = safeResolve(destinationDir, canonicalDestDir, outName);
-            try (GZIPInputStream gis = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile)));
-                 FileOutputStream fos = new FileOutputStream(outFile)) {
-                copyStream(gis, fos);
+            try (GZIPInputStream gis = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE));
+                 BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                copyStream(gis, bos);
             }
             if (cb != null) cb.onProgress(outName, 1, 1);
             return 1;
@@ -426,6 +458,11 @@ public class ArchiveUtils {
         boolean success = false;
         try {
             String name = archiveFile.getName().toLowerCase(Locale.ROOT);
+            if (MediaFormatHelper.isRarArchive(name) || MediaFormatHelper.isSevenZipArchive(name)) {
+                extractSevenZipOrRarSingleEntryToFile(archiveFile, targetEntryName, password, outFile);
+                success = true;
+                return;
+            }
             if (MediaFormatHelper.isTarGzArchive(name)) {
                 try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE));
                      BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
@@ -480,8 +517,129 @@ public class ArchiveUtils {
         }
     }
 
+    /**
+     * חילוץ קובץ בודד או תיקייה בודדת (רקורסיבית) ישירות מתוך כל ארכיון (ZIP / RAR / RAR5 / 7Z / TAR / TAR.GZ / GZ).
+     */
+    public static int extractSingleOrFolder(File archiveFile, String targetEntryPath, boolean isDirectory,
+                                            File destinationDir, String password, ArchiveProgressCallback cb) throws IOException {
+        if (archiveFile == null || !archiveFile.exists()) {
+            throw new IOException("קובץ הארכיון לא נמצא");
+        }
+        if (targetEntryPath == null || targetEntryPath.trim().isEmpty()) {
+            throw new IOException("לא נבחר פריט לחילוץ");
+        }
+        if (!destinationDir.exists() && !destinationDir.mkdirs()) {
+            throw new IOException("לא ניתן ליצור תיקיית יעד לחילוץ");
+        }
+        String canonicalDestDir = destinationDir.getCanonicalPath();
+        String normTarget = normalizeArchiveKey(targetEntryPath, isDirectory);
+        String name = archiveFile.getName().toLowerCase(Locale.ROOT);
+
+        if (MediaFormatHelper.isRarArchive(name) || MediaFormatHelper.isSevenZipArchive(name)) {
+            return extractSevenZipOrRarArchive(archiveFile, destinationDir, canonicalDestDir, password, normTarget, isDirectory, cb);
+        }
+
+        if (MediaFormatHelper.isGzArchive(name)) {
+            if (isDirectory) throw new IOException("ארכיון GZ אינו מכיל תיקיות");
+            String outName = archiveFile.getName();
+            if (outName.toLowerCase(Locale.ROOT).endsWith(".gz")) {
+                outName = outName.substring(0, outName.length() - 3);
+            }
+            if (cb != null) cb.onProgress(outName, 0, 1);
+            File outFile = safeResolve(destinationDir, canonicalDestDir, outName);
+            extractEntryToFile(archiveFile, outName, password, outFile);
+            if (cb != null) cb.onProgress(outName, 1, 1);
+            return 1;
+        }
+
+        if (MediaFormatHelper.isTarGzArchive(name) || MediaFormatHelper.isTarArchive(name)) {
+            boolean gzip = MediaFormatHelper.isTarGzArchive(name);
+            int extracted = 0;
+            try (InputStream raw = new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE);
+                 InputStream is = gzip ? new GZIPInputStream(raw, COPY_BUFFER_SIZE) : raw) {
+                byte[] hdr = new byte[512];
+                while (readExact(is, hdr, 512) == 512) {
+                    if (isAllZero(hdr)) break;
+                    String entryName = readCString(hdr, 0, 100);
+                    String prefix = readCString(hdr, 345, 155);
+                    if (!prefix.isEmpty()) entryName = prefix + "/" + entryName;
+                    long size = parseOctal(hdr, 124, 12);
+                    boolean entryDir = hdr[156] == '5' || entryName.endsWith("/");
+                    String relOut = mapSelectionOutputPath(entryName, entryDir, normTarget, isDirectory);
+                    if (relOut != null) {
+                        File outFile = safeResolve(destinationDir, canonicalDestDir, relOut);
+                        if (entryDir) {
+                            outFile.mkdirs();
+                        } else {
+                            if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(1, extracted + 1));
+                            File p = outFile.getParentFile();
+                            if (p != null && !p.exists()) p.mkdirs();
+                            try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                                copyFixed(is, bos, size);
+                            }
+                            int mod = (int) (size % 512L);
+                            if (mod > 0) skipFully(is, 512L - mod);
+                            extracted++;
+                            if (cb != null) cb.onProgress(outFile.getName(), extracted, extracted);
+                            continue;
+                        }
+                    }
+                    long blocks = entryDir ? 0L : (size + 511L) / 512L;
+                    skipFully(is, blocks * 512L);
+                }
+            }
+            if (extracted == 0 && !isDirectory) {
+                throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryPath);
+            }
+            if (isDirectory && extracted == 0) {
+                File dir = safeResolve(destinationDir, canonicalDestDir, computeTargetLeafName(normTarget));
+                dir.mkdirs();
+            }
+            return extracted;
+        }
+
+        // ZIP / encrypted ZIP
+        if ((password != null && !password.isEmpty()) || archiveRequiresPassword(archiveFile)) {
+            return extractRawZipSelection(archiveFile, destinationDir, canonicalDestDir, password, normTarget, isDirectory, cb);
+        }
+
+        int extracted = 0;
+        boolean matchedAny = false;
+        try (ZipFile zf = new ZipFile(archiveFile)) {
+            int totalHint = isDirectory ? Math.max(1, zf.size() / 4) : 1;
+            Enumeration<? extends ZipEntry> entries = zf.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String relOut = mapSelectionOutputPath(entry.getName(), entry.isDirectory(), normTarget, isDirectory);
+                if (relOut == null) continue;
+                matchedAny = true;
+                File outFile = safeResolve(destinationDir, canonicalDestDir, relOut);
+                if (entry.isDirectory()) {
+                    outFile.mkdirs();
+                } else {
+                    if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(totalHint, extracted + 1));
+                    File p = outFile.getParentFile();
+                    if (p != null && !p.exists()) p.mkdirs();
+                    try (InputStream is = zf.getInputStream(entry);
+                         BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                        copyStream(is, bos);
+                    }
+                    extracted++;
+                    if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(extracted, totalHint));
+                }
+            }
+        }
+        if (!matchedAny) {
+            throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryPath);
+        }
+        return extracted;
+    }
+
     public static byte[] readEntryBytes(File archiveFile, String targetEntryName, String password) throws IOException {
         String name = archiveFile.getName().toLowerCase(Locale.ROOT);
+        if (MediaFormatHelper.isRarArchive(name) || MediaFormatHelper.isSevenZipArchive(name)) {
+            return readSevenZipOrRarEntryBytes(archiveFile, targetEntryName, password);
+        }
         if (MediaFormatHelper.isTarGzArchive(name)) {
             try (InputStream is = new GZIPInputStream(new BufferedInputStream(new FileInputStream(archiveFile), COPY_BUFFER_SIZE))) {
                 return readTarEntryBytes(is, targetEntryName);
@@ -583,7 +741,7 @@ public class ArchiveUtils {
 
     // ==================== Zip Central Directory & ZipCrypto Engine ====================
 
-    private static final int COPY_BUFFER_SIZE = 128 * 1024;
+    private static final int COPY_BUFFER_SIZE = 256 * 1024;
     private static final long MAX_IN_MEMORY_ENTRY_BYTES = 48L * 1024L * 1024L;
     private static final long ZIP32_SENTINEL = 0xFFFFFFFFL;
 
@@ -1568,4 +1726,605 @@ public class ArchiveUtils {
         }
         return sb.toString();
     }
+
+    // ==================== Selective Extraction Helpers ====================
+
+    private static String normalizeArchiveKey(String raw, boolean isDir) {
+        if (raw == null) return "";
+        String s = raw.replace('\\', '/').trim();
+        while (s.startsWith("/")) s = s.substring(1);
+        if (isDir && !s.isEmpty() && !s.endsWith("/")) {
+            s += "/";
+        } else if (!isDir && s.endsWith("/")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s;
+    }
+
+    private static String computeTargetLeafName(String normTarget) {
+        String s = normTarget;
+        while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
+        int idx = s.lastIndexOf('/');
+        return idx >= 0 ? s.substring(idx + 1) : s;
+    }
+
+    private static String mapSelectionOutputPath(String rawEntryName, boolean entryIsDir,
+                                                 String normTarget, boolean targetIsDir) {
+        if (rawEntryName == null || rawEntryName.trim().isEmpty()) return null;
+        String normEntry = rawEntryName.replace('\\', '/').trim();
+        while (normEntry.startsWith("/")) normEntry = normEntry.substring(1);
+        if (normEntry.isEmpty()) return null;
+
+        if (!targetIsDir) {
+            if (entryIsDir) return null;
+            if (normEntry.equals(normTarget)) {
+                return computeTargetLeafName(normTarget);
+            }
+            return null;
+        }
+
+        String folderPrefix = normTarget.endsWith("/") ? normTarget : normTarget + "/";
+        String folderNoSlash = folderPrefix.substring(0, folderPrefix.length() - 1);
+        String parentPrefix = "";
+        int prevSlash = folderNoSlash.lastIndexOf('/');
+        if (prevSlash >= 0) {
+            parentPrefix = folderNoSlash.substring(0, prevSlash + 1);
+        }
+
+        if (normEntry.equals(folderNoSlash) || normEntry.equals(folderPrefix) || normEntry.startsWith(folderPrefix)) {
+            if (!parentPrefix.isEmpty() && normEntry.startsWith(parentPrefix)) {
+                return normEntry.substring(parentPrefix.length());
+            }
+            return normEntry;
+        }
+        return null;
+    }
+
+    private static int extractRawZipSelection(File zipFile, File destDir, String canonicalDestDir,
+                                              String password, String normTarget, boolean isDirectory,
+                                              ArchiveProgressCallback cb) throws IOException {
+        int extracted = 0;
+        boolean matched = false;
+        try (RandomAccessFile raf = new RandomAccessFile(zipFile, "r")) {
+            byte[] cdBytes = readCentralDirectoryBytes(raf);
+            ByteBuffer bb = ByteBuffer.wrap(cdBytes).order(ByteOrder.LITTLE_ENDIAN);
+            int pos = 0;
+            int end = cdBytes.length;
+
+            while (pos + 46 <= end) {
+                if (bb.getInt(pos) != 0x02014b50) break;
+                int flags = bb.getShort(pos + 8) & 0xFFFF;
+                int method = bb.getShort(pos + 10) & 0xFFFF;
+                long crc = bb.getInt(pos + 16) & 0xFFFFFFFFL;
+                long compSize = bb.getInt(pos + 20) & 0xFFFFFFFFL;
+                long uncompSize = bb.getInt(pos + 24) & 0xFFFFFFFFL;
+                int nameLen = bb.getShort(pos + 28) & 0xFFFF;
+                int extraLen = bb.getShort(pos + 30) & 0xFFFF;
+                int commentLen = bb.getShort(pos + 32) & 0xFFFF;
+                long localHeaderOffset = bb.getInt(pos + 42) & 0xFFFFFFFFL;
+                if (pos + 46 + nameLen > end) break;
+                String name = new String(cdBytes, pos + 46, nameLen, StandardCharsets.UTF_8);
+                long[] z64 = resolveZip64CdSizes(bb, pos + 46 + nameLen, extraLen, uncompSize, compSize, localHeaderOffset);
+                compSize = z64[1];
+                localHeaderOffset = z64[2];
+                pos += 46 + nameLen + extraLen + commentLen;
+
+                boolean entryDir = name.endsWith("/");
+                String relOut = mapSelectionOutputPath(name, entryDir, normTarget, isDirectory);
+                if (relOut == null) continue;
+                matched = true;
+                File outFile = safeResolve(destDir, canonicalDestDir, relOut);
+                if (entryDir) {
+                    outFile.mkdirs();
+                    continue;
+                }
+                if (cb != null) cb.onProgress(outFile.getName(), extracted, Math.max(1, extracted + 1));
+                File parent = outFile.getParentFile();
+                if (parent != null && !parent.exists()) parent.mkdirs();
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                    decodeLocalZipEntryToStream(raf, localHeaderOffset, flags, method, crc, compSize, password, bos, -1L);
+                }
+                extracted++;
+                if (cb != null) cb.onProgress(outFile.getName(), extracted, extracted);
+            }
+        }
+        if (!matched) {
+            throw new IOException("הפריט לא נמצא בארכיון: " + normTarget);
+        }
+        return extracted;
+    }
+
+    // ==================== RAR / RAR5 / 7Z Engine (7-Zip-JBinding + junrar fallback) ====================
+
+    private static volatile Boolean sevenZipAvailable = null;
+
+    private static synchronized boolean ensureSevenZipReady() {
+        if (sevenZipAvailable != null) return sevenZipAvailable;
+        try {
+            SevenZip.initSevenZipFromPlatformJAR();
+            sevenZipAvailable = true;
+        } catch (Throwable t) {
+            sevenZipAvailable = false;
+        }
+        return sevenZipAvailable;
+    }
+
+    private static class ArchivePasswordCallback implements IArchiveOpenCallback, ICryptoGetTextPassword {
+        private final String password;
+
+        ArchivePasswordCallback(String password) {
+            this.password = password;
+        }
+
+        @Override
+        public void setTotal(Long files, Long bytes) {
+        }
+
+        @Override
+        public void setCompleted(Long files, Long bytes) {
+        }
+
+        @Override
+        public String cryptoGetTextPassword() throws SevenZipException {
+            if (password == null || password.isEmpty()) {
+                throw new SevenZipException("MISSING_PASSWORD");
+            }
+            return password;
+        }
+    }
+
+    private static List<ArchiveEntryInfo> listSevenZipOrRarEntries(File archiveFile, String password) throws IOException {
+        if (ensureSevenZipReady()) {
+            try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r");
+                 RandomAccessFileInStream inStream = new RandomAccessFileInStream(raf);
+                 IInArchive inArchive = SevenZip.openInArchive(null, inStream, new ArchivePasswordCallback(password))) {
+                int count = inArchive.getNumberOfItems();
+                List<ArchiveEntryInfo> out = new ArrayList<>(Math.max(8, count));
+                for (int i = 0; i < count; i++) {
+                    Object pathObj = inArchive.getProperty(i, PropID.PATH);
+                    String rawPath = pathObj != null ? String.valueOf(pathObj).replace('\\', '/') : ("entry_" + i);
+                    while (rawPath.startsWith("/")) rawPath = rawPath.substring(1);
+                    Boolean isFolderObj = (Boolean) inArchive.getProperty(i, PropID.IS_FOLDER);
+                    boolean isDir = isFolderObj != null && isFolderObj;
+                    if (isDir && !rawPath.endsWith("/")) rawPath += "/";
+                    Long sizeObj = (Long) inArchive.getProperty(i, PropID.SIZE);
+                    Long packedObj = (Long) inArchive.getProperty(i, PropID.PACKED_SIZE);
+                    Boolean encObj = (Boolean) inArchive.getProperty(i, PropID.ENCRYPTED);
+                    long size = sizeObj != null ? sizeObj : -1L;
+                    long comp = packedObj != null ? packedObj : -1L;
+                    boolean enc = encObj != null && encObj;
+                    out.add(new ArchiveEntryInfo(rawPath, size, comp, isDir, enc));
+                }
+                return out;
+            } catch (Throwable t) {
+                String msg = String.valueOf(t.getMessage());
+                if (msg.contains("MISSING_PASSWORD") || msg.toLowerCase(Locale.ROOT).contains("password")) {
+                    throw new IOException("הארכיון מוגן בסיסמה או שהסיסמה שגויה");
+                }
+                if (!MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+                    throw new IOException("שגיאה בפתיחת הארכיון: " + msg, t);
+                }
+            }
+        }
+
+        if (MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+            return listWithJunrarFallback(archiveFile, password);
+        }
+        throw new IOException("פורמט ארכיון זה נתמך במכשיר האנדרואיד עם הספריות המקוריות");
+    }
+
+    private static int extractSevenZipOrRarArchive(File archiveFile, File destDir, String canonicalDestDir,
+                                                   String password, String normTarget, boolean targetIsDir,
+                                                   ArchiveProgressCallback cb) throws IOException {
+        if (ensureSevenZipReady()) {
+            try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r");
+                 RandomAccessFileInStream inStream = new RandomAccessFileInStream(raf);
+                 IInArchive inArchive = SevenZip.openInArchive(null, inStream, new ArchivePasswordCallback(password))) {
+                int totalItems = inArchive.getNumberOfItems();
+                List<Integer> targetIndices = new ArrayList<>();
+                Map<Integer, File> outFileMap = new LinkedHashMap<>();
+                int fileTotalCount = 0;
+
+                for (int i = 0; i < totalItems; i++) {
+                    Object pathObj = inArchive.getProperty(i, PropID.PATH);
+                    String rawPath = pathObj != null ? String.valueOf(pathObj).replace('\\', '/') : ("entry_" + i);
+                    while (rawPath.startsWith("/")) rawPath = rawPath.substring(1);
+                    Boolean isFolderObj = (Boolean) inArchive.getProperty(i, PropID.IS_FOLDER);
+                    boolean isDir = isFolderObj != null && isFolderObj;
+
+                    String relOut;
+                    if (normTarget != null) {
+                        relOut = mapSelectionOutputPath(rawPath, isDir, normTarget, targetIsDir);
+                        if (relOut == null) continue;
+                    } else {
+                        relOut = rawPath;
+                    }
+
+                    File resolved = safeResolve(destDir, canonicalDestDir, relOut);
+                    if (isDir) {
+                        resolved.mkdirs();
+                        if (normTarget != null) targetIndices.add(i);
+                    } else {
+                        targetIndices.add(i);
+                        outFileMap.put(i, resolved);
+                        fileTotalCount++;
+                    }
+                }
+
+                if (normTarget != null && targetIndices.isEmpty()) {
+                    throw new IOException("הפריט לא נמצא בארכיון: " + normTarget);
+                }
+
+                if (outFileMap.isEmpty()) {
+                    return 0;
+                }
+
+                final int totalExpected = Math.max(1, fileTotalCount);
+                final int[] indices = new int[targetIndices.size()];
+                for (int i = 0; i < targetIndices.size(); i++) indices[i] = targetIndices.get(i);
+                final int[] doneCount = new int[]{0};
+                final IOException[] errorHolder = new IOException[]{null};
+
+                inArchive.extract(indices, false, new SevenZipExtractCallback(
+                        outFileMap, password, cb, totalExpected, doneCount, errorHolder
+                ));
+
+                if (errorHolder[0] != null) {
+                    throw errorHolder[0];
+                }
+                return doneCount[0];
+            } catch (IOException ioe) {
+                throw ioe;
+            } catch (Throwable t) {
+                String msg = String.valueOf(t.getMessage());
+                if (msg.contains("MISSING_PASSWORD") || msg.toLowerCase(Locale.ROOT).contains("password")) {
+                    throw new IOException("הארכיון מוגן בסיסמה או שהסיסמה שגויה");
+                }
+                if (!MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+                    throw new IOException("שגיאה בחילוץ הארכיון: " + msg, t);
+                }
+            }
+        }
+
+        if (MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+            return extractWithJunrarFallback(archiveFile, destDir, canonicalDestDir, password, normTarget, targetIsDir, cb);
+        }
+        throw new IOException("לא ניתן לחלץ ארכיון זה בסביבה הנוכחית");
+    }
+
+    private static void extractSevenZipOrRarSingleEntryToFile(File archiveFile, String targetEntryName,
+                                                             String password, File outFile) throws IOException {
+        String normTarget = normalizeArchiveKey(targetEntryName, false);
+        if (ensureSevenZipReady()) {
+            try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r");
+                 RandomAccessFileInStream inStream = new RandomAccessFileInStream(raf);
+                 IInArchive inArchive = SevenZip.openInArchive(null, inStream, new ArchivePasswordCallback(password))) {
+                int totalItems = inArchive.getNumberOfItems();
+                int matchIdx = -1;
+                for (int i = 0; i < totalItems; i++) {
+                    Object pathObj = inArchive.getProperty(i, PropID.PATH);
+                    String rawPath = pathObj != null ? normalizeArchiveKey(String.valueOf(pathObj), false) : "";
+                    Boolean isFolderObj = (Boolean) inArchive.getProperty(i, PropID.IS_FOLDER);
+                    boolean isDir = isFolderObj != null && isFolderObj;
+                    if (!isDir && rawPath.equals(normTarget)) {
+                        matchIdx = i;
+                        break;
+                    }
+                }
+                if (matchIdx < 0) {
+                    throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryName);
+                }
+                Map<Integer, File> singleMap = Collections.singletonMap(matchIdx, outFile);
+                int[] doneCount = new int[]{0};
+                IOException[] errorHolder = new IOException[]{null};
+                inArchive.extract(new int[]{matchIdx}, false, new SevenZipExtractCallback(
+                        singleMap, password, null, 1, doneCount, errorHolder
+                ));
+                if (errorHolder[0] != null) throw errorHolder[0];
+                return;
+            } catch (IOException ioe) {
+                throw ioe;
+            } catch (Throwable t) {
+                if (!MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+                    throw new IOException("שגיאה בקריאת הפריט: " + t.getMessage(), t);
+                }
+            }
+        }
+
+        if (MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+            try (Archive rarArchive = (password != null && !password.isEmpty())
+                    ? new Archive(archiveFile, password)
+                    : new Archive(archiveFile)) {
+                for (FileHeader fh : rarArchive.getFileHeaders()) {
+                    if (fh.isDirectory()) continue;
+                    String fhName = normalizeArchiveKey(fh.getFileName(), false);
+                    if (fhName.equals(normTarget)) {
+                        File parent = outFile.getParentFile();
+                        if (parent != null && !parent.exists()) parent.mkdirs();
+                        try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                            rarArchive.extractFile(fh, bos);
+                        }
+                        return;
+                    }
+                }
+            } catch (IOException ioe) {
+                throw ioe;
+            } catch (Exception e) {
+                throw new IOException("שגיאה בפתיחת קובץ RAR: " + e.getMessage(), e);
+            }
+        }
+        throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryName);
+    }
+
+    private static byte[] readSevenZipOrRarEntryBytes(File archiveFile, String targetEntryName, String password) throws IOException {
+        String normTarget = normalizeArchiveKey(targetEntryName, false);
+        if (ensureSevenZipReady()) {
+            try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r");
+                 RandomAccessFileInStream inStream = new RandomAccessFileInStream(raf);
+                 IInArchive inArchive = SevenZip.openInArchive(null, inStream, new ArchivePasswordCallback(password))) {
+                int totalItems = inArchive.getNumberOfItems();
+                int matchIdx = -1;
+                for (int i = 0; i < totalItems; i++) {
+                    Object pathObj = inArchive.getProperty(i, PropID.PATH);
+                    String rawPath = pathObj != null ? normalizeArchiveKey(String.valueOf(pathObj), false) : "";
+                    Boolean isFolderObj = (Boolean) inArchive.getProperty(i, PropID.IS_FOLDER);
+                    boolean isDir = isFolderObj != null && isFolderObj;
+                    if (!isDir && rawPath.equals(normTarget)) {
+                        matchIdx = i;
+                        break;
+                    }
+                }
+                if (matchIdx < 0) throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryName);
+
+                final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                final IOException[] errHolder = new IOException[]{null};
+                final int targetIndex = matchIdx;
+                inArchive.extract(new int[]{matchIdx}, false, new IArchiveExtractCallback() {
+                    private long total = 0L;
+
+                    @Override
+                    public ISequentialOutStream getStream(int index, ExtractAskMode extractAskMode) {
+                        if (index != targetIndex || extractAskMode != ExtractAskMode.EXTRACT) return null;
+                        return data -> {
+                            if (total + data.length > MAX_IN_MEMORY_ENTRY_BYTES) {
+                                errHolder[0] = new IOException("הקובץ בתוך הארכיון גדול מדי לתצוגה ישירה — יש לחלץ אותו תחילה");
+                                return 0;
+                            }
+                            baos.write(data, 0, data.length);
+                            total += data.length;
+                            return data.length;
+                        };
+                    }
+
+                    @Override
+                    public void prepareOperation(ExtractAskMode extractAskMode) {
+                    }
+
+                    @Override
+                    public void setOperationResult(ExtractOperationResult result) {
+                        if (errHolder[0] == null && result != ExtractOperationResult.OK) {
+                            errHolder[0] = mapSevenZipResultError(result);
+                        }
+                    }
+
+                    @Override
+                    public void setTotal(long total) {
+                    }
+
+                    @Override
+                    public void setCompleted(long complete) {
+                    }
+                });
+                if (errHolder[0] != null) throw errHolder[0];
+                return baos.toByteArray();
+            } catch (IOException ioe) {
+                throw ioe;
+            } catch (Throwable t) {
+                if (!MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+                    throw new IOException("שגיאה בקריאת הארכיון: " + t.getMessage(), t);
+                }
+            }
+        }
+
+        if (MediaFormatHelper.isRarArchive(archiveFile.getName())) {
+            try (Archive rarArchive = (password != null && !password.isEmpty())
+                    ? new Archive(archiveFile, password)
+                    : new Archive(archiveFile)) {
+                for (FileHeader fh : rarArchive.getFileHeaders()) {
+                    if (fh.isDirectory()) continue;
+                    String fhName = normalizeArchiveKey(fh.getFileName(), false);
+                    if (fhName.equals(normTarget)) {
+                        if (fh.getFullUnpackSize() > MAX_IN_MEMORY_ENTRY_BYTES) {
+                            throw new IOException("הקובץ בתוך הארכיון גדול מדי לתצוגה ישירה — יש לחלץ אותו תחילה");
+                        }
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        rarArchive.extractFile(fh, baos);
+                        return baos.toByteArray();
+                    }
+                }
+            } catch (IOException ioe) {
+                throw ioe;
+            } catch (Exception e) {
+                throw new IOException("שגיאה בפתיחת קובץ RAR: " + e.getMessage(), e);
+            }
+        }
+        throw new IOException("הפריט לא נמצא בארכיון: " + targetEntryName);
+    }
+
+    private static class SevenZipExtractCallback implements IArchiveExtractCallback, ICryptoGetTextPassword {
+        private final Map<Integer, File> outFileMap;
+        private final String password;
+        private final ArchiveProgressCallback cb;
+        private final int totalExpected;
+        private final int[] doneCount;
+        private final IOException[] errorHolder;
+
+        private File currentFile;
+        private BufferedOutputStream currentOut;
+
+        SevenZipExtractCallback(Map<Integer, File> outFileMap, String password, ArchiveProgressCallback cb,
+                                int totalExpected, int[] doneCount, IOException[] errorHolder) {
+            this.outFileMap = outFileMap;
+            this.password = password;
+            this.cb = cb;
+            this.totalExpected = totalExpected;
+            this.doneCount = doneCount;
+            this.errorHolder = errorHolder;
+        }
+
+        @Override
+        public ISequentialOutStream getStream(int index, ExtractAskMode extractAskMode) throws SevenZipException {
+            closeCurrentStream();
+            if (extractAskMode != ExtractAskMode.EXTRACT) return null;
+            File target = outFileMap.get(index);
+            if (target == null) return null;
+            currentFile = target;
+            File parent = target.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            if (cb != null) cb.onProgress(target.getName(), doneCount[0], totalExpected);
+            try {
+                currentOut = new BufferedOutputStream(new FileOutputStream(target), COPY_BUFFER_SIZE);
+            } catch (IOException ioe) {
+                errorHolder[0] = ioe;
+                return null;
+            }
+            return data -> {
+                try {
+                    if (currentOut != null) {
+                        currentOut.write(data);
+                    }
+                    return data.length;
+                } catch (IOException ioe) {
+                    errorHolder[0] = ioe;
+                    return 0;
+                }
+            };
+        }
+
+        @Override
+        public void prepareOperation(ExtractAskMode extractAskMode) {
+        }
+
+        @Override
+        public void setOperationResult(ExtractOperationResult result) {
+            closeCurrentStream();
+            if (result == ExtractOperationResult.OK) {
+                if (currentFile != null) {
+                    doneCount[0]++;
+                    if (cb != null) cb.onProgress(currentFile.getName(), doneCount[0], totalExpected);
+                }
+            } else if (errorHolder[0] == null) {
+                errorHolder[0] = mapSevenZipResultError(result);
+                if (currentFile != null && currentFile.exists()) {
+                    currentFile.delete();
+                }
+            }
+            currentFile = null;
+        }
+
+        @Override
+        public void setTotal(long total) {
+        }
+
+        @Override
+        public void setCompleted(long complete) {
+        }
+
+        @Override
+        public String cryptoGetTextPassword() throws SevenZipException {
+            if (password == null || password.isEmpty()) {
+                throw new SevenZipException("MISSING_PASSWORD");
+            }
+            return password;
+        }
+
+        private void closeCurrentStream() {
+            if (currentOut != null) {
+                try {
+                    currentOut.flush();
+                    currentOut.close();
+                } catch (IOException ioe) {
+                    if (errorHolder[0] == null) errorHolder[0] = ioe;
+                }
+                currentOut = null;
+            }
+        }
+    }
+
+    private static IOException mapSevenZipResultError(ExtractOperationResult res) {
+        if (res == ExtractOperationResult.WRONG_PASSWORD) {
+            return new IOException("סיסמה שגויה לפתיחת הארכיון");
+        }
+        if (res == ExtractOperationResult.CRCERROR) {
+            return new IOException("שגיאת CRC או סיסמה שגויה בקריאת הארכיון");
+        }
+        return new IOException("שגיאה בחילוץ הארכיון (" + res + ")");
+    }
+
+    private static List<ArchiveEntryInfo> listWithJunrarFallback(File archiveFile, String password) throws IOException {
+        try (Archive rar = (password != null && !password.isEmpty())
+                ? new Archive(archiveFile, password)
+                : new Archive(archiveFile)) {
+            List<FileHeader> headers = rar.getFileHeaders();
+            List<ArchiveEntryInfo> out = new ArrayList<>(headers.size());
+            for (FileHeader fh : headers) {
+                String path = fh.getFileName() == null ? "" : fh.getFileName().replace('\\', '/');
+                while (path.startsWith("/")) path = path.substring(1);
+                boolean isDir = fh.isDirectory();
+                if (isDir && !path.endsWith("/")) path += "/";
+                long uncomp = fh.getFullUnpackSize();
+                long comp = fh.getFullPackSize();
+                boolean enc = fh.isEncrypted() || rar.isEncrypted();
+                out.add(new ArchiveEntryInfo(path, uncomp, comp, isDir, enc));
+            }
+            return out;
+        } catch (Exception e) {
+            throw new IOException("לא ניתן לקרוא קובץ RAR (ייתכן RAR5 בסביבת בדיקה או קובץ פגום): " + e.getMessage(), e);
+        }
+    }
+
+    private static int extractWithJunrarFallback(File archiveFile, File destDir, String canonicalDestDir,
+                                                 String password, String normTarget, boolean targetIsDir,
+                                                 ArchiveProgressCallback cb) throws IOException {
+        int extracted = 0;
+        boolean matched = false;
+        try (Archive rar = (password != null && !password.isEmpty())
+                ? new Archive(archiveFile, password)
+                : new Archive(archiveFile)) {
+            List<FileHeader> headers = rar.getFileHeaders();
+            int totalHint = Math.max(1, headers.size());
+            for (FileHeader fh : headers) {
+                String path = fh.getFileName() == null ? "" : fh.getFileName().replace('\\', '/');
+                while (path.startsWith("/")) path = path.substring(1);
+                boolean isDir = fh.isDirectory();
+                String relOut = normTarget == null
+                        ? path
+                        : mapSelectionOutputPath(path, isDir, normTarget, targetIsDir);
+                if (relOut == null) continue;
+                matched = true;
+                File outFile = safeResolve(destDir, canonicalDestDir, relOut);
+                if (isDir) {
+                    outFile.mkdirs();
+                } else {
+                    if (cb != null) cb.onProgress(outFile.getName(), extracted, totalHint);
+                    File p = outFile.getParentFile();
+                    if (p != null && !p.exists()) p.mkdirs();
+                    try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(outFile), COPY_BUFFER_SIZE)) {
+                        rar.extractFile(fh, bos);
+                    }
+                    extracted++;
+                    if (cb != null) cb.onProgress(outFile.getName(), extracted, totalHint);
+                }
+            }
+        } catch (IOException ioe) {
+            throw ioe;
+        } catch (Exception e) {
+            throw new IOException("שגיאה בחילוץ קובץ RAR: " + e.getMessage(), e);
+        }
+        if (normTarget != null && !matched) {
+            throw new IOException("הפריט לא נמצא בארכיון: " + normTarget);
+        }
+        return extracted;
+    }
 }
+

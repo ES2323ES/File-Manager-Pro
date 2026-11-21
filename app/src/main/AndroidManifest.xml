@@ -103,6 +103,9 @@
                 <data android:mimeType="application/gzip" />
                 <data android:mimeType="application/x-gzip" />
                 <data android:mimeType="application/x-compressed-tar" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-7z-compressed" />
                 <data android:mimeType="application/java-archive" />
                 <data android:mimeType="application/vnd.android.package-archive" />
                 <data android:mimeType="application/x-apks" />
@@ -136,6 +139,8 @@
                 <data android:pathPattern=".*\\.tar" />
                 <data android:pathPattern=".*\\.gz" />
                 <data android:pathPattern=".*\\.tgz" />
+                <data android:pathPattern=".*\\.rar" />
+                <data android:pathPattern=".*\\.7z" />
                 <data android:pathPattern=".*\\.apk" />
                 <data android:pathPattern=".*\\.apks" />
                 <data android:pathPattern=".*\\.apkm" />
