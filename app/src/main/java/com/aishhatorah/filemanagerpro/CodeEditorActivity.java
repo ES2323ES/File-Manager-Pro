@@ -1,10 +1,14 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.Layout;
@@ -20,7 +24,11 @@ import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -107,6 +115,22 @@ public class CodeEditorActivity extends AppCompatActivity {
     private int activeAccentColor;
     private int activeTextPrimaryColor;
     private boolean activeDarkBg;
+    private List<String> latestMarkdownCodeBlocks = new ArrayList<>();
+
+    private final class MarkdownBridge {
+        @JavascriptInterface
+        public void copyCode(int blockIndex) {
+            if (blockIndex < 0 || blockIndex >= latestMarkdownCodeBlocks.size()) return;
+            final String raw = latestMarkdownCodeBlocks.get(blockIndex);
+            runOnUiThread(() -> {
+                ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("code_block", raw));
+                    Toast.makeText(CodeEditorActivity.this, "הקוד הועתק ללוח", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -381,6 +405,29 @@ public class CodeEditorActivity extends AppCompatActivity {
 
         markdownWebView = new WebView(this);
         markdownWebView.setVisibility(View.GONE);
+        WebSettings ws = markdownWebView.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setAllowFileAccess(false);
+        ws.setAllowContentAccess(false);
+        ws.setBuiltInZoomControls(true);
+        ws.setDisplayZoomControls(false);
+        markdownWebView.addJavascriptInterface(new MarkdownBridge(), "MdBridge");
+        markdownWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri uri = request != null ? request.getUrl() : null;
+                if (uri == null) return true;
+                String scheme = uri.getScheme() != null ? uri.getScheme().toLowerCase(Locale.ROOT) : "";
+                if ("http".equals(scheme) || "https".equals(scheme)) {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                    } catch (Exception ignored) {
+                    }
+                    return true;
+                }
+                return true;
+            }
+        });
         rootLayout.addView(markdownWebView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -854,8 +901,10 @@ public class CodeEditorActivity extends AppCompatActivity {
         if (previewMarkdown) {
             String textHex = String.format("#%06X", (0xFFFFFF & textPrimary));
             String accHex = String.format("#%06X", (0xFFFFFF & accent));
-            String html = CodeSyntaxHighlighter.markdownToHtml(editorView.getText().toString(), darkBg, textHex, accHex);
-            markdownWebView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
+            CodeSyntaxHighlighter.MarkdownRenderResult rendered = CodeSyntaxHighlighter.markdownToHtmlWithBlocks(
+                    editorView.getText().toString(), darkBg, textHex, accHex);
+            latestMarkdownCodeBlocks = rendered.codeBlocks;
+            markdownWebView.loadDataWithBaseURL(null, rendered.html, "text/html", "utf-8", null);
             editorVScroll.setVisibility(View.GONE);
             markdownWebView.setVisibility(View.VISIBLE);
             if (btnMarkdownEye != null) {
