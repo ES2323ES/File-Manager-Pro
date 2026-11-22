@@ -29,6 +29,7 @@ import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
@@ -168,6 +169,8 @@ public class FileBrowserActivity extends AppCompatActivity {
     private LinearLayout multiSelectBar;
     private ScrollView multiSelectScroll;
     private boolean multiSheetExpanded = false;
+    private ValueAnimator multiSheetAnimator = null;
+    private ValueAnimator multiSheetPeekAnimator = null;
     private SwipeRefreshLayout swipeRefresh;
     private RecyclerView recyclerView;
     private ProgressBar loadingSpinner;
@@ -788,7 +791,152 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private LinearLayout buildMultiSelectBar() {
         boolean isDark = ThemeHelper.isDarkSurface(this, theme);
-        LinearLayout sheet = new LinearLayout(this);
+        final int collapsedHeight = dp(100);
+        final int expandedHeight = dp(178);
+        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+
+        final FrameLayout handleWrap = new FrameLayout(this);
+        handleWrap.setPadding(0, dp(2), 0, dp(8));
+        View dragPill = new View(this);
+        GradientDrawable pillBg = new GradientDrawable();
+        pillBg.setCornerRadius(dp(3));
+        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
+        dragPill.setBackground(pillBg);
+        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
+
+        LinearLayout sheet = new LinearLayout(this) {
+            private float dragStartRawY;
+            private float dragStartX;
+            private int dragStartHeight;
+            private boolean isDraggingSheet = false;
+            private boolean startedOnHandle = false;
+
+            private void initDown(MotionEvent ev) {
+                dragStartRawY = ev.getRawY();
+                dragStartX = ev.getRawX();
+                if (multiSelectScroll != null && multiSelectScroll.getLayoutParams() != null) {
+                    dragStartHeight = multiSelectScroll.getHeight() > 0
+                            ? multiSelectScroll.getHeight()
+                            : multiSelectScroll.getLayoutParams().height;
+                } else {
+                    dragStartHeight = collapsedHeight;
+                }
+                isDraggingSheet = false;
+                startedOnHandle = ev.getY() <= handleWrap.getBottom() + dp(6);
+            }
+
+            private boolean shouldStartSheetDrag(float dx, float dy) {
+                if (Math.abs(dy) <= touchSlop || Math.abs(dy) < Math.abs(dx) * 0.75f) {
+                    return false;
+                }
+                if (startedOnHandle) return true;
+                if (!multiSheetExpanded && dy < 0f) return true;
+                return multiSheetExpanded && dy > 0f
+                        && (multiSelectScroll == null || multiSelectScroll.getScrollY() <= 0);
+            }
+
+            private void beginSheetDrag(MotionEvent ev) {
+                isDraggingSheet = true;
+                cancelMultiSheetAnimators();
+                if (multiSelectScroll != null && multiSelectScroll.getLayoutParams() != null) {
+                    dragStartHeight = multiSelectScroll.getHeight() > 0
+                            ? multiSelectScroll.getHeight()
+                            : multiSelectScroll.getLayoutParams().height;
+                }
+                dragStartRawY = ev.getRawY();
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                }
+            }
+
+            private void updateSheetDrag(float currentRawY) {
+                if (multiSelectScroll == null) return;
+                ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+                if (lp == null) return;
+                float dy = currentRawY - dragStartRawY;
+                int newH = Math.max(collapsedHeight, Math.min(expandedHeight, Math.round(dragStartHeight - dy)));
+                if (lp.height != newH) {
+                    lp.height = newH;
+                    multiSelectScroll.setLayoutParams(lp);
+                }
+                if (multiSelectScroll.getScrollY() != 0) {
+                    multiSelectScroll.scrollTo(0, 0);
+                }
+            }
+
+            private void finishSheetDrag(float totalDy) {
+                isDraggingSheet = false;
+                if (multiSelectScroll == null || multiSelectScroll.getLayoutParams() == null) return;
+                int curH = multiSelectScroll.getLayoutParams().height;
+                boolean expand;
+                if (totalDy < -dp(20)) {
+                    expand = true;
+                } else if (totalDy > dp(20)) {
+                    expand = false;
+                } else {
+                    expand = curH >= (collapsedHeight + expandedHeight) / 2;
+                }
+                setMultiSheetExpanded(expand);
+            }
+
+            @Override
+            public boolean onInterceptTouchEvent(MotionEvent ev) {
+                int action = ev.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    initDown(ev);
+                    return false;
+                }
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if (!isDraggingSheet) {
+                        float dx = ev.getRawX() - dragStartX;
+                        float dy = ev.getRawY() - dragStartRawY;
+                        if (shouldStartSheetDrag(dx, dy)) {
+                            beginSheetDrag(ev);
+                            return true;
+                        }
+                    }
+                    return isDraggingSheet;
+                }
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    if (isDraggingSheet) {
+                        finishSheetDrag(ev.getRawY() - dragStartRawY);
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            @Override
+            public boolean onTouchEvent(MotionEvent ev) {
+                int action = ev.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    initDown(ev);
+                    return true;
+                }
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if (!isDraggingSheet) {
+                        float dx = ev.getRawX() - dragStartX;
+                        float dy = ev.getRawY() - dragStartRawY;
+                        if (shouldStartSheetDrag(dx, dy)) {
+                            beginSheetDrag(ev);
+                        }
+                    }
+                    if (isDraggingSheet) {
+                        updateSheetDrag(ev.getRawY());
+                    }
+                    return true;
+                }
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    if (isDraggingSheet) {
+                        finishSheetDrag(ev.getRawY() - dragStartRawY);
+                    } else if (action == MotionEvent.ACTION_UP && startedOnHandle) {
+                        toggleMultiSheetExpanded();
+                    }
+                    return true;
+                }
+                return super.onTouchEvent(ev);
+            }
+        };
         sheet.setOrientation(LinearLayout.VERTICAL);
         sheet.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         float topCorner = dp(24);
@@ -801,15 +949,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         sheet.setElevation(dp(12));
         sheet.setPadding(dp(12), dp(8), dp(12), dp(12));
 
-        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה עליה פותחת/מקפלת את שני השורות
-        FrameLayout handleWrap = new FrameLayout(this);
-        handleWrap.setPadding(0, dp(2), 0, dp(8));
-        View dragPill = new View(this);
-        GradientDrawable pillBg = new GradientDrawable();
-        pillBg.setCornerRadius(dp(3));
-        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
-        dragPill.setBackground(pillBg);
-        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
+        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה או החלקה למעלה/למטה מרחיבה ומצמצמת
         handleWrap.setOnClickListener(v -> toggleMultiSheetExpanded());
         sheet.addView(handleWrap, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -851,9 +991,9 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         multiSelectScroll.addView(rowsHolder, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב מלא
+        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב בהחלקה
         sheet.addView(multiSelectScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(100)));
+                ViewGroup.LayoutParams.MATCH_PARENT, collapsedHeight));
         return sheet;
     }
 
@@ -905,26 +1045,50 @@ public class FileBrowserActivity extends AppCompatActivity {
         return card;
     }
 
+    private void cancelMultiSheetAnimators() {
+        if (multiSheetAnimator != null) {
+            multiSheetAnimator.cancel();
+            multiSheetAnimator = null;
+        }
+        if (multiSheetPeekAnimator != null) {
+            multiSheetPeekAnimator.cancel();
+            multiSheetPeekAnimator = null;
+        }
+    }
+
     private void toggleMultiSheetExpanded() {
+        setMultiSheetExpanded(!multiSheetExpanded);
+    }
+
+    private void setMultiSheetExpanded(boolean expand) {
         if (multiSelectScroll == null) return;
-        multiSheetExpanded = !multiSheetExpanded;
+        cancelMultiSheetAnimators();
+        multiSheetExpanded = expand;
         int targetH = dp(multiSheetExpanded ? 178 : 100);
-        if (PrefsManager.isReduceAnimations(this)) {
-            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-            lp.height = targetH;
-            multiSelectScroll.setLayoutParams(lp);
+        ViewGroup.LayoutParams curLp = multiSelectScroll.getLayoutParams();
+        int startH = multiSelectScroll.getHeight() > 0
+                ? multiSelectScroll.getHeight()
+                : (curLp != null ? curLp.height : targetH);
+        if (PrefsManager.isReduceAnimations(this) || startH == targetH) {
+            if (curLp != null) {
+                curLp.height = targetH;
+                multiSelectScroll.setLayoutParams(curLp);
+            }
             if (!multiSheetExpanded) multiSelectScroll.scrollTo(0, 0);
             return;
         }
-        int startH = multiSelectScroll.getHeight() > 0 ? multiSelectScroll.getHeight() : multiSelectScroll.getLayoutParams().height;
         ValueAnimator va = ValueAnimator.ofInt(startH, targetH);
         va.setDuration(220L);
         va.setInterpolator(new DecelerateInterpolator());
         va.addUpdateListener(anim -> {
+            if (multiSelectScroll == null) return;
             ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-            lp.height = (int) anim.getAnimatedValue();
-            multiSelectScroll.setLayoutParams(lp);
+            if (lp != null) {
+                lp.height = (int) anim.getAnimatedValue();
+                multiSelectScroll.setLayoutParams(lp);
+            }
         });
+        multiSheetAnimator = va;
         va.start();
         if (!multiSheetExpanded) {
             multiSelectScroll.smoothScrollTo(0, 0);
@@ -944,6 +1108,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (!wasActive && tvHeaderTitle != null && tvHeaderTitle.getText() != null) {
             normalTitleSnapshot = tvHeaderTitle.getText().toString();
         }
+        cancelMultiSheetAnimators();
         multiSelectMode = true;
         selectedPaths.clear();
         if (initial != null) selectedPaths.add(initial.getAbsolutePath());
@@ -976,25 +1141,42 @@ public class FileBrowserActivity extends AppCompatActivity {
                 .setDuration(230L)
                 .setInterpolator(new DecelerateInterpolator())
                 .withEndAction(() -> {
-                    if (!multiSelectMode || multiSelectScroll == null) return;
+                    if (!multiSelectMode || multiSelectScroll == null || multiSheetExpanded) return;
                     // קפיצה עדינה כלפי מטה וחזרה למעלה כדי להמחיש שקיימת שורה שנייה מתחת
                     int peekTarget = dp(58);
                     ValueAnimator down = ValueAnimator.ofInt(0, peekTarget);
                     down.setDuration(220L);
                     down.setInterpolator(new DecelerateInterpolator());
-                    down.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                    down.addUpdateListener(a -> {
+                        if (multiSelectScroll != null) {
+                            multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue());
+                        }
+                    });
                     down.addListener(new android.animation.AnimatorListenerAdapter() {
+                        private boolean canceled = false;
+
+                        @Override
+                        public void onAnimationCancel(android.animation.Animator animation) {
+                            canceled = true;
+                        }
+
                         @Override
                         public void onAnimationEnd(android.animation.Animator animation) {
-                            if (multiSelectScroll == null) return;
+                            if (canceled || multiSelectScroll == null || !multiSelectMode || multiSheetExpanded) return;
                             ValueAnimator back = ValueAnimator.ofInt(peekTarget, 0);
                             back.setDuration(260L);
                             back.setStartDelay(90L);
                             back.setInterpolator(new DecelerateInterpolator());
-                            back.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                            back.addUpdateListener(a -> {
+                                if (multiSelectScroll != null) {
+                                    multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue());
+                                }
+                            });
+                            multiSheetPeekAnimator = back;
                             back.start();
                         }
                     });
+                    multiSheetPeekAnimator = down;
                     down.start();
                 })
                 .start();
@@ -1002,6 +1184,10 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private void exitMultiSelectMode() {
         if (!multiSelectMode) return;
+        cancelMultiSheetAnimators();
+        if (multiSelectBar != null) {
+            multiSelectBar.animate().cancel();
+        }
         multiSelectMode = false;
         selectedPaths.clear();
         multiSelectBar.setVisibility(View.GONE);
