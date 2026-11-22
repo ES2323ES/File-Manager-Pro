@@ -193,10 +193,10 @@ public class TsToMp4RemuxerTest {
         byte[] patched = java.nio.file.Files.readAllBytes(mp4.toPath());
         String ascii = new String(patched, java.nio.charset.StandardCharsets.US_ASCII);
         assertTrue("Patched MP4 must contain ctts atom", ascii.contains("ctts"));
-        // 4 runs (0, +6000, -3000, -3000) -> 16 header + 4*8 = 48 bytes added to moov
+        // 3 runs after RLE merging (-3000 repeated twice): (1,0), (1,+6000), (2,-3000) -> 16 header + 3*8 = 40 bytes added to moov
         int moovOff = ftyp.length + mdat.length;
         int patchedMoovSize = readBe32(patched, moovOff);
-        assertEquals(moov.length + 48, patchedMoovSize);
+        assertEquals(moov.length + 40, patchedMoovSize);
         assertEquals(patched.length, moovOff + patchedMoovSize);
     }
 

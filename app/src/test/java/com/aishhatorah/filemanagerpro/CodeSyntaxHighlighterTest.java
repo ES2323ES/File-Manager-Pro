@@ -35,6 +35,7 @@ public class CodeSyntaxHighlighterTest {
         String html = CodeSyntaxHighlighter.markdownToHtml(md, true, "#FFFFFF", "#3B82F6");
         assertTrue(html.contains("<h1>כותרת ראשית</h1>"));
         assertTrue(html.contains("<li>פריט ראשון <b>מודגש</b></li>"));
-        assertTrue(html.contains("int x = 1 &lt; 2;"));
+        assertTrue(html.contains("int x = <span class='tok-num'>1</span> &lt; <span class='tok-num'>2</span>;"));
+        assertFalse(html.contains("1 < 2"));
     }
 }
