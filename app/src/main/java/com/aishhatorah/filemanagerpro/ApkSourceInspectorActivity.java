@@ -5,10 +5,14 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -22,11 +26,15 @@ import androidx.core.graphics.ColorUtils;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
- * מציג קוד ורכיבים של APK עם עץ תיקיות היררכי אמיתי, פענוח AndroidManifest וסקירת DEX.
+ * מציג מקור וקוד מלא של APK:
+ * נפתח כברירת מחדל ב"קבצים ומבנה", מציג אייקונים מותאמים לכל רכיב,
+ * ומאפשר פתיחה ישירה של AndroidManifest, כל קובץ XML מקומפל, resources.arsc וקבצי DEX (מחלקות, מתודות, שדות ומחרוזות).
  */
 public class ApkSourceInspectorActivity extends AppCompatActivity {
 
@@ -41,8 +49,17 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
 
     private List<ArchiveUtils.ArchiveEntryInfo> cachedEntries;
     private String currentApkPath = "";
-    private int activeTab = 1; // 0 = מבנה, 1 = מניפסט, 2 = DEX
-    private final Button[] tabButtons = new Button[3];
+    private int activeTab = 0; // 0 = מבנה, 1 = מניפסט, 2 = DEX, 3 = Resources
+    private String activeDexName = "classes.dex";
+    private int dexSubTab = 0; // 0 = חבילות ומחלקות, 1 = מתודות, 2 = שדות, 3 = מחרוזות
+    private String dexSearchQuery = "";
+    private String arscSearchQuery = "";
+
+    private final Button[] tabButtons = new Button[4];
+
+    private ApkSourceParser.DexInspectionResult cachedDexResult;
+    private String cachedDexSourceName;
+    private ApkSourceParser.ArscInspectionResult cachedArscResult;
 
     private int dp(float v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
@@ -71,6 +88,12 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
                     navigateApkUp();
                     return;
                 }
+                if (activeTab != 0) {
+                    activeTab = 0;
+                    updateTabStyles();
+                    loadStructureTab();
+                    return;
+                }
                 finish();
             }
         });
@@ -90,6 +113,10 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
                 this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> {
                     if (activeTab == 0 && !currentApkPath.isEmpty()) {
                         navigateApkUp();
+                    } else if (activeTab != 0) {
+                        activeTab = 0;
+                        updateTabStyles();
+                        loadStructureTab();
                     } else {
                         finish();
                     }
@@ -97,11 +124,12 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         topBar.addView(btnBack);
 
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("מקור ה-APK: " + apkFile.getName());
+        tvTitle.setText("מקור: " + apkFile.getName());
         tvTitle.setTextColor(textPrimary);
         tvTitle.setTextSize(ThemeHelper.spScaled(this, 15.5f));
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvTitle.setSingleLine(true);
+        tvTitle.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         titleLp.setMarginStart(dp(6));
         topBar.addView(tvTitle, titleLp);
@@ -112,25 +140,30 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         tabsRow.setOrientation(LinearLayout.HORIZONTAL);
         tabsRow.setPadding(dp(12), dp(10), dp(12), dp(6));
 
-        tabButtons[0] = makeTab("קבצים ומבנה", 0, () -> {
+        tabButtons[0] = makeTab("קבצים ומבנה", () -> {
             activeTab = 0;
             updateTabStyles();
             loadStructureTab();
         });
-        tabButtons[1] = makeTab("AndroidManifest", 1, () -> {
+        tabButtons[1] = makeTab("Manifest", () -> {
             activeTab = 1;
             updateTabStyles();
             loadManifestTab();
         });
-        tabButtons[2] = makeTab("מחלקות DEX", 2, () -> {
+        tabButtons[2] = makeTab("DEX", () -> {
             activeTab = 2;
             updateTabStyles();
-            loadDexTab();
+            loadDexEntry(activeDexName);
+        });
+        tabButtons[3] = makeTab("Resources", () -> {
+            activeTab = 3;
+            updateTabStyles();
+            loadArscTab();
         });
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < tabButtons.length; i++) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (i < 2) lp.setMarginEnd(dp(6));
+            if (i < tabButtons.length - 1) lp.setMarginEnd(dp(5));
             tabsRow.addView(tabButtons[i], lp);
         }
         root.addView(tabsRow);
@@ -144,20 +177,22 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
 
         setContentView(root);
         updateTabStyles();
-        loadManifestTab();
+        loadStructureTab();
     }
 
-    private Button makeTab(String label, int index, Runnable r) {
+    private Button makeTab(String label, Runnable r) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        b.setTextSize(ThemeHelper.spScaled(this, 12f));
         b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setSingleLine(true);
+        b.setEllipsize(TextUtils.TruncateAt.END);
         b.setStateListAnimator(null);
         b.setElevation(0f);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
-        b.setPadding(dp(8), dp(8), dp(8), dp(8));
+        b.setPadding(dp(6), dp(9), dp(6), dp(9));
         b.setOnClickListener(v -> r.run());
         return b;
     }
@@ -171,11 +206,12 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
             gd.setCornerRadius(dp(12));
             gd.setColor(active
                     ? accent
-                    : ColorUtils.setAlphaComponent(ThemeHelper.getCardColor(this, theme), dark ? 185 : 210));
+                    : ColorUtils.setAlphaComponent(ThemeHelper.getCardColor(this, theme), dark ? 190 : 215));
+            if (!active) {
+                gd.setStroke(Math.max(1, dp(1)), ThemeHelper.getDividerColor(this, theme));
+            }
             b.setBackground(gd);
-            b.setTextColor(active
-                    ? (theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE)
-                    : textPrimary);
+            b.setTextColor(active ? ThemeHelper.getOnAccentTextColor(accent) : textPrimary);
         }
     }
 
@@ -198,11 +234,11 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
             TextView hdr = new TextView(this);
             String cleanPath = currentApkPath.endsWith("/") ? currentApkPath.substring(0, currentApkPath.length() - 1) : currentApkPath;
             String pathDisplay = cleanPath.isEmpty() ? "/" : "/" + cleanPath;
-            hdr.setText("נתיב בחבילה: " + pathDisplay + "  •  " + children.size() + " פריטים (מתוך " + cachedEntries.size() + ")");
+            hdr.setText("נתיב: " + pathDisplay + "  •  " + children.size() + " פריטים (סה״כ " + cachedEntries.size() + ")");
             hdr.setTextColor(accent);
             hdr.setTextSize(ThemeHelper.spScaled(this, 12.5f));
             hdr.setTypeface(Typeface.DEFAULT_BOLD);
-            hdr.setPadding(dp(4), 0, dp(4), dp(10));
+            hdr.setPadding(dp(4), dp(2), dp(4), dp(10));
             contentList.addView(hdr);
 
             if (!currentApkPath.isEmpty()) {
@@ -216,33 +252,97 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
                         loadStructureTab();
                     });
                 } else {
-                    int icon = FileThumbnailLoader.resolveFallbackDrawable(node.displayName);
-                    int tint = icon == R.drawable.ic_file_generic ? textSecondary : 0;
-                    addInfoCard(node.displayName, StorageUtils.formatSize(node.size), icon, tint, () -> {
-                        if ("AndroidManifest.xml".equals(node.fullPath)) {
-                            activeTab = 1;
-                            updateTabStyles();
-                            loadManifestTab();
-                        } else if (node.fullPath.endsWith(".dex") && !node.fullPath.contains("/")) {
-                            activeTab = 2;
-                            updateTabStyles();
-                            loadDexEntry(node.fullPath);
-                        } else if (MediaFormatHelper.isTextFile(node.displayName) || node.displayName.endsWith(".xml")) {
-                            try {
-                                byte[] raw = ArchiveUtils.readEntryBytes(apkFile, node.fullPath, null);
-                                String text = node.displayName.endsWith(".xml") ? ApkSourceParser.decodeBinaryXml(raw) : new String(raw, StandardCharsets.UTF_8);
-                                openReadOnlyViewer(node.fullPath, text);
-                            } catch (Exception ex) {
-                                Toast.makeText(this, "קובץ בינארי פנימי", Toast.LENGTH_SHORT).show();
-                            }
-                        } else {
-                            Toast.makeText(this, "קובץ בינארי (" + StorageUtils.formatSize(node.size) + ")", Toast.LENGTH_SHORT).show();
-                        }
-                    });
+                    String lower = node.displayName.toLowerCase(Locale.ROOT);
+                    String fullLower = node.fullPath.toLowerCase(Locale.ROOT);
+                    int icon = resolveApkEntryIcon(lower);
+                    int tint = resolveApkEntryTint(lower);
+                    String sub = resolveApkEntrySubtitle(lower, node.size);
+
+                    addInfoCard(node.displayName, sub, icon, tint, () -> handleApkEntryClick(node, lower, fullLower));
                 }
             }
         } catch (Exception e) {
             Toast.makeText(this, "שגיאה בקריאת מבנה ה-APK: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private int resolveApkEntryIcon(String lower) {
+        if ("androidmanifest.xml".equals(lower)) return R.drawable.ic_code;
+        if ("resources.arsc".equals(lower)) return R.drawable.ic_analyzer;
+        if (lower.endsWith(".dex")) return R.drawable.ic_code;
+        if (lower.endsWith(".xml")) return R.drawable.ic_code;
+        if (lower.endsWith(".so")) return R.drawable.ic_settings;
+        if (lower.endsWith(".rsa") || lower.endsWith(".dsa") || lower.endsWith(".ec") || lower.endsWith(".sf") || lower.endsWith(".mf")) {
+            return R.drawable.ic_lock;
+        }
+        return FileThumbnailLoader.resolveFallbackDrawable(lower);
+    }
+
+    private int resolveApkEntryTint(String lower) {
+        if ("androidmanifest.xml".equals(lower)) return accent;
+        if ("resources.arsc".equals(lower)) return Color.parseColor("#D97706");
+        if (lower.endsWith(".dex")) return Color.parseColor("#6366F1");
+        if (lower.endsWith(".xml")) return accent;
+        if (lower.endsWith(".so")) return Color.parseColor("#0D9488");
+        int fb = FileThumbnailLoader.resolveFallbackDrawable(lower);
+        return fb == R.drawable.ic_file_generic ? textSecondary : 0;
+    }
+
+    private String resolveApkEntrySubtitle(String lower, long size) {
+        String sz = StorageUtils.formatSize(size);
+        if ("androidmanifest.xml".equals(lower)) return "מניפסט בינארי (AXML) • " + sz;
+        if ("resources.arsc".equals(lower)) return "טבלת משאבים מקומפלת • " + sz;
+        if (lower.endsWith(".dex")) return "קוד bytecode מקומפל (DEX) • " + sz;
+        if (lower.endsWith(".xml")) return "XML מקומפל / טקסט • " + sz;
+        if (lower.endsWith(".so")) return "ספריית קוד מקורית (ELF) • " + sz;
+        return sz;
+    }
+
+    private void handleApkEntryClick(ArchiveUtils.ArchiveTreeNode node, String lower, String fullLower) {
+        try {
+            if ("androidmanifest.xml".equals(fullLower) || "androidmanifest.xml".equals(lower)) {
+                byte[] raw = ArchiveUtils.readEntryBytes(apkFile, node.fullPath, null);
+                String decoded = ApkSourceParser.decodeBinaryXml(raw);
+                openReadOnlyViewer(node.fullPath, decoded);
+                return;
+            }
+            if (lower.endsWith(".dex")) {
+                activeDexName = node.fullPath;
+                activeTab = 2;
+                updateTabStyles();
+                loadDexEntry(node.fullPath);
+                return;
+            }
+            if ("resources.arsc".equals(lower)) {
+                activeTab = 3;
+                updateTabStyles();
+                loadArscTab();
+                return;
+            }
+            if (lower.endsWith(".xml")) {
+                byte[] raw = ArchiveUtils.readEntryBytes(apkFile, node.fullPath, null);
+                String decoded = ApkSourceParser.decodeBinaryXml(raw);
+                openReadOnlyViewer(node.fullPath, decoded);
+                return;
+            }
+            if (MediaFormatHelper.isTextFile(lower) || MediaFormatHelper.isCodeOrSyntaxFile(lower)
+                    || lower.endsWith(".sf") || lower.endsWith(".mf") || lower.endsWith(".pro")
+                    || "notice".equals(lower) || "license".equals(lower)) {
+                byte[] raw = ArchiveUtils.readEntryBytes(apkFile, node.fullPath, null);
+                openReadOnlyViewer(node.fullPath, new String(raw, StandardCharsets.UTF_8));
+                return;
+            }
+            if (MediaFormatHelper.isImageFile(lower)) {
+                File cacheDir = new File(getCacheDir(), "arch_preview");
+                if (!cacheDir.exists()) cacheDir.mkdirs();
+                File out = new File(cacheDir, System.currentTimeMillis() + "_" + node.displayName);
+                ArchiveUtils.extractEntryToFile(apkFile, node.fullPath, null, out);
+                FileOpenWithHelper.executeOpenAction(this, out, FileOpenWithHelper.ACTION_INTERNAL_IMAGE);
+                return;
+            }
+            Toast.makeText(this, "קובץ בינארי (" + StorageUtils.formatSize(node.size) + ")", Toast.LENGTH_SHORT).show();
+        } catch (Exception ex) {
+            Toast.makeText(this, "לא ניתן לפתוח קובץ זה: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -280,37 +380,288 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         }
     }
 
-    private void loadDexTab() {
-        loadDexEntry("classes.dex");
-    }
-
     private void loadDexEntry(String dexName) {
         contentList.removeAllViews();
         try {
-            byte[] dex = ArchiveUtils.readEntryBytes(apkFile, dexName, null);
-            Map<String, List<String>> pkgs = ApkSourceParser.parseDexPackagesAndClasses(dex);
-            TextView hdr = new TextView(this);
-            hdr.setText(dexName + "  •  " + pkgs.size() + " חבילות (Packages)");
-            hdr.setTextColor(accent);
-            hdr.setTypeface(Typeface.DEFAULT_BOLD);
-            hdr.setPadding(dp(4), 0, dp(4), dp(10));
-            contentList.addView(hdr);
-
-            int shown = 0;
-            for (Map.Entry<String, List<String>> entry : pkgs.entrySet()) {
-                if (shown++ > 180) break;
-                addInfoCard(entry.getKey(), entry.getValue().size() + " מחלקות", R.drawable.ic_code, accent, () -> {
-                    StringBuilder sb = new StringBuilder("// Package: ").append(entry.getKey()).append("\n\n");
-                    for (String cls : entry.getValue()) sb.append("class ").append(cls).append("\n");
-                    openReadOnlyViewer(entry.getKey() + ".java", sb.toString());
-                });
+            if (cachedDexResult == null || !dexName.equals(cachedDexSourceName)) {
+                byte[] dex = ArchiveUtils.readEntryBytes(apkFile, dexName, null);
+                cachedDexResult = ApkSourceParser.parseDexFull(dex);
+                cachedDexSourceName = dexName;
             }
+            ApkSourceParser.DexInspectionResult dex = cachedDexResult;
+
+            // סטטיסטיקת DEX
+            LinearLayout statsCard = new LinearLayout(this);
+            statsCard.setOrientation(LinearLayout.VERTICAL);
+            statsCard.setPadding(dp(12), dp(10), dp(12), dp(10));
+            statsCard.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 14f, true, false));
+            TextView hdr = new TextView(this);
+            hdr.setText(dexName + " (DEX " + dex.dexVersion + ")\n"
+                    + dex.classCount + " מחלקות  •  " + dex.methodCount + " מתודות  •  "
+                    + dex.fieldCount + " שדות  •  " + dex.stringCount + " מחרוזות");
+            hdr.setTextColor(textPrimary);
+            hdr.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+            hdr.setTypeface(Typeface.DEFAULT_BOLD);
+            statsCard.addView(hdr);
+            LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            stLp.bottomMargin = dp(8);
+            contentList.addView(statsCard, stLp);
+
+            // תתי-לשוניות בתוך DEX: חבילות | מתודות | שדות | מחרוזות
+            LinearLayout subTabs = new LinearLayout(this);
+            subTabs.setOrientation(LinearLayout.HORIZONTAL);
+            String[] subLabels = {"חבילות ומחלקות", "מתודות", "שדות", "מחרוזות"};
+            for (int i = 0; i < subLabels.length; i++) {
+                final int idx = i;
+                Button sb = makeTab(subLabels[i], () -> {
+                    dexSubTab = idx;
+                    loadDexEntry(dexName);
+                });
+                boolean act = (dexSubTab == i);
+                GradientDrawable sgd = new GradientDrawable();
+                sgd.setCornerRadius(dp(10));
+                sgd.setColor(act ? ColorUtils.setAlphaComponent(accent, dark ? 95 : 42)
+                        : ColorUtils.setAlphaComponent(ThemeHelper.getCardColor(this, theme), dark ? 150 : 190));
+                sgd.setStroke(Math.max(1, dp(1)), act ? accent : ThemeHelper.getDividerColor(this, theme));
+                sb.setBackground(sgd);
+                sb.setTextColor(act ? accent : textPrimary);
+                sb.setTextSize(ThemeHelper.spScaled(this, 11f));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                if (i < subLabels.length - 1) lp.setMarginEnd(dp(4));
+                subTabs.addView(sb, lp);
+            }
+            LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            subLp.bottomMargin = dp(8);
+            contentList.addView(subTabs, subLp);
+
+            // שדה חיפוש מהיר
+            LinearLayout resultsBox = new LinearLayout(this);
+            resultsBox.setOrientation(LinearLayout.VERTICAL);
+
+            EditText etFilter = createFilterEditText("סנן לפי שם חבילה / מחלקה / מתודה / מחרוזת...", dexSearchQuery);
+            etFilter.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                @Override
+                public void afterTextChanged(Editable s) {
+                    dexSearchQuery = s.toString();
+                    renderDexFilteredItems(resultsBox, dex);
+                }
+            });
+            LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            etLp.bottomMargin = dp(8);
+            contentList.addView(etFilter, etLp);
+            contentList.addView(resultsBox);
+
+            renderDexFilteredItems(resultsBox, dex);
         } catch (Exception e) {
             TextView err = new TextView(this);
             err.setText("לא נמצא " + dexName + " ישירות בחבילה זו.");
             err.setTextColor(textSecondary);
             contentList.addView(err);
         }
+    }
+
+    private void renderDexFilteredItems(LinearLayout targetBox, ApkSourceParser.DexInspectionResult dex) {
+        targetBox.removeAllViews();
+        String q = dexSearchQuery == null ? "" : dexSearchQuery.trim().toLowerCase(Locale.ROOT);
+        int shown = 0;
+
+        if (dexSubTab == 0) {
+            for (Map.Entry<String, List<ApkSourceParser.DexClassDetails>> entry : dex.packages.entrySet()) {
+                String pkg = entry.getKey();
+                List<ApkSourceParser.DexClassDetails> matchedClasses = new ArrayList<>();
+                boolean pkgMatches = q.isEmpty() || pkg.toLowerCase(Locale.ROOT).contains(q);
+                for (ApkSourceParser.DexClassDetails cd : entry.getValue()) {
+                    if (pkgMatches || cd.className.toLowerCase(Locale.ROOT).contains(q)) {
+                        matchedClasses.add(cd);
+                    }
+                }
+                if (matchedClasses.isEmpty()) continue;
+                if (shown++ >= 220) break;
+
+                addInfoCardInto(targetBox, pkg, matchedClasses.size() + " מחלקות", R.drawable.ic_code, accent, () -> {
+                    StringBuilder sb = new StringBuilder("// Package: ").append(pkg).append("\n\n");
+                    for (ApkSourceParser.DexClassDetails cd : matchedClasses) {
+                        sb.append(cd.formatFlags()).append(" ").append(cd.className);
+                        if (!cd.superClassName.isEmpty() && !"java.lang.Object".equals(cd.superClassName)) {
+                            sb.append(" extends ").append(cd.superClassName);
+                        }
+                        sb.append(" {\n");
+                        for (String f : cd.fields) {
+                            sb.append("    ").append(f).append(";\n");
+                        }
+                        if (!cd.fields.isEmpty() && !cd.methods.isEmpty()) sb.append("\n");
+                        for (String m : cd.methods) {
+                            sb.append("    ").append(m).append(";\n");
+                        }
+                        sb.append("}\n\n");
+                    }
+                    openReadOnlyViewer(pkg + ".java", sb.toString());
+                });
+            }
+        } else if (dexSubTab == 1) {
+            for (String m : dex.methods) {
+                if (!q.isEmpty() && !m.toLowerCase(Locale.ROOT).contains(q)) continue;
+                if (shown++ >= 250) break;
+                addMonospaceLineCard(targetBox, m, Color.parseColor("#6366F1"));
+            }
+        } else if (dexSubTab == 2) {
+            for (String f : dex.fields) {
+                if (!q.isEmpty() && !f.toLowerCase(Locale.ROOT).contains(q)) continue;
+                if (shown++ >= 250) break;
+                addMonospaceLineCard(targetBox, f, Color.parseColor("#0D9488"));
+            }
+        } else {
+            for (String s : dex.strings) {
+                if (!q.isEmpty() && !s.toLowerCase(Locale.ROOT).contains(q)) continue;
+                if (shown++ >= 250) break;
+                addMonospaceLineCard(targetBox, "\"" + s + "\"", accent);
+            }
+        }
+
+        if (shown == 0) {
+            TextView empty = new TextView(this);
+            empty.setText("אין תוצאות תואמות.");
+            empty.setTextColor(textSecondary);
+            empty.setPadding(dp(8), dp(12), dp(8), dp(12));
+            targetBox.addView(empty);
+        }
+    }
+
+    private void loadArscTab() {
+        contentList.removeAllViews();
+        try {
+            if (cachedArscResult == null) {
+                byte[] raw = ArchiveUtils.readEntryBytes(apkFile, "resources.arsc", null);
+                cachedArscResult = ApkSourceParser.parseResourcesArsc(raw);
+            }
+            ApkSourceParser.ArscInspectionResult arsc = cachedArscResult;
+
+            TextView hdr = new TextView(this);
+            hdr.setText("resources.arsc"
+                    + (arsc.packageName.isEmpty() ? "" : "  •  " + arsc.packageName)
+                    + "  •  " + arsc.totalEntries + " משאבים ב-" + arsc.byType.size() + " קבוצות");
+            hdr.setTextColor(accent);
+            hdr.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+            hdr.setTypeface(Typeface.DEFAULT_BOLD);
+            hdr.setPadding(dp(4), 0, dp(4), dp(8));
+            contentList.addView(hdr);
+
+            LinearLayout listBox = new LinearLayout(this);
+            listBox.setOrientation(LinearLayout.VERTICAL);
+
+            EditText etFilter = createFilterEditText("חפש משאב (string / color / layout / id)...", arscSearchQuery);
+            etFilter.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                @Override
+                public void afterTextChanged(Editable s) {
+                    arscSearchQuery = s.toString();
+                    renderArscList(listBox, arsc);
+                }
+            });
+            LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            etLp.bottomMargin = dp(8);
+            contentList.addView(etFilter, etLp);
+            contentList.addView(listBox);
+
+            renderArscList(listBox, arsc);
+        } catch (Exception e) {
+            TextView err = new TextView(this);
+            err.setText("לא ניתן לפענח resources.arsc בחבילה זו: " + e.getMessage());
+            err.setTextColor(textSecondary);
+            contentList.addView(err);
+        }
+    }
+
+    private void renderArscList(LinearLayout listBox, ApkSourceParser.ArscInspectionResult arsc) {
+        listBox.removeAllViews();
+        String q = arscSearchQuery == null ? "" : arscSearchQuery.trim().toLowerCase(Locale.ROOT);
+        int cards = 0;
+
+        for (Map.Entry<String, List<ApkSourceParser.ArscResourceEntry>> entry : arsc.byType.entrySet()) {
+            String typeName = entry.getKey();
+            List<ApkSourceParser.ArscResourceEntry> matched = new ArrayList<>();
+            boolean typeHit = q.isEmpty() || typeName.toLowerCase(Locale.ROOT).contains(q);
+            for (ApkSourceParser.ArscResourceEntry item : entry.getValue()) {
+                if (typeHit
+                        || item.entryName.toLowerCase(Locale.ROOT).contains(q)
+                        || item.valueDisplay.toLowerCase(Locale.ROOT).contains(q)) {
+                    matched.add(item);
+                }
+            }
+            if (matched.isEmpty()) continue;
+            cards++;
+
+            addInfoCardInto(listBox, "@" + typeName, matched.size() + " ערכים", R.drawable.ic_analyzer, Color.parseColor("#D97706"), () -> {
+                StringBuilder sb = new StringBuilder("# resources.arsc — @" + typeName + " (" + matched.size() + ")\n\n");
+                for (ApkSourceParser.ArscResourceEntry re : matched) {
+                    sb.append(String.format(Locale.US, "0x%08x  %s  =  %s\n", re.resourceId, re.entryName, re.valueDisplay));
+                }
+                openReadOnlyViewer("resources_" + typeName + ".txt", sb.toString());
+            });
+        }
+
+        if (cards == 0) {
+            TextView empty = new TextView(this);
+            empty.setText("לא נמצאו משאבים תואמים.");
+            empty.setTextColor(textSecondary);
+            empty.setPadding(dp(8), dp(12), dp(8), dp(12));
+            listBox.addView(empty);
+        }
+    }
+
+    private EditText createFilterEditText(String hint, String initial) {
+        EditText et = new EditText(this);
+        et.setHint(hint);
+        et.setText(initial);
+        et.setSingleLine(true);
+        et.setTextColor(textPrimary);
+        et.setHintTextColor(textSecondary);
+        et.setTextSize(ThemeHelper.spScaled(this, 13f));
+        et.setPadding(dp(12), dp(10), dp(12), dp(10));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(12));
+        bg.setColor(ColorUtils.setAlphaComponent(ThemeHelper.getCardColor(this, theme), dark ? 190 : 225));
+        bg.setStroke(Math.max(1, dp(1)), ThemeHelper.getDividerColor(this, theme));
+        et.setBackground(bg);
+        return et;
+    }
+
+    private void addMonospaceLineCard(LinearLayout target, String text, int badgeColor) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(12), dp(9), dp(12), dp(9));
+        card.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 12f, true, false));
+
+        View dot = new View(this);
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(badgeColor);
+        dot.setBackground(d);
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(dp(7), dp(7));
+        dLp.setMarginEnd(dp(10));
+        card.addView(dot, dLp);
+
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(textPrimary);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextSize(11.5f);
+        tv.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        tv.setTextIsSelectable(true);
+        card.addView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(5);
+        target.addView(card, lp);
     }
 
     private void openReadOnlyViewer(String title, String content) {
@@ -321,6 +672,10 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
     }
 
     private void addInfoCard(String title, String sub, int iconRes, int iconTint, Runnable onClick) {
+        addInfoCardInto(contentList, title, sub, iconRes, iconTint, onClick);
+    }
+
+    private void addInfoCardInto(LinearLayout target, String title, String sub, int iconRes, int iconTint, Runnable onClick) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -358,6 +713,7 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(7);
         card.setOnClickListener(v -> onClick.run());
-        contentList.addView(card, lp);
+        target.addView(card, lp);
     }
 }
+

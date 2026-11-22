@@ -31,10 +31,37 @@ public class CodeSyntaxHighlighterTest {
 
     @Test
     public void markdownToHtmlRendersHeadingsListsCodeAndEscapesHtml() {
-        String md = "# כותרת ראשית\n- פריט ראשון **מודגש**\n```java\nint x = 1 < 2;\n```";
-        String html = CodeSyntaxHighlighter.markdownToHtml(md, true, "#FFFFFF", "#3B82F6");
-        assertTrue(html.contains("<h1>כותרת ראשית</h1>"));
-        assertTrue(html.contains("<li>פריט ראשון <b>מודגש</b></li>"));
-        assertTrue(html.contains("int x = 1 &lt; 2;"));
+        String md = "# כותרת ראשית\n- פריט ראשון **מודגש**\n```java\nreturn 1 < 2;\n```";
+        CodeSyntaxHighlighter.MarkdownRenderResult res = CodeSyntaxHighlighter.markdownToHtmlWithBlocks(
+                md, true, "#FFFFFF", "#3B82F6");
+        assertTrue(res.html.contains("<h1>כותרת ראשית</h1>"));
+        assertTrue(res.html.contains("<li>פריט ראשון <b>מודגש</b></li>"));
+        assertTrue(res.html.contains("tok-kw"));
+        assertTrue(res.html.contains("tok-num"));
+        assertTrue(res.html.contains("&lt;"));
+        assertEquals(1, res.codeBlocks.size());
+        assertEquals("return 1 < 2;", res.codeBlocks.get(0));
+    }
+
+    @Test
+    public void markdownSupportsHorizontalRulesGitHubAlertsTablesTasksAndSafeLinks() {
+        String md = "___\n"
+                + "> [!WARNING]\n"
+                + "> שים לב לפרט חשוב\n\n"
+                + "- [x] סיום משימה\n"
+                + "- [ ] משימה פתוחה\n\n"
+                + "| שם | מצב |\n"
+                + "| :--- | ---: |\n"
+                + "| קובץ | תקין |\n\n"
+                + "[בטוח](https://example.com) [חסום](javascript:alert(1)) ~~מחוק~~";
+        CodeSyntaxHighlighter.MarkdownRenderResult res = CodeSyntaxHighlighter.markdownToHtmlWithBlocks(
+                md, false, "#0F172A", "#2563EB");
+        assertTrue(res.html.contains("<hr/>"));
+        assertTrue(res.html.contains("gh-warning"));
+        assertTrue(res.html.contains("task-box checked"));
+        assertTrue(res.html.contains("<table>"));
+        assertTrue(res.html.contains("href='https://example.com'"));
+        assertFalse(res.html.contains("javascript:"));
+        assertTrue(res.html.contains("<del>מחוק</del>"));
     }
 }

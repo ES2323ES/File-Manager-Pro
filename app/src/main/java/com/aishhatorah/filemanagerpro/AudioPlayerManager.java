@@ -1,8 +1,12 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.app.NotificationManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Bitmap;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.media.audiofx.BassBoost;
@@ -22,7 +26,8 @@ import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * סעיפים 6, 22, 46: מנהל ניגון אודיו מתקדם הפועל ברקע,
- * כולל תור השמעה דינאמי (שינוי סדר, הוספה, הסרה), טיימר שינה, אקולייזר מובנה ובאס-בוסט.
+ * כולל תור השמעה דינאמי (שינוי סדר, הוספה, הסרה), טיימר שינה, אקולייזר מובנה, באס-בוסט,
+ * והשהיה אוטומטית כשהמכשיר מושתק (ווליום 0 או נא לא להפריע) עם חזרה אוטומטית.
  */
 public class AudioPlayerManager {
 
@@ -55,7 +60,7 @@ public class AudioPlayerManager {
     private int currentIndex = -1;
     private Bitmap currentArtwork;
     private float playbackSpeed = 1.0f;
-    private int repeatMode = REPEAT_OFF;
+    private int repeatMode = REPEAT_FOLDER;
     private boolean prepared = false;
 
     private long sleepEndEpochMs = 0L;
@@ -82,8 +87,89 @@ public class AudioPlayerManager {
         }
     };
     private Context lastAppContext;
+    private boolean pausedByDeviceSilence = false;
+    private boolean silenceReceiverRegistered = false;
+    private final BroadcastReceiver silenceReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            evaluateDeviceSilence(lastAppContext != null ? lastAppContext : context);
+        }
+    };
 
     private AudioPlayerManager() {
+    }
+
+    public static boolean isDeviceSilenced(Context context) {
+        if (context == null) return false;
+        try {
+            AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                if (am.getStreamVolume(AudioManager.STREAM_MUSIC) <= 0) {
+                    return true;
+                }
+                if (am.isStreamMute(AudioManager.STREAM_MUSIC)) {
+                    return true;
+                }
+            }
+            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                int filter = nm.getCurrentInterruptionFilter();
+                if (filter == NotificationManager.INTERRUPTION_FILTER_NONE
+                        || filter == NotificationManager.INTERRUPTION_FILTER_ALARMS) {
+                    return true;
+                }
+                if (filter == NotificationManager.INTERRUPTION_FILTER_PRIORITY) {
+                    NotificationManager.Policy policy = nm.getNotificationPolicy();
+                    if (policy != null
+                            && (policy.priorityCategories & NotificationManager.Policy.PRIORITY_CATEGORY_MEDIA) == 0) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    public boolean isPausedByDeviceSilence() {
+        return pausedByDeviceSilence;
+    }
+
+    private void ensureSilenceMonitorRegistered(Context appCtx) {
+        if (appCtx == null || silenceReceiverRegistered) return;
+        try {
+            IntentFilter filter = new IntentFilter();
+            filter.addAction("android.media.VOLUME_CHANGED_ACTION");
+            filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION);
+            filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
+            ContextCompat.registerReceiver(appCtx, silenceReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
+            silenceReceiverRegistered = true;
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void evaluateDeviceSilence(Context ctx) {
+        if (ctx == null || mediaPlayer == null || !prepared) return;
+        Context appCtx = ctx.getApplicationContext();
+        boolean silenced = isDeviceSilenced(appCtx);
+        try {
+            if (silenced) {
+                if (mediaPlayer.isPlaying()) {
+                    mediaPlayer.pause();
+                    pausedByDeviceSilence = true;
+                    syncForegroundService(appCtx);
+                    notifyListeners();
+                }
+            } else if (pausedByDeviceSilence) {
+                pausedByDeviceSilence = false;
+                if (!mediaPlayer.isPlaying()) {
+                    applySpeedInternal(true);
+                    syncForegroundService(appCtx);
+                    notifyListeners();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     public void addListener(PlaybackListener l) {
@@ -330,6 +416,35 @@ public class AudioPlayerManager {
         }
     }
 
+    public int getSelectedEqPresetIndex() {
+        return selectedPresetIndex;
+    }
+
+    public void resetEqualizerToDefault() {
+        selectedPresetIndex = -1;
+        customBandLevels = null;
+        try {
+            if (equalizer != null) {
+                short count = equalizer.getNumberOfBands();
+                for (short i = 0; i < count; i++) {
+                    equalizer.setBandLevel(i, (short) 0);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        bassStrength = 0;
+        try {
+            if (bassBoost != null) {
+                if (bassBoost.getStrengthSupported()) {
+                    bassBoost.setStrength((short) 0);
+                }
+                bassBoost.setEnabled(false);
+            }
+        } catch (Throwable ignored) {
+        }
+        notifyListeners();
+    }
+
     // ==================== Playback Core ====================
 
     public void playOrAttachFile(Context context, File file) {
@@ -382,6 +497,9 @@ public class AudioPlayerManager {
     }
 
     private void loadAndStartTrack(Context appCtx, File file) {
+        lastAppContext = appCtx;
+        ensureSilenceMonitorRegistered(appCtx);
+        pausedByDeviceSilence = false;
         releaseMediaPlayerOnly();
         currentFile = file;
         currentArtwork = FileThumbnailLoader.extractAudioEmbeddedArt(file, 720);
@@ -392,7 +510,9 @@ public class AudioPlayerManager {
             mediaPlayer.prepare();
             prepared = true;
             attachAudioEffects();
-            applySpeedInternal(true);
+            boolean silenced = isDeviceSilenced(appCtx);
+            pausedByDeviceSilence = silenced;
+            applySpeedInternal(!silenced);
             mediaPlayer.setOnCompletionListener(mp -> handleTrackCompleted(appCtx));
             syncForegroundService(appCtx);
             notifyListeners();
@@ -408,7 +528,9 @@ public class AudioPlayerManager {
             try {
                 if (mediaPlayer != null && prepared) {
                     mediaPlayer.seekTo(0);
-                    applySpeedInternal(true);
+                    boolean silenced = isDeviceSilenced(appCtx);
+                    pausedByDeviceSilence = silenced;
+                    applySpeedInternal(!silenced);
                     syncForegroundService(appCtx);
                     notifyListeners();
                     return;
@@ -431,8 +553,11 @@ public class AudioPlayerManager {
 
     private void startInternal(Context appCtx) {
         if (mediaPlayer == null || !prepared) return;
+        ensureSilenceMonitorRegistered(appCtx);
         try {
-            applySpeedInternal(true);
+            boolean silenced = isDeviceSilenced(appCtx);
+            pausedByDeviceSilence = silenced;
+            applySpeedInternal(!silenced);
             syncForegroundService(appCtx);
             notifyListeners();
         } catch (Exception ignored) {
@@ -485,10 +610,16 @@ public class AudioPlayerManager {
     public void togglePlayPause(Context context) {
         if (mediaPlayer == null || !prepared) return;
         Context appCtx = context.getApplicationContext();
+        lastAppContext = appCtx;
+        ensureSilenceMonitorRegistered(appCtx);
         try {
             if (mediaPlayer.isPlaying()) {
+                pausedByDeviceSilence = false;
                 mediaPlayer.pause();
+            } else if (isDeviceSilenced(appCtx)) {
+                pausedByDeviceSilence = true;
             } else {
+                pausedByDeviceSilence = false;
                 applySpeedInternal(true);
             }
             syncForegroundService(appCtx);
@@ -537,6 +668,7 @@ public class AudioPlayerManager {
     public void stopAndDismiss(Context context) {
         mainHandler.removeCallbacks(sleepCheckRunnable);
         sleepEndEpochMs = 0L;
+        pausedByDeviceSilence = false;
         releaseMediaPlayerOnly();
         currentFile = null;
         currentArtwork = null;

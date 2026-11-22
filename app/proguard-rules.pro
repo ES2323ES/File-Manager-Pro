@@ -1,4 +1,4 @@
-# File Manager Pro R8 / ProGuard Configuration (v0.3.6)
+# File Manager Pro R8 / ProGuard Configuration (v0.3.7)
 -keep class com.aishhatorah.filemanagerpro.** { *; }
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*
@@ -7,3 +7,8 @@
 -dontwarn javax.annotation.**
 -dontwarn org.xmlpull.v1.**
 -dontwarn androidx.**
+-dontwarn org.slf4j.**
+-dontwarn org.apache.commons.**
+
+-keep class net.sf.sevenzipjbinding.** { *; }
+-keep class com.github.junrar.** { *; }

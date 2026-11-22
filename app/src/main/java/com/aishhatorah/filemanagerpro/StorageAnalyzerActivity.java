@@ -12,6 +12,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -103,6 +104,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         root.addView(scanSpinner);
 
         RecyclerView rv = new RecyclerView(this);
+        rv.setClipToPadding(false);
         rv.setLayoutManager(new LinearLayoutManager(this));
         rv.setItemAnimator(null);
         if (ThemeHelper.hasWallpaper(this)) {
@@ -130,10 +132,13 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         adapter = new HeavyAdapter(cardColor, textPrimary, textSecondary, accent);
         rv.setAdapter(adapter);
 
-        root.addView(rv, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        FrameLayout overlayHost = new FrameLayout(this);
+        overlayHost.addView(rv, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        miniAudioListener = MiniAudioBarHelper.attachOverlay(this, overlayHost, rv);
 
-        miniAudioListener = MiniAudioBarHelper.attach(this, root);
+        root.addView(overlayHost, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(root);
         runHeavyFilesScan();
@@ -191,7 +196,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         }
     }
 
-    private void showHeavyFileActions(File f) {
+    private void showHeavyFileActions(File f, View anchor) {
         List<String> options = Arrays.asList(
                 "פתיחה בתוך האפליקציה",
                 "העבר לסל המיחזור (" + StorageUtils.formatSize(f.length()) + ")",
@@ -199,6 +204,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         );
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 f.getName(),
                 "משקל: " + StorageUtils.formatSize(f.length()) + "\n" + f.getAbsolutePath(),
                 options,
@@ -265,11 +271,11 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
             // סעיף ד + סעיף ח: האייקון האמיתי משמאל פותח בלחיצה את אפשרויות העריכה
             FileThumbnailLoader.bindFileIcon(StorageAnalyzerActivity.this, f, h.ivIcon);
 
-            View.OnClickListener openMenu = v -> showHeavyFileActions(f);
+            View.OnClickListener openMenu = v -> showHeavyFileActions(f, v);
             h.ivIcon.setOnClickListener(openMenu);
             h.rowCard.setOnClickListener(openMenu);
             h.rowCard.setOnLongClickListener(v -> {
-                showHeavyFileActions(f);
+                showHeavyFileActions(f, v);
                 return true;
             });
         }

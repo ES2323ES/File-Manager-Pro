@@ -14,6 +14,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -27,21 +28,42 @@ import java.io.File;
 import java.util.Locale;
 
 /**
- * השורה החכמה של האודיו:
- * - מתאימה את צבעיה דינאמית לעטיפת האודיו (כאשר קיימת)
+ * השורה החכמה הצפה של האודיו:
+ * - צפה בשקיפות מלאה על הרקע הכללי ועל רשימות המסך
+ * - מתאימה את צבעי הבועה דינאמית לעטיפת האודיו (כאשר קיימת)
  * - פס התקדמות בצורת גלים עדינים בזמן ניגון, ופס רציף בעצירה
  * - הזזת השמע קדימה/אחורה מתבצעת אך ורק מלחיצה וגרירה של הידית העבה על פס ההתקדמות
- * - מציגה את הזמן שעבר והמשך הכולל בקטן בצד שמאל למטה
- * - החלקה אופקית על השורה לעצירה ולחיצה לפתיחת מסך האודיו
+ * - החלקה אופקית על הבועה לעצירה ולחיצה או משיכה כלפי מעלה לפתיחת מסך האודיו
  */
 public class MiniAudioBarHelper {
 
     public static AudioPlayerManager.PlaybackListener attach(Activity activity, LinearLayout parentContainer) {
+        return attachInternal(activity, parentContainer, null, false);
+    }
+
+    public static AudioPlayerManager.PlaybackListener attachOverlay(
+            Activity activity, FrameLayout overlayHost, View scrollableContent) {
+        return attachInternal(activity, overlayHost, scrollableContent, true);
+    }
+
+    private static AudioPlayerManager.PlaybackListener attachInternal(
+            Activity activity, ViewGroup hostContainer, View scrollableContent, boolean asOverlay) {
         final Handler progressHandler = new Handler(Looper.getMainLooper());
+
+        final int basePadLeft = scrollableContent != null ? scrollableContent.getPaddingLeft() : 0;
+        final int basePadTop = scrollableContent != null ? scrollableContent.getPaddingTop() : 0;
+        final int basePadRight = scrollableContent != null ? scrollableContent.getPaddingRight() : 0;
+        final int basePadBottom = scrollableContent != null ? scrollableContent.getPaddingBottom() : 0;
+        if (scrollableContent instanceof ViewGroup) {
+            ((ViewGroup) scrollableContent).setClipToPadding(false);
+        }
 
         final LinearLayout barWrapper = new LinearLayout(activity);
         barWrapper.setOrientation(LinearLayout.VERTICAL);
-        barWrapper.setPadding(20, 10, 20, 16);
+        barWrapper.setBackgroundColor(Color.TRANSPARENT);
+        barWrapper.setClipChildren(false);
+        barWrapper.setClipToPadding(false);
+        barWrapper.setPadding(dpToPx(activity, 10), dpToPx(activity, 4), dpToPx(activity, 10), dpToPx(activity, 10));
         barWrapper.setVisibility(View.GONE);
 
         final LinearLayout bar = new LinearLayout(activity);
@@ -49,6 +71,7 @@ public class MiniAudioBarHelper {
         bar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(24, 14, 24, 12);
+        bar.setElevation(dpToPx(activity, 8));
 
         final ImageView ivArt = new ImageView(activity);
         ivArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -78,6 +101,7 @@ public class MiniAudioBarHelper {
         final WavySeekBar songWavyBar = new WavySeekBar(activity);
         songWavyBar.setCompactStyle(true);
         songWavyBar.setThumbOnlyTouch(true);
+        songWavyBar.setShowTickDots(false);
         songWavyBar.setMax(1000);
         songWavyBar.setProgress(0);
         songWavyBar.setPlaying(false);
@@ -140,30 +164,42 @@ public class MiniAudioBarHelper {
         bar.setOnTouchListener(new View.OnTouchListener() {
             private float downRawX = 0f;
             private float downRawY = 0f;
-            private boolean swiping = false;
+            private int swipeAxis = 0; // 0=none, 1=horizontal stop, 2=vertical pull-up
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
+                boolean reduce = PrefsManager.isReduceAnimations(activity);
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
                         downRawX = event.getRawX();
                         downRawY = event.getRawY();
-                        swiping = false;
+                        swipeAxis = 0;
                         return true;
 
                     case MotionEvent.ACTION_MOVE: {
                         float dx = event.getRawX() - downRawX;
                         float dy = event.getRawY() - downRawY;
-                        if (!swiping && Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy)) {
-                            swiping = true;
-                            if (v.getParent() != null) {
-                                v.getParent().requestDisallowInterceptTouchEvent(true);
+                        if (swipeAxis == 0) {
+                            if (Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy) * 1.15f) {
+                                swipeAxis = 1;
+                                if (v.getParent() != null) {
+                                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                                }
+                            } else if (dy < -touchSlop && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                                swipeAxis = 2;
+                                if (v.getParent() != null) {
+                                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                                }
                             }
                         }
-                        if (swiping) {
+                        if (swipeAxis == 1) {
                             v.setTranslationX(dx);
                             float alpha = Math.max(0.2f, 1f - (Math.abs(dx) / Math.max(1f, v.getWidth())));
                             v.setAlpha(alpha);
+                        } else if (swipeAxis == 2) {
+                            float clampedUp = Math.max(-dpToPx(activity, 56), Math.min(0f, dy * 0.55f));
+                            v.setTranslationY(clampedUp);
+                            v.setAlpha(Math.max(0.75f, 1f - Math.abs(clampedUp) / dpToPx(activity, 180)));
                         }
                         return true;
                     }
@@ -171,32 +207,50 @@ public class MiniAudioBarHelper {
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL: {
                         float dx = event.getRawX() - downRawX;
-                        if (swiping) {
+                        float dy = event.getRawY() - downRawY;
+                        if (swipeAxis == 1) {
                             if (Math.abs(dx) > v.getWidth() * 0.24f) {
-                                float exitX = dx > 0 ? v.getWidth() : -v.getWidth();
-                                v.animate()
-                                        .translationX(exitX)
-                                        .alpha(0f)
-                                        .setDuration(160)
-                                        .withEndAction(() -> {
-                                            v.setTranslationX(0f);
-                                            v.setAlpha(1f);
-                                            AudioPlayerManager.getInstance().stopAndDismiss(activity);
-                                            Toast.makeText(activity, "ניגון השיר הופסק", Toast.LENGTH_SHORT).show();
-                                        })
-                                        .start();
+                                if (reduce) {
+                                    v.setTranslationX(0f);
+                                    v.setAlpha(1f);
+                                    AudioPlayerManager.getInstance().stopAndDismiss(activity);
+                                    Toast.makeText(activity, "ניגון השיר הופסק", Toast.LENGTH_SHORT).show();
+                                } else {
+                                    float exitX = dx > 0 ? v.getWidth() : -v.getWidth();
+                                    v.animate()
+                                            .translationX(exitX)
+                                            .alpha(0f)
+                                            .setDuration(170)
+                                            .withEndAction(() -> {
+                                                v.setTranslationX(0f);
+                                                v.setAlpha(1f);
+                                                AudioPlayerManager.getInstance().stopAndDismiss(activity);
+                                                Toast.makeText(activity, "ניגון השיר הופסק", Toast.LENGTH_SHORT).show();
+                                            })
+                                            .start();
+                                }
                             } else {
-                                v.animate().translationX(0f).alpha(1f).setDuration(150).start();
+                                if (reduce) {
+                                    v.setTranslationX(0f);
+                                    v.setAlpha(1f);
+                                } else {
+                                    v.animate().translationX(0f).alpha(1f).setDuration(160).start();
+                                }
+                            }
+                        } else if (swipeAxis == 2) {
+                            if (reduce) {
+                                v.setTranslationY(0f);
+                                v.setAlpha(1f);
+                            } else {
+                                v.animate().translationY(0f).alpha(1f).setDuration(150).start();
+                            }
+                            if (event.getActionMasked() == MotionEvent.ACTION_UP && dy < -dpToPx(activity, 24)) {
+                                openFullAudioViewer(activity, reduce);
                             }
                         } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
-                            File activeSong = AudioPlayerManager.getInstance().getCurrentFile();
-                            if (activeSong != null && activeSong.exists()) {
-                                Intent i = new Intent(activity, BuiltInViewerActivity.class);
-                                i.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, activeSong.getAbsolutePath());
-                                activity.startActivity(i);
-                            }
+                            openFullAudioViewer(activity, reduce);
                         }
-                        swiping = false;
+                        swipeAxis = 0;
                         return true;
                     }
                 }
@@ -206,8 +260,14 @@ public class MiniAudioBarHelper {
 
         barWrapper.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        parentContainer.addView(barWrapper, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (asOverlay) {
+            FrameLayout.LayoutParams overlayLp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+            hostContainer.addView(barWrapper, overlayLp);
+        } else {
+            hostContainer.addView(barWrapper, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
 
         final Runnable updateProgressOnly = new Runnable() {
             @Override
@@ -215,6 +275,7 @@ public class MiniAudioBarHelper {
                 if (activity.isFinishing() || activity.isDestroyed()) return;
                 AudioPlayerManager mgr = AudioPlayerManager.getInstance();
                 if (barWrapper.getVisibility() == View.VISIBLE && mgr.hasActiveSession()) {
+                    songWavyBar.setAnimationsEnabled(!PrefsManager.isReduceAnimations(activity));
                     songWavyBar.setPlaying(mgr.isPlaying());
                     if (!userScrubbing[0]) {
                         int dur = mgr.getDurationMs();
@@ -228,13 +289,29 @@ public class MiniAudioBarHelper {
             }
         };
 
+        final Runnable updateScrollPadding = () -> {
+            if (scrollableContent == null) return;
+            if (barWrapper.getVisibility() == View.VISIBLE) {
+                int h = barWrapper.getHeight();
+                if (h <= 0) {
+                    h = dpToPx(activity, 94);
+                }
+                scrollableContent.setPadding(basePadLeft, basePadTop, basePadRight, basePadBottom + h);
+            } else {
+                scrollableContent.setPadding(basePadLeft, basePadTop, basePadRight, basePadBottom);
+            }
+        };
+
         final Runnable refreshUi = () -> {
             AudioPlayerManager mgr = AudioPlayerManager.getInstance();
             if (!mgr.hasActiveSession() || mgr.getCurrentFile() == null) {
                 barWrapper.setVisibility(View.GONE);
                 progressHandler.removeCallbacks(updateProgressOnly);
+                updateScrollPadding.run();
                 return;
             }
+            boolean wasHidden = barWrapper.getVisibility() != View.VISIBLE;
+            boolean reduce = PrefsManager.isReduceAnimations(activity);
 
             int theme = PrefsManager.getThemeMode(activity);
             int cardColor = ThemeHelper.getCardColor(activity, theme);
@@ -251,9 +328,9 @@ public class MiniAudioBarHelper {
             int activeTextPrimary = (art != null && !art.isRecycled()) ? pal.textPrimary : defaultTextPrimary;
             int activeTextSecondary = (art != null && !art.isRecycled()) ? pal.textSecondary : defaultTextSecondary;
             int playIconTint = (art != null && !art.isRecycled()) ? pal.playIconTint
-                    : (ColorUtils.calculateLuminance(defaultAccent) > 0.58 ? Color.parseColor("#0F172A") : Color.WHITE);
+                    : ThemeHelper.getOnAccentTextColor(defaultAccent);
 
-            barWrapper.setBackgroundColor(ThemeHelper.getBgColor(activity, theme));
+            barWrapper.setBackgroundColor(Color.TRANSPARENT);
 
             GradientDrawable barBg = new GradientDrawable();
             barBg.setCornerRadius(28f);
@@ -261,12 +338,14 @@ public class MiniAudioBarHelper {
             barBg.setStroke(2, activeAccent);
             bar.setBackground(barBg);
             bar.setTranslationX(0f);
+            bar.setTranslationY(0f);
             bar.setAlpha(1f);
 
             tvTitle.setText(mgr.getCurrentFile().getName());
             tvTitle.setTextColor(activeTextPrimary);
 
             int trackTint = ColorUtils.setAlphaComponent(activeTextSecondary, 75);
+            songWavyBar.setAnimationsEnabled(!reduce);
             songWavyBar.setColors(activeAccent, trackTint, activeAccent);
             songWavyBar.setPlaying(mgr.isPlaying());
             int dur = mgr.getDurationMs();
@@ -294,6 +373,17 @@ public class MiniAudioBarHelper {
             btnPlayPause.setColorFilter(playIconTint);
 
             barWrapper.setVisibility(View.VISIBLE);
+            if (wasHidden) {
+                if (reduce) {
+                    barWrapper.setTranslationY(0f);
+                    barWrapper.setAlpha(1f);
+                } else {
+                    barWrapper.setTranslationY(dpToPx(activity, 28));
+                    barWrapper.setAlpha(0f);
+                    barWrapper.animate().translationY(0f).alpha(1f).setDuration(220).start();
+                }
+            }
+            barWrapper.post(updateScrollPadding);
             progressHandler.removeCallbacks(updateProgressOnly);
             progressHandler.post(updateProgressOnly);
         };
@@ -302,6 +392,20 @@ public class MiniAudioBarHelper {
         AudioPlayerManager.getInstance().addListener(listener);
         refreshUi.run();
         return listener;
+    }
+
+    private static void openFullAudioViewer(Activity activity, boolean reduceAnimations) {
+        File activeSong = AudioPlayerManager.getInstance().getCurrentFile();
+        if (activeSong != null && activeSong.exists()) {
+            Intent i = new Intent(activity, BuiltInViewerActivity.class);
+            i.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, activeSong.getAbsolutePath());
+            activity.startActivity(i);
+            if (reduceAnimations) {
+                activity.overridePendingTransition(0, 0);
+            } else {
+                activity.overridePendingTransition(R.anim.slide_in_bottom, R.anim.hold_stay);
+            }
+        }
     }
 
     private static String formatClock(int ms) {
