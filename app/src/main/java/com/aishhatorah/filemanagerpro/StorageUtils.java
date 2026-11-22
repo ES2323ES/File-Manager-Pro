@@ -635,31 +635,112 @@ public class StorageUtils {
         }
     }
 
-    // השוואת שמות כך שתיקיות ושמות בעברית יופיעו תמיד לפני שמות באנגלית
+    // השוואת שמות כך שמספרים יופיעו ראשונים, אחריהם עברית, ואז אנגלית/אחר — עם השוואה טבעית של מספרים (2 לפני 10)
     public static int compareHebrewFirst(String a, String b) {
         if (a == null) a = "";
         if (b == null) b = "";
-        boolean aHeb = startsWithHebrew(a);
-        boolean bHeb = startsWithHebrew(b);
-        if (aHeb != bHeb) {
-            return aHeb ? -1 : 1;
+        int rankA = nameLeadingScriptRank(a);
+        int rankB = nameLeadingScriptRank(b);
+        if (rankA != rankB) {
+            return Integer.compare(rankA, rankB);
         }
-        if (aHeb) {
-            Collator heCollator = HE_COLLATOR.get();
-            return heCollator != null ? heCollator.compare(a, b) : a.compareToIgnoreCase(b);
+        return compareNaturalText(a, b);
+    }
+
+    private static int nameLeadingScriptRank(String s) {
+        if (s == null) return 2;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '0' && c <= '9') {
+                return 0;
+            }
+            if (Character.isLetter(c)) {
+                return (c >= '\u0590' && c <= '\u05FF') ? 1 : 2;
+            }
         }
-        return a.compareToIgnoreCase(b);
+        return 2;
+    }
+
+    public static boolean startsWithDigit(String s) {
+        return nameLeadingScriptRank(s) == 0;
     }
 
     public static boolean startsWithHebrew(String s) {
-        if (s == null) return false;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (Character.isLetterOrDigit(c)) {
-                return c >= '\u0590' && c <= '\u05FF';
+        return nameLeadingScriptRank(s) == 1;
+    }
+
+    private static int compareNaturalText(String a, String b) {
+        int ia = 0;
+        int ib = 0;
+        int na = a.length();
+        int nb = b.length();
+        Collator heCollator = HE_COLLATOR.get();
+        while (ia < na && ib < nb) {
+            char ca = a.charAt(ia);
+            char cb = b.charAt(ib);
+            boolean da = isAsciiDigit(ca);
+            boolean db = isAsciiDigit(cb);
+            if (da && db) {
+                int ea = ia;
+                while (ea < na && isAsciiDigit(a.charAt(ea))) ea++;
+                int eb = ib;
+                while (eb < nb && isAsciiDigit(b.charAt(eb))) eb++;
+                int numCmp = compareDigitRuns(a, ia, ea, b, ib, eb);
+                if (numCmp != 0) return numCmp;
+                ia = ea;
+                ib = eb;
+                continue;
+            }
+            if (da != db) {
+                return da ? -1 : 1;
+            }
+            int ea = ia;
+            while (ea < na && !isAsciiDigit(a.charAt(ea))) ea++;
+            int eb = ib;
+            while (eb < nb && !isAsciiDigit(b.charAt(eb))) eb++;
+            String sa = a.substring(ia, ea);
+            String sb = b.substring(ib, eb);
+            int saRank = nameLeadingScriptRank(sa);
+            int sbRank = nameLeadingScriptRank(sb);
+            if (saRank != sbRank) {
+                return Integer.compare(saRank, sbRank);
+            }
+            int textCmp = (heCollator != null)
+                    ? heCollator.compare(sa, sb)
+                    : sa.compareToIgnoreCase(sb);
+            if (textCmp == 0) {
+                textCmp = sa.compareToIgnoreCase(sb);
+            }
+            if (textCmp != 0) return textCmp;
+            ia = ea;
+            ib = eb;
+        }
+        return Integer.compare(na - ia, nb - ib);
+    }
+
+    private static boolean isAsciiDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    private static int compareDigitRuns(String a, int sa, int ea, String b, int sb, int eb) {
+        int za = sa;
+        while (za < ea && a.charAt(za) == '0') za++;
+        int zb = sb;
+        while (zb < eb && b.charAt(zb) == '0') zb++;
+        int lenA = ea - za;
+        int lenB = eb - zb;
+        if (lenA != lenB) {
+            return Integer.compare(lenA, lenB);
+        }
+        for (int i = 0; i < lenA; i++) {
+            char ca = a.charAt(za + i);
+            char cb = b.charAt(zb + i);
+            if (ca != cb) {
+                return Character.compare(ca, cb);
             }
         }
-        return false;
+        // בשוויון ערך מספרי (למשל 01 לעומת 1), קצר יותר מופיע קודם
+        return Integer.compare(ea - sa, eb - sb);
     }
 
     public static StorageStat getInternalStorageStat() {
@@ -820,20 +901,47 @@ public class StorageUtils {
             if (cb != null) {
                 cb.onProgress(src.getName(), 0L, totalBytes, doneBefore, totalFiles);
             }
-            byte[] buf = new byte[64 * 1024];
             long copiedBytes = 0L;
             long lastReportMs = 0L;
+            boolean usedFallbackStream = false;
+
             try (FileInputStream fis = new FileInputStream(src);
-                 FileOutputStream fos = new FileOutputStream(target)) {
-                int r;
-                while ((r = fis.read(buf)) != -1) {
-                    fos.write(buf, 0, r);
-                    copiedBytes += r;
+                 FileOutputStream fos = new FileOutputStream(target);
+                 FileChannel inCh = fis.getChannel();
+                 FileChannel outCh = fos.getChannel()) {
+
+                final long chunk = 2L * 1024L * 1024L;
+                while (copiedBytes < totalBytes) {
+                    long count = Math.min(chunk, totalBytes - copiedBytes);
+                    long transferred = inCh.transferTo(copiedBytes, count, outCh);
+                    if (transferred <= 0L) {
+                        usedFallbackStream = true;
+                        break;
+                    }
+                    copiedBytes += transferred;
                     if (cb != null) {
                         long now = System.currentTimeMillis();
                         if (now - lastReportMs >= 80L || copiedBytes >= totalBytes) {
                             lastReportMs = now;
                             cb.onProgress(src.getName(), copiedBytes, totalBytes, doneBefore, totalFiles);
+                        }
+                    }
+                }
+
+                if (usedFallbackStream || copiedBytes < totalBytes) {
+                    inCh.position(copiedBytes);
+                    outCh.position(copiedBytes);
+                    byte[] buf = new byte[512 * 1024];
+                    int r;
+                    while ((r = fis.read(buf)) != -1) {
+                        fos.write(buf, 0, r);
+                        copiedBytes += r;
+                        if (cb != null) {
+                            long now = System.currentTimeMillis();
+                            if (now - lastReportMs >= 80L || copiedBytes >= totalBytes) {
+                                lastReportMs = now;
+                                cb.onProgress(src.getName(), copiedBytes, totalBytes, doneBefore, totalFiles);
+                            }
                         }
                     }
                 }
@@ -906,5 +1014,116 @@ public class StorageUtils {
             index++;
         }
         return candidate;
+    }
+
+    public static boolean ejectRemovableStorageOrOpenSettings(Context context, String targetPath, boolean isSdCard) {
+        if (context == null) return false;
+        FileScanCache.invalidate();
+        try {
+            StorageManager sm = (StorageManager) context.getSystemService(Context.STORAGE_SERVICE);
+            if (sm != null) {
+                String volumeId = resolveRemovableVolumeId(sm, targetPath);
+                if (volumeId != null && !volumeId.isEmpty()) {
+                    try {
+                        java.lang.reflect.Method unmountMethod = StorageManager.class.getMethod("unmount", String.class);
+                        unmountMethod.invoke(sm, volumeId);
+                        return true;
+                    } catch (Throwable ignored) {
+                        // Normal on stock Android without privileged MOUNT_UNMOUNT_FILESYSTEMS
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        openSystemStorageSettings(context, isSdCard);
+        return false;
+    }
+
+    private static String resolveRemovableVolumeId(StorageManager sm, String targetPath) {
+        String normalizedTarget = targetPath == null ? "" : targetPath.replaceAll("/+$", "");
+        try {
+            List<StorageVolume> volumes = sm.getStorageVolumes();
+            for (StorageVolume vol : volumes) {
+                if (vol == null || vol.isPrimary() || !vol.isRemovable()) continue;
+                String volPath = extractStorageVolumePath(vol);
+                String normVol = volPath == null ? "" : volPath.replaceAll("/+$", "");
+                boolean match = !normalizedTarget.isEmpty() && !normVol.isEmpty()
+                        && (normalizedTarget.equals(normVol) || normalizedTarget.startsWith(normVol + "/"));
+                if (match || normalizedTarget.isEmpty()) {
+                    try {
+                        java.lang.reflect.Method getId = StorageVolume.class.getMethod("getId");
+                        Object idObj = getId.invoke(vol);
+                        if (idObj instanceof String && !((String) idObj).isEmpty()) {
+                            return (String) idObj;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            java.lang.reflect.Method getVolumes = StorageManager.class.getMethod("getVolumes");
+            Object listObj = getVolumes.invoke(sm);
+            if (listObj instanceof List<?>) {
+                for (Object vInfo : (List<?>) listObj) {
+                    if (vInfo == null) continue;
+                    String id = (String) vInfo.getClass().getMethod("getId").invoke(vInfo);
+                    Object pathObj = null;
+                    try {
+                        pathObj = vInfo.getClass().getMethod("getPath").invoke(vInfo);
+                    } catch (Throwable ignored) {
+                    }
+                    String volPath = pathObj instanceof File ? ((File) pathObj).getAbsolutePath() : "";
+                    if (!normalizedTarget.isEmpty() && normalizedTarget.equals(volPath.replaceAll("/+$", "")) && id != null) {
+                        return id;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static String extractStorageVolumePath(StorageVolume vol) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            File dir = vol.getDirectory();
+            if (dir != null) return dir.getAbsolutePath();
+        }
+        try {
+            java.lang.reflect.Method m = StorageVolume.class.getMethod("getPath");
+            Object res = m.invoke(vol);
+            if (res instanceof String) return (String) res;
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    public static void openSystemStorageSettings(Context context, boolean isSdCard) {
+        if (context == null) return;
+        String[] actions = isSdCard
+                ? new String[]{
+                android.provider.Settings.ACTION_MEMORY_CARD_SETTINGS,
+                android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS,
+                android.provider.Settings.ACTION_SETTINGS
+        }
+                : new String[]{
+                android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS,
+                android.provider.Settings.ACTION_MEMORY_CARD_SETTINGS,
+                android.provider.Settings.ACTION_SETTINGS
+        };
+        for (String action : actions) {
+            try {
+                Intent i = new Intent(action);
+                if (!(context instanceof android.app.Activity)) {
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                }
+                context.startActivity(i);
+                return;
+            } catch (Throwable ignored) {
+            }
+        }
     }
 }

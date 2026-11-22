@@ -209,90 +209,58 @@ public class ThemedDialogHelper {
             List<String> options,
             MenuSelectionListener listener
     ) {
-        int theme = PrefsManager.getThemeMode(activity);
-        int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
-        int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
-        int accent = ThemeHelper.getAccentColor(activity, theme);
-        boolean dark = ThemeHelper.isDarkSurface(activity, theme);
+        showThemedMenu(activity, null, title, subtitle, options, listener);
+    }
 
-        ScrollView scroll = new ScrollView(activity);
-        LinearLayout outer = new LinearLayout(activity);
-        outer.setOrientation(LinearLayout.VERTICAL);
-        outer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        int hPad = dp(activity, 17);
-        outer.setPadding(hPad, dp(activity, 16), hPad, dp(activity, 14));
-        outer.setBackground(createDialogBackground(activity, theme));
-
-        TextView tvTitle = new TextView(activity);
-        tvTitle.setText(title);
-        tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(ThemeHelper.spScaled(activity, 15.5f));
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        outer.addView(tvTitle);
-
-        if (subtitle != null && !subtitle.isEmpty()) {
-            TextView tvSub = new TextView(activity);
-            tvSub.setText(subtitle);
-            tvSub.setTextColor(textSecondary);
-            tvSub.setTextSize(ThemeHelper.spScaled(activity, 12f));
-            tvSub.setPadding(0, dp(activity, 3), 0, dp(activity, 9));
-            outer.addView(tvSub);
-        } else {
-            tvTitle.setPadding(0, 0, 0, dp(activity, 9));
-        }
-
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setView(scroll)
-                .create();
-
+    public static void showThemedMenu(
+            Activity activity,
+            View anchor,
+            String title,
+            String subtitle,
+            List<String> options,
+            MenuSelectionListener listener
+    ) {
+        if (options == null || options.isEmpty() || listener == null) return;
+        java.util.ArrayList<GlassAnchoredPopoverHelper.OptionItem> items = new java.util.ArrayList<>();
         for (int i = 0; i < options.size(); i++) {
             final int idx = i;
             String label = options.get(i);
-            boolean isDanger = label.contains("מחיקה") || label.contains("מחק");
-
-            Button itemBtn = new Button(activity);
-            itemBtn.setText(label);
-            itemBtn.setAllCaps(false);
-            itemBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-            itemBtn.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
-            itemBtn.setTextSize(ThemeHelper.spScaled(activity, 13.5f));
-            itemBtn.setTypeface(Typeface.DEFAULT_BOLD);
-            itemBtn.setTextColor(isDanger
-                    ? (dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626"))
-                    : textPrimary);
-
-            GradientDrawable itemShape = new GradientDrawable();
-            itemShape.setCornerRadius(dp(activity, 12));
-            itemShape.setColor(isDanger
-                    ? Color.argb(dark ? 34 : 20, 220, 38, 38)
-                    : ColorUtils.setAlphaComponent(accent, dark ? 24 : 12));
-            itemBtn.setBackground(itemShape);
-            itemBtn.setStateListAnimator(null);
-            itemBtn.setMinHeight(0);
-            itemBtn.setMinimumHeight(0);
-            itemBtn.setPadding(dp(activity, 14), dp(activity, 11), dp(activity, 14), dp(activity, 11));
-
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.bottomMargin = dp(activity, 6);
-            itemBtn.setLayoutParams(lp);
-            itemBtn.setOnClickListener(v -> {
-                dialog.dismiss();
-                listener.onSelected(idx);
-            });
-            outer.addView(itemBtn);
+            boolean isDanger = label.contains("מחיקה") || label.contains("מחק") || label.contains("הסרת");
+            boolean isSelected = label.contains("(פעיל)");
+            String cleanLabel = label.replace("  (פעיל)", "").trim();
+            int iconRes = inferMenuIcon(cleanLabel, isDanger);
+            boolean dividerBefore = isDanger && i > 0;
+            items.add(new GlassAnchoredPopoverHelper.OptionItem(
+                    cleanLabel,
+                    null,
+                    iconRes,
+                    isSelected,
+                    isDanger,
+                    dividerBefore,
+                    () -> listener.onSelected(idx)
+            ));
         }
+        GlassAnchoredPopoverHelper.showMenu(activity, anchor, title, subtitle, items, false);
+    }
 
-        Button btnClose = createThemedButton(activity, "סגור", theme, false, false);
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        closeLp.topMargin = dp(activity, 4);
-        btnClose.setLayoutParams(closeLp);
-        btnClose.setOnClickListener(v -> dialog.dismiss());
-        outer.addView(btnClose);
-
-        scroll.addView(outer);
-        dialog.show();
-        applyResponsiveDialogWindow(activity, dialog);
+    private static int inferMenuIcon(String label, boolean isDanger) {
+        if (isDanger) return R.drawable.ic_delete;
+        if (label.contains("שחזר")) return R.drawable.ic_reset;
+        if (label.contains("עורך וידאו")) return R.drawable.ic_video_cutter;
+        if (label.contains("מקור ה-APK") || label.contains("התקן") || label.contains("אפליקציה")) return R.drawable.ic_apps;
+        if (label.contains("תיקייה")) return R.drawable.ic_folder;
+        if (label.contains("פתיחה באמצעות") || label.contains("מערכת")) return R.drawable.ic_settings;
+        if (label.contains("פתיחה")) return R.drawable.ic_visibility;
+        if (label.contains("בחירה מרובה")) return R.drawable.ic_multiselect;
+        if (label.contains("חילוץ") || label.contains("דחיסה") || label.contains("ארכיון")) return R.drawable.ic_zip_archive;
+        if (label.contains("העתקה") || label.contains("גיבוי")) return R.drawable.ic_copy;
+        if (label.contains("העברה") || label.contains("סל המיחזור")) return R.drawable.ic_cut;
+        if (label.contains("שינוי שם")) return R.drawable.ic_edit_pencil;
+        if (label.contains("שיתוף")) return R.drawable.ic_share;
+        if (label.contains("מאפיינים") || label.contains("פרטי")) return R.drawable.ic_info;
+        if (label.contains("מיון") || label.contains("לפי ") || label.contains("סדר")) return R.drawable.ic_sort;
+        if (label.contains("חזרה")) return R.drawable.ic_repeat_all;
+        if (label.contains("טיימר") || label.contains("דקות")) return R.drawable.ic_sleep_timer;
+        return R.drawable.ic_tune;
     }
 }

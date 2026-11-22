@@ -1,5 +1,6 @@
 package com.aishhatorah.filemanagerpro;
 
+import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
@@ -10,6 +11,7 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -17,16 +19,20 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -39,6 +45,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -48,7 +55,9 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.cardview.widget.CardView;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.core.graphics.ColorUtils;
 import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
@@ -135,6 +144,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     private final Set<String> pendingDirCountPaths = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> cachedSizesByPath = new ConcurrentHashMap<>();
     private final Map<String, Long> cachedModifiedByPath = new ConcurrentHashMap<>();
+    private String lastLoadedScopeKey = null;
     private Boolean appliedGridLayout = null;
     private int appliedSpanCount = -1;
 
@@ -142,6 +152,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     private boolean searchBarOpen = false;
 
     private TextView tvHeaderTitle;
+    private ImageButton btnBackTop;
+    private ImageButton btnQuickSearchTop;
+    private ImageButton btnHamburger;
+    private ImageButton btnMultiCancelTop;
+    private ImageButton btnMultiSelectAllTop;
+    private String normalTitleSnapshot = "";
     private HorizontalScrollView breadcrumbScroll;
     private LinearLayout breadcrumbContainer;
     private LinearLayout searchContainer;
@@ -154,7 +170,8 @@ public class FileBrowserActivity extends AppCompatActivity {
     private LinearLayout clipboardBar;
     private TextView tvClipboardStatus;
     private LinearLayout multiSelectBar;
-    private TextView tvMultiCount;
+    private ScrollView multiSelectScroll;
+    private boolean multiSheetExpanded = false;
     private SwipeRefreshLayout swipeRefresh;
     private RecyclerView recyclerView;
     private ProgressBar loadingSpinner;
@@ -166,6 +183,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     private FrameLayout rightFastScrollContainer;
     private View rightFastScrollThumb;
     private boolean isDraggingFastScroll = false;
+    private final Handler fastScrollHideHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideFastScrollRunnable = () -> {
+        if (rightFastScrollContainer != null && !isDraggingFastScroll) {
+            rightFastScrollContainer.setVisibility(View.GONE);
+        }
+    };
 
     private int theme;
     private int bgColor;
@@ -210,9 +233,14 @@ public class FileBrowserActivity extends AppCompatActivity {
         topBar.setPadding(dp(8), dp(8), dp(8), dp(10));
         ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
-        ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
+        btnMultiCancelTop = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_close, textSecondary, "בטל בחירה מרובה", 40, 8, v -> exitMultiSelectMode());
+        btnMultiCancelTop.setVisibility(View.GONE);
+        topBar.addView(btnMultiCancelTop);
+
+        btnBackTop = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> navigateUpOrFinish());
-        topBar.addView(btnBack);
+        topBar.addView(btnBackTop);
 
         tvHeaderTitle = new TextView(this);
         tvHeaderTitle.setText(title);
@@ -226,13 +254,25 @@ public class FileBrowserActivity extends AppCompatActivity {
         titleLp.setMarginEnd(dp(4));
         topBar.addView(tvHeaderTitle, titleLp);
 
-        ImageButton btnQuickSearch = ThemeHelper.createBorderlessSvgButton(
+        btnQuickSearchTop = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_search, accent, "חיפוש", 40, 8, v -> toggleSearchBar(!searchBarOpen));
-        topBar.addView(btnQuickSearch);
+        topBar.addView(btnQuickSearchTop);
 
-        ImageButton btnHamburger = ThemeHelper.createBorderlessSvgButton(
+        btnHamburger = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_menu_hamburger, accent, "תפריט", 40, 8, v -> showHamburgerMenu());
         topBar.addView(btnHamburger);
+
+        btnMultiSelectAllTop = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_multiselect, accent, "בחר הכל", 40, 8, v -> {
+                    if (selectedPaths.size() == displayedFiles.size()) {
+                        exitMultiSelectMode();
+                    } else {
+                        for (File f : displayedFiles) selectedPaths.add(f.getAbsolutePath());
+                        updateMultiSelectUi();
+                    }
+                });
+        btnMultiSelectAllTop.setVisibility(View.GONE);
+        topBar.addView(btnMultiSelectAllTop);
 
         root.addView(topBar);
 
@@ -258,7 +298,8 @@ public class FileBrowserActivity extends AppCompatActivity {
         searchInputRow.setGravity(Gravity.CENTER_VERTICAL);
 
         etSearch = new EditText(this);
-        etSearch.setHint("");
+        etSearch.setHint("חיפוש קבצים ותיקיות...");
+        etSearch.setHintTextColor(textSecondary);
         etSearch.setSingleLine(true);
         etSearch.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         etSearch.setTextColor(textPrimary);
@@ -363,37 +404,69 @@ public class FileBrowserActivity extends AppCompatActivity {
         appsTabBar.addView(btnToggleSystemApps, sysLp);
         root.addView(appsTabBar);
 
-        // סרגל הדבקה
+        // באנר הדבקה זכוכיתי צף ומעוגל (העתקה / גזירה)
+        int onAccent = ThemeHelper.getOnAccentTextColor(accent);
+        boolean isDarkClip = ThemeHelper.isDarkSurface(this, theme);
         clipboardBar = new LinearLayout(this);
         clipboardBar.setOrientation(LinearLayout.HORIZONTAL);
         clipboardBar.setGravity(Gravity.CENTER_VERTICAL);
-        clipboardBar.setBackgroundColor(accent);
-        clipboardBar.setPadding(dp(12), dp(6), dp(12), dp(6));
+        GradientDrawable clipBg = new GradientDrawable();
+        clipBg.setCornerRadius(dp(16));
+        int tintedClipSurface = ColorUtils.blendARGB(cardColor, accent, isDarkClip ? 0.22f : 0.14f);
+        clipBg.setColor(ColorUtils.setAlphaComponent(tintedClipSurface, isDarkClip ? 235 : 242));
+        clipBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 145));
+        clipboardBar.setBackground(clipBg);
+        clipboardBar.setElevation(dp(4));
+        clipboardBar.setPadding(dp(12), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams clipBarLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clipBarLp.setMargins(dp(12), dp(4), dp(12), dp(6));
+        clipboardBar.setLayoutParams(clipBarLp);
         clipboardBar.setVisibility(View.GONE);
 
+        ImageView ivClipIcon = new ImageView(this);
+        ivClipIcon.setImageResource(R.drawable.ic_paste);
+        ivClipIcon.setColorFilter(accent);
+        LinearLayout.LayoutParams ciLp = new LinearLayout.LayoutParams(dp(20), dp(20));
+        ciLp.setMarginEnd(dp(8));
+        clipboardBar.addView(ivClipIcon, ciLp);
+
         tvClipboardStatus = new TextView(this);
-        tvClipboardStatus.setTextColor(Color.WHITE);
+        tvClipboardStatus.setTextColor(textPrimary);
+        tvClipboardStatus.setTypeface(Typeface.DEFAULT_BOLD);
         tvClipboardStatus.setTextSize(12.5f);
+        tvClipboardStatus.setMaxLines(1);
+        tvClipboardStatus.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         clipboardBar.addView(tvClipboardStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button btnPasteHere = new Button(this);
         btnPasteHere.setText("הדבק כאן");
         btnPasteHere.setAllCaps(false);
-        btnPasteHere.setTextColor(Color.WHITE);
+        btnPasteHere.setTextSize(12f);
+        btnPasteHere.setTextColor(onAccent);
         btnPasteHere.setTypeface(Typeface.DEFAULT_BOLD);
-        btnPasteHere.setBackgroundColor(Color.TRANSPARENT);
+        btnPasteHere.setMinHeight(0);
+        btnPasteHere.setMinimumHeight(0);
+        btnPasteHere.setPadding(dp(14), dp(6), dp(14), dp(6));
+        GradientDrawable pastePillBg = new GradientDrawable();
+        pastePillBg.setCornerRadius(dp(12));
+        pastePillBg.setColor(accent);
+        btnPasteHere.setBackground(pastePillBg);
+        btnPasteHere.setStateListAnimator(null);
+        btnPasteHere.setElevation(0f);
+        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        phLp.setMarginStart(dp(6));
+        phLp.setMarginEnd(dp(4));
+        btnPasteHere.setLayoutParams(phLp);
         btnPasteHere.setOnClickListener(v -> executePasteHere());
         clipboardBar.addView(btnPasteHere);
 
-        Button btnCancelClip = new Button(this);
-        btnCancelClip.setText("ביטול");
-        btnCancelClip.setAllCaps(false);
-        btnCancelClip.setTextColor(Color.WHITE);
-        btnCancelClip.setBackgroundColor(Color.TRANSPARENT);
-        btnCancelClip.setOnClickListener(v -> {
-            clipboardFiles.clear();
-            updateClipboardBar();
-        });
+        ImageButton btnCancelClip = ThemeHelper.createBorderlessSvgButton(
+                this, R.drawable.ic_close, textSecondary, "בטל הדבקה", 34, 7, v -> {
+                    clipboardFiles.clear();
+                    updateClipboardBar();
+                });
         clipboardBar.addView(btnCancelClip);
         root.addView(clipboardBar);
 
@@ -466,6 +539,116 @@ public class FileBrowserActivity extends AppCompatActivity {
         adapter = new FileAdapter();
         installedAdapter = new InstalledAppsAdapter();
         recyclerView.setAdapter(adapter);
+
+        ItemTouchHelper swipeToMultiHelper = new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(
+                0, ItemTouchHelper.LEFT | ItemTouchHelper.RIGHT) {
+            private final Paint pillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            private boolean crossedThreshold = false;
+            private int lastSwipingPos = RecyclerView.NO_POSITION;
+
+            @Override
+            public int getSwipeDirs(@NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder vh) {
+                if (showingInstalledAppsTab || multiSelectMode || MODE_RECYCLE_BIN.equals(currentMode)) {
+                    return 0;
+                }
+                int pos = vh.getAdapterPosition();
+                if (pos < 0 || pos >= displayedFiles.size()) return 0;
+                return super.getSwipeDirs(rv, vh);
+            }
+
+            @Override
+            public float getSwipeThreshold(@NonNull RecyclerView.ViewHolder viewHolder) {
+                return 0.14f;
+            }
+
+            @Override
+            public float getSwipeEscapeVelocity(float defaultValue) {
+                return defaultValue * 0.55f;
+            }
+
+            @Override
+            public boolean onMove(@NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder vh, @NonNull RecyclerView.ViewHolder target) {
+                return false;
+            }
+
+            @Override
+            public void onChildDraw(@NonNull Canvas c, @NonNull RecyclerView rv, @NonNull RecyclerView.ViewHolder vh,
+                                    float dX, float dY, int actionState, boolean isCurrentlyActive) {
+                if (actionState != ItemTouchHelper.ACTION_STATE_SWIPE) {
+                    super.onChildDraw(c, rv, vh, dX, dY, actionState, isCurrentlyActive);
+                    return;
+                }
+                View itemView = vh.itemView;
+                int pos = vh.getAdapterPosition();
+                if (pos != lastSwipingPos) {
+                    lastSwipingPos = pos;
+                    crossedThreshold = false;
+                }
+                float width = Math.max(1f, rv.getWidth());
+                float triggerDist = width * 0.14f;
+                float maxShift = width * 0.24f;
+                float absDx = Math.abs(dX);
+                float damped = Math.signum(dX) * Math.min(absDx * 0.68f, maxShift);
+
+                if (isCurrentlyActive) {
+                    boolean nowCrossed = absDx >= triggerDist;
+                    if (nowCrossed && !crossedThreshold) {
+                        crossedThreshold = true;
+                        itemView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                    } else if (!nowCrossed && crossedThreshold) {
+                        crossedThreshold = false;
+                    }
+                } else if (absDx == 0f) {
+                    crossedThreshold = false;
+                }
+
+                if (Math.abs(damped) > dp(4)) {
+                    float progress = Math.min(1f, absDx / triggerDist);
+                    float centerY = (itemView.getTop() + itemView.getBottom()) * 0.5f;
+                    float pillRadius = dp(18);
+                    float iconCenterX = dX > 0
+                            ? Math.min(itemView.getLeft() + Math.abs(damped) * 0.5f, itemView.getLeft() + dp(34))
+                            : Math.max(itemView.getRight() - Math.abs(damped) * 0.5f, itemView.getRight() - dp(34));
+
+                    pillPaint.setColor(ColorUtils.setAlphaComponent(accent, Math.round(55 + 185 * progress)));
+                    RectF pillRect = new RectF(
+                            iconCenterX - dp(20), centerY - dp(16),
+                            iconCenterX + dp(20), centerY + dp(16));
+                    c.drawRoundRect(pillRect, pillRadius, pillRadius, pillPaint);
+
+                    Drawable icon = ContextCompat.getDrawable(FileBrowserActivity.this,
+                            progress >= 0.99f ? R.drawable.ic_check : R.drawable.ic_multiselect);
+                    if (icon != null) {
+                        icon = icon.mutate();
+                        icon.setTint(ThemeHelper.getOnAccentTextColor(accent));
+                        int half = Math.round(dp(9) * (0.75f + 0.25f * progress));
+                        icon.setBounds(
+                                Math.round(iconCenterX - half), Math.round(centerY - half),
+                                Math.round(iconCenterX + half), Math.round(centerY + half));
+                        icon.setAlpha(Math.round(140 + 115 * progress));
+                        icon.draw(c);
+                    }
+                }
+
+                super.onChildDraw(c, rv, vh, damped, dY, actionState, isCurrentlyActive);
+            }
+
+            @Override
+            public void onSwiped(@NonNull RecyclerView.ViewHolder vh, int direction) {
+                crossedThreshold = false;
+                lastSwipingPos = RecyclerView.NO_POSITION;
+                vh.itemView.setTranslationX(0f);
+                int pos = vh.getAdapterPosition();
+                if (pos >= 0 && pos < displayedFiles.size()) {
+                    File f = displayedFiles.get(pos);
+                    enterMultiSelectMode(f);
+                } else {
+                    adapter.notifyDataSetChanged();
+                }
+            }
+        });
+        swipeToMultiHelper.attachToRecyclerView(recyclerView);
+
         innerSwipeContent.addView(recyclerView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -487,7 +670,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         multiSelectBar.setVisibility(View.GONE);
         root.addView(multiSelectBar);
 
-        miniAudioListener = MiniAudioBarHelper.attach(this, root);
+        miniAudioListener = MiniAudioBarHelper.attachOverlay(this, listStageFrame, recyclerView);
 
         setContentView(root);
 
@@ -530,7 +713,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         b.setBackground(gd);
         b.setStateListAnimator(null);
         b.setElevation(0f);
-        b.setTextColor(active ? (theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE) : textPrimary);
+        b.setTextColor(active ? ThemeHelper.getOnAccentTextColor(accent) : textPrimary);
     }
 
     private void refreshAppsTabUi() {
@@ -614,94 +797,148 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private LinearLayout buildMultiSelectBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.VERTICAL);
-        bar.setBackgroundColor(ThemeHelper.getTopBarColor(this, theme));
-        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
+        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        float topCorner = dp(24);
+        GradientDrawable sheetBg = new GradientDrawable();
+        sheetBg.setCornerRadii(new float[]{topCorner, topCorner, topCorner, topCorner, 0f, 0f, 0f, 0f});
+        int surfaceTint = ColorUtils.blendARGB(ThemeHelper.getTopBarColor(this, theme), accent, isDark ? 0.08f : 0.05f);
+        sheetBg.setColor(ColorUtils.setAlphaComponent(surfaceTint, isDark ? 242 : 246));
+        sheetBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 95));
+        sheet.setBackground(sheetBg);
+        sheet.setElevation(dp(12));
+        sheet.setPadding(dp(12), dp(8), dp(12), dp(12));
 
-        LinearLayout topInfo = new LinearLayout(this);
-        topInfo.setOrientation(LinearLayout.HORIZONTAL);
-        topInfo.setGravity(Gravity.CENTER_VERTICAL);
+        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה עליה פותחת/מקפלת את שני השורות
+        FrameLayout handleWrap = new FrameLayout(this);
+        handleWrap.setPadding(0, dp(2), 0, dp(8));
+        View dragPill = new View(this);
+        GradientDrawable pillBg = new GradientDrawable();
+        pillBg.setCornerRadius(dp(3));
+        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
+        dragPill.setBackground(pillBg);
+        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
+        handleWrap.setOnClickListener(v -> toggleMultiSheetExpanded());
+        sheet.addView(handleWrap, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        tvMultiCount = new TextView(this);
-        tvMultiCount.setTextColor(textPrimary);
-        tvMultiCount.setTypeface(Typeface.DEFAULT_BOLD);
-        tvMultiCount.setTextSize(13f);
-        topInfo.addView(tvMultiCount, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        multiSelectScroll = new ScrollView(this);
+        multiSelectScroll.setVerticalScrollBarEnabled(false);
+        multiSelectScroll.setOverScrollMode(View.OVER_SCROLL_ALWAYS);
 
-        Button btnSelectAll = new Button(this);
-        btnSelectAll.setText("בחר הכל");
-        btnSelectAll.setTextColor(accent);
-        btnSelectAll.setBackgroundColor(Color.TRANSPARENT);
-        btnSelectAll.setMinHeight(0);
-        btnSelectAll.setMinimumHeight(0);
-        btnSelectAll.setOnClickListener(v -> {
-            if (selectedPaths.size() == displayedFiles.size()) {
-                selectedPaths.clear();
-            } else {
-                for (File f : displayedFiles) selectedPaths.add(f.getAbsolutePath());
-            }
-            updateMultiSelectUi();
-        });
-        topInfo.addView(btnSelectAll);
+        LinearLayout rowsHolder = new LinearLayout(this);
+        rowsHolder.setOrientation(LinearLayout.VERTICAL);
+        rowsHolder.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
-        Button btnCancel = new Button(this);
-        btnCancel.setText("ביטול");
-        btnCancel.setTextColor(textSecondary);
-        btnCancel.setBackgroundColor(Color.TRANSPARENT);
-        btnCancel.setMinHeight(0);
-        btnCancel.setMinimumHeight(0);
-        btnCancel.setOnClickListener(v -> exitMultiSelectMode());
-        topInfo.addView(btnCancel);
-        bar.addView(topInfo);
+        // שורה 1: 3 כרטיסיות שוות
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
+        row1.setWeightSum(3f);
+        row1.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        row1.addView(createGeminiMultiCard("העתק", R.drawable.ic_copy, accent, v -> multiCopy(false)));
+        row1.addView(createGeminiMultiCard("העבר", R.drawable.ic_cut, accent, v -> multiCopy(true)));
+        row1.addView(createGeminiMultiCard("שתף", R.drawable.ic_share, accent, v -> multiShare()));
+        rowsHolder.addView(row1, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        HorizontalScrollView actionsScroll = new HorizontalScrollView(this);
-        actionsScroll.setHorizontalScrollBarEnabled(false);
-        LinearLayout actionsRow = new LinearLayout(this);
-        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        // שורה 2: 3 כרטיסיות שוות
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        row2.setWeightSum(3f);
+        row2.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        row2.addView(createGeminiMultiCard("דחיסה", R.drawable.ic_compress_chip, accent,
+                v -> promptMultiFormatCompress(getSelectedFilesList())));
+        row2.addView(createGeminiMultiCard("שינוי שם", R.drawable.ic_edit_pencil, accent,
+                v -> promptBatchRename(getSelectedFilesList())));
+        row2.addView(createGeminiMultiCard("מחק", R.drawable.ic_delete, Color.parseColor("#EF4444"),
+                v -> multiDelete()));
+        LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r2Lp.topMargin = dp(8);
+        rowsHolder.addView(row2, r2Lp);
 
-        actionsRow.addView(createMultiActionChip("העתק", R.drawable.ic_copy, v -> multiCopy(false)));
-        actionsRow.addView(createMultiActionChip("העבר", R.drawable.ic_cut, v -> multiCopy(true)));
-        actionsRow.addView(createMultiActionChip("שתף", R.drawable.ic_share, v -> multiShare()));
-        actionsRow.addView(createMultiActionChip("דחיסה", R.drawable.ic_compress_chip, v -> promptMultiFormatCompress(getSelectedFilesList())));
-        actionsRow.addView(createMultiActionChip("שינוי שם אצווה", R.drawable.ic_edit_pencil, v -> promptBatchRename(getSelectedFilesList())));
-        actionsRow.addView(createMultiActionChip("מחק", R.drawable.ic_delete, v -> multiDelete()));
-
-        actionsScroll.addView(actionsRow);
-        bar.addView(actionsScroll);
-        return bar;
+        multiSelectScroll.addView(rowsHolder, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב מלא
+        sheet.addView(multiSelectScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(100)));
+        return sheet;
     }
 
-    private Button createMultiActionChip(String label, int iconRes, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setAllCaps(false);
-        b.setTextSize(11.5f);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setTextColor(textPrimary);
-        Drawable d = ContextCompat.getDrawable(this, iconRes);
-        if (d != null) {
-            d = d.mutate();
-            int iconSz = dp(17);
-            d.setBounds(0, 0, iconSz, iconSz);
-            d.setTint(accent);
-            b.setCompoundDrawablesRelative(d, null, null, null);
-        }
-        b.setCompoundDrawablePadding(dp(4));
+    private LinearLayout createGeminiMultiCard(String label, int iconRes, int iconTint, View.OnClickListener l) {
+        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER);
+        card.setPadding(dp(6), dp(12), dp(6), dp(12));
+
         GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(9));
-        gd.setColor(cardColor);
-        gd.setStroke(Math.max(1, dp(1)), divider);
-        b.setBackground(gd);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        b.setPadding(dp(10), dp(6), dp(10), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMarginEnd(dp(6));
-        b.setLayoutParams(lp);
-        b.setOnClickListener(l);
-        return b;
+        gd.setCornerRadius(dp(16));
+        gd.setColor(ColorUtils.setAlphaComponent(cardColor, isDark ? 210 : 230));
+        gd.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(iconTint, 70));
+        card.setBackground(gd);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(82), 1f);
+        lp.setMarginStart(dp(4));
+        lp.setMarginEnd(dp(4));
+        card.setLayoutParams(lp);
+
+        FrameLayout iconBadge = new FrameLayout(this);
+        GradientDrawable badgeBg = new GradientDrawable();
+        badgeBg.setShape(GradientDrawable.OVAL);
+        badgeBg.setColor(ColorUtils.setAlphaComponent(iconTint, isDark ? 36 : 26));
+        iconBadge.setBackground(badgeBg);
+
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(iconRes);
+        iv.setColorFilter(iconTint);
+        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER);
+        iconBadge.addView(iv, ivLp);
+        card.addView(iconBadge, new LinearLayout.LayoutParams(dp(36), dp(36)));
+
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTextColor(textPrimary);
+        tv.setTextSize(12f);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setGravity(Gravity.CENTER);
+        tv.setMaxLines(1);
+        tv.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tvLp.topMargin = dp(6);
+        card.addView(tv, tvLp);
+
+        card.setOnClickListener(l);
+        return card;
+    }
+
+    private void toggleMultiSheetExpanded() {
+        if (multiSelectScroll == null) return;
+        multiSheetExpanded = !multiSheetExpanded;
+        int targetH = dp(multiSheetExpanded ? 178 : 100);
+        if (PrefsManager.isReduceAnimations(this)) {
+            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+            lp.height = targetH;
+            multiSelectScroll.setLayoutParams(lp);
+            if (!multiSheetExpanded) multiSelectScroll.scrollTo(0, 0);
+            return;
+        }
+        int startH = multiSelectScroll.getHeight() > 0 ? multiSelectScroll.getHeight() : multiSelectScroll.getLayoutParams().height;
+        ValueAnimator va = ValueAnimator.ofInt(startH, targetH);
+        va.setDuration(220L);
+        va.setInterpolator(new DecelerateInterpolator());
+        va.addUpdateListener(anim -> {
+            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+            lp.height = (int) anim.getAnimatedValue();
+            multiSelectScroll.setLayoutParams(lp);
+        });
+        va.start();
+        if (!multiSheetExpanded) {
+            multiSelectScroll.smoothScrollTo(0, 0);
+        }
     }
 
     private List<File> getSelectedFilesList() {
@@ -713,123 +950,229 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void enterMultiSelectMode(File initial) {
+        boolean wasActive = multiSelectMode;
+        if (!wasActive && tvHeaderTitle != null && tvHeaderTitle.getText() != null) {
+            normalTitleSnapshot = tvHeaderTitle.getText().toString();
+        }
         multiSelectMode = true;
         selectedPaths.clear();
         if (initial != null) selectedPaths.add(initial.getAbsolutePath());
+        multiSheetExpanded = false;
+        if (multiSelectScroll != null) {
+            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+            lp.height = dp(100);
+            multiSelectScroll.setLayoutParams(lp);
+            multiSelectScroll.scrollTo(0, 0);
+        }
         updateMultiSelectUi();
+        if (!wasActive) {
+            playMultiSelectSheetEntranceAndPeek();
+        }
+    }
+
+    private void playMultiSelectSheetEntranceAndPeek() {
+        if (multiSelectBar == null || multiSelectScroll == null) return;
+        if (PrefsManager.isReduceAnimations(this)) {
+            multiSelectBar.setTranslationY(0f);
+            multiSelectBar.setAlpha(1f);
+            multiSelectScroll.scrollTo(0, 0);
+            return;
+        }
+        multiSelectBar.setTranslationY(dp(115));
+        multiSelectBar.setAlpha(0f);
+        multiSelectBar.animate()
+                .translationY(0f)
+                .alpha(1f)
+                .setDuration(230L)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> {
+                    if (!multiSelectMode || multiSelectScroll == null) return;
+                    // קפיצה עדינה כלפי מטה וחזרה למעלה כדי להמחיש שקיימת שורה שנייה מתחת
+                    int peekTarget = dp(58);
+                    ValueAnimator down = ValueAnimator.ofInt(0, peekTarget);
+                    down.setDuration(220L);
+                    down.setInterpolator(new DecelerateInterpolator());
+                    down.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                    down.addListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            if (multiSelectScroll == null) return;
+                            ValueAnimator back = ValueAnimator.ofInt(peekTarget, 0);
+                            back.setDuration(260L);
+                            back.setStartDelay(90L);
+                            back.setInterpolator(new DecelerateInterpolator());
+                            back.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                            back.start();
+                        }
+                    });
+                    down.start();
+                })
+                .start();
     }
 
     private void exitMultiSelectMode() {
+        if (!multiSelectMode) return;
         multiSelectMode = false;
         selectedPaths.clear();
         multiSelectBar.setVisibility(View.GONE);
+        syncTopBarForMultiSelectMode();
+        if (tvHeaderTitle != null) {
+            tvHeaderTitle.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            if (!normalTitleSnapshot.isEmpty()) {
+                tvHeaderTitle.setText(normalTitleSnapshot);
+            }
+        }
         adapter.notifyDataSetChanged();
     }
 
     private void updateMultiSelectUi() {
         if (!multiSelectMode) {
             multiSelectBar.setVisibility(View.GONE);
+            syncTopBarForMultiSelectMode();
             return;
         }
         multiSelectBar.setVisibility(View.VISIBLE);
-        tvMultiCount.setText("נבחרו " + selectedPaths.size() + " פריטים");
+        syncTopBarForMultiSelectMode();
+        if (tvHeaderTitle != null) {
+            tvHeaderTitle.setGravity(Gravity.CENTER);
+            tvHeaderTitle.setText("נבחרו " + selectedPaths.size() + " פריטים");
+        }
+        if (btnMultiSelectAllTop != null) {
+            boolean allSelected = !displayedFiles.isEmpty() && selectedPaths.size() >= displayedFiles.size();
+            btnMultiSelectAllTop.setColorFilter(allSelected ? accent : textSecondary);
+        }
         adapter.notifyDataSetChanged();
     }
 
-    // ==================== תפריט המבורגר מרכזי (סעיפים 4, 5, 26, 31) ====================
+    private void syncTopBarForMultiSelectMode() {
+        if (btnBackTop != null) btnBackTop.setVisibility(multiSelectMode ? View.GONE : View.VISIBLE);
+        if (btnQuickSearchTop != null) btnQuickSearchTop.setVisibility(multiSelectMode ? View.GONE : View.VISIBLE);
+        if (btnHamburger != null) btnHamburger.setVisibility(multiSelectMode ? View.GONE : View.VISIBLE);
+        if (btnMultiCancelTop != null) btnMultiCancelTop.setVisibility(multiSelectMode ? View.VISIBLE : View.GONE);
+        if (btnMultiSelectAllTop != null) btnMultiSelectAllTop.setVisibility(multiSelectMode ? View.VISIBLE : View.GONE);
+    }
+
+    // ==================== תפריט המבורגר כווילון צד זכוכיתי ====================
     private void showHamburgerMenu() {
+        List<GlassSideDrawerHelper.DrawerItem> items = new ArrayList<>();
         if (showingInstalledAppsTab) {
-            ThemedDialogHelper.showThemedMenu(
-                    this,
-                    "אפשרויות אפליקציות מותקנות",
-                    null,
-                    Arrays.asList(
-                            "חיפוש אפליקציה",
-                            includeSystemApps ? "הסתר אפליקציות מערכת" : "הצג גם אפליקציות מערכת",
-                            "רענן רשימה"
-                    ),
-                    idx -> {
-                        if (idx == 0) toggleSearchBar(true);
-                        else if (idx == 1) {
-                            includeSystemApps = !includeSystemApps;
-                            refreshAppsTabUi();
-                            filterCurrentList(etSearch.getText().toString());
-                        } else {
-                            loadInstalledAppsAsync();
-                        }
-                    }
-            );
+            items.add(GlassSideDrawerHelper.DrawerItem.action(
+                    includeSystemApps ? "הסתר אפליקציות מערכת" : "הצג גם אפליקציות מערכת",
+                    R.drawable.ic_apps,
+                    () -> {
+                        includeSystemApps = !includeSystemApps;
+                        refreshAppsTabUi();
+                        filterCurrentList(etSearch.getText().toString());
+                    }));
+            items.add(GlassSideDrawerHelper.DrawerItem.action(
+                    "רענן רשימה",
+                    R.drawable.ic_reset,
+                    this::loadInstalledAppsAsync));
+            GlassSideDrawerHelper.show(this, btnHamburger, "אפליקציות מותקנות", items, false);
             return;
         }
 
-        final List<String> opts = new ArrayList<>();
-        opts.add("חיפוש קבצים");
-        opts.add("מיון לפי (" + currentSortNameHe() + ")");
+        int curSort = PrefsManager.getSortMode(this);
+        boolean curAsc = PrefsManager.isSortAscending(this);
+        List<GlassSideDrawerHelper.SubOption> sortSubs = Arrays.asList(
+                new GlassSideDrawerHelper.SubOption("לפי שם (מספרים ועברית תחילה)", curSort == PrefsManager.SORT_NAME, () -> {
+                    PrefsManager.setSortMode(this, PrefsManager.SORT_NAME);
+                    loadFilesForCurrentMode(false);
+                }),
+                new GlassSideDrawerHelper.SubOption("לפי תאריך יצירה", curSort == PrefsManager.SORT_CREATED, () -> {
+                    PrefsManager.setSortMode(this, PrefsManager.SORT_CREATED);
+                    loadFilesForCurrentMode(false);
+                }),
+                new GlassSideDrawerHelper.SubOption("לפי תאריך שינוי", curSort == PrefsManager.SORT_DATE, () -> {
+                    PrefsManager.setSortMode(this, PrefsManager.SORT_DATE);
+                    loadFilesForCurrentMode(false);
+                }),
+                new GlassSideDrawerHelper.SubOption("לפי גודל", curSort == PrefsManager.SORT_SIZE, () -> {
+                    PrefsManager.setSortMode(this, PrefsManager.SORT_SIZE);
+                    loadFilesForCurrentMode(false);
+                }),
+                new GlassSideDrawerHelper.SubOption("לפי סוג קובץ", curSort == PrefsManager.SORT_TYPE, () -> {
+                    PrefsManager.setSortMode(this, PrefsManager.SORT_TYPE);
+                    loadFilesForCurrentMode(false);
+                })
+        );
+        items.add(GlassSideDrawerHelper.DrawerItem.expandable(
+                "מיון לפי",
+                currentSortNameHe() + (curAsc ? " • עולה" : " • יורד"),
+                R.drawable.ic_sort,
+                sortSubs,
+                curAsc ? "החלף לסדר יורד" : "החלף לסדר עולה",
+                () -> {
+                    PrefsManager.setSortAscending(this, !curAsc);
+                    loadFilesForCurrentMode(false);
+                }
+        ));
+
         boolean grid = PrefsManager.isGridLayoutForMode(this, currentMode);
-        opts.add(grid ? "מעבר לתצוגת רשימה" : "מעבר לתצוגת רשת");
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                grid ? "תצוגת רשימה" : "תצוגת רשת",
+                R.drawable.ic_folder,
+                () -> {
+                    PrefsManager.setGridLayoutForMode(this, currentMode, !grid);
+                    applyFolderLayoutMode();
+                    adapter.notifyDataSetChanged();
+                    recyclerView.post(this::syncRightFastScrollerFromRecycler);
+                }));
 
         if (isSupportsLinearOrFolderToggle()) {
             boolean linear = isEffectiveLinearCategoryView();
-            opts.add(linear ? "תצוגה מקובצת לפי תיקיות" : "תצוגה ליניארית (כל הקבצים)");
-        }
-        opts.add(multiSelectMode ? "סיום בחירה מרובה" : "בחירה מרובה (העתקה / שיתוף / דחיסה / מחיקה)");
-
-        if (isDirectoryMode()) {
-            opts.add("תיקייה חדשה");
-            opts.add("קובץ חדש (עורך קוד וטקסט)");
-            if (!clipboardFiles.isEmpty()) {
-                opts.add("הדבק לכאן (" + clipboardFiles.size() + " פריטים)");
-            }
-        }
-        if (MODE_RECENT.equals(currentMode)) {
-            opts.add("ניקוי רשימת קבצים חדשים");
-        }
-        if (MODE_RECYCLE_BIN.equals(currentMode)) {
-            opts.add("רוקן את כל סל המיחזור");
-        }
-
-        ThemedDialogHelper.showThemedMenu(
-                this,
-                "אפשרויות תיקייה",
-                currentDir != null ? currentDir.getName() : baseCategoryTitle,
-                opts,
-                which -> {
-                    String chosen = opts.get(which);
-                    if (chosen.startsWith("חיפוש")) {
-                        toggleSearchBar(true);
-                    } else if (chosen.startsWith("מיון")) {
-                        showQuickSortMenu();
-                    } else if (chosen.startsWith("מעבר לתצוגת")) {
-                        PrefsManager.setGridLayoutForMode(this, currentMode, !grid);
-                        applyFolderLayoutMode();
-                        adapter.notifyDataSetChanged();
-                        recyclerView.post(this::syncRightFastScrollerFromRecycler);
-                    } else if (chosen.startsWith("תצוגה מקובצת") || chosen.startsWith("תצוגה ליניארית")) {
+            items.add(GlassSideDrawerHelper.DrawerItem.action(
+                    linear ? "תצוגה מקובצת לפי תיקיות" : "תצוגה ליניארית (כל הקבצים)",
+                    R.drawable.ic_documents,
+                    () -> {
                         boolean nextLinear = !isEffectiveLinearCategoryView();
                         PrefsManager.setCategoryLinearView(this, currentMode, nextLinear);
                         selectedCategoryFolder = null;
                         loadFilesForCurrentMode(false);
-                    } else if (chosen.startsWith("בחירה מרובה")) {
-                        enterMultiSelectMode(null);
-                    } else if (chosen.startsWith("סיום בחירה")) {
-                        exitMultiSelectMode();
-                    } else if (chosen.equals("תיקייה חדשה")) {
-                        promptCreateFolder();
-                    } else if (chosen.startsWith("קובץ חדש")) {
-                        promptCreateNewFile();
-                    } else if (chosen.startsWith("הדבק לכאן")) {
-                        executePasteHere();
-                    } else if (chosen.startsWith("ניקוי רשימת")) {
+                    }));
+        }
+
+        items.add(GlassSideDrawerHelper.DrawerItem.action(
+                multiSelectMode ? "סיום בחירה מרובה" : "בחירה מרובה",
+                R.drawable.ic_multiselect,
+                () -> {
+                    if (multiSelectMode) exitMultiSelectMode();
+                    else enterMultiSelectMode(null);
+                }));
+
+        if (isDirectoryMode() && currentDir != null) {
+            items.add(GlassSideDrawerHelper.DrawerItem.action(
+                    "חדש",
+                    R.drawable.ic_add,
+                    this::promptNewItemDialog));
+            if (!clipboardFiles.isEmpty()) {
+                items.add(GlassSideDrawerHelper.DrawerItem.action(
+                        "הדבק לכאן (" + clipboardFiles.size() + " פריטים)",
+                        R.drawable.ic_paste,
+                        this::executePasteHere));
+            }
+        }
+        if (MODE_RECENT.equals(currentMode)) {
+            items.add(GlassSideDrawerHelper.DrawerItem.destructive(
+                    "ניקוי רשימת קבצים חדשים",
+                    R.drawable.ic_delete,
+                    () -> {
                         PrefsManager.setRecentClearedTimestamp(this, System.currentTimeMillis());
                         FileScanCache.clearRecentCacheNow();
                         allLoadedFiles.clear();
                         filterCurrentList(etSearch.getText().toString());
                         Toast.makeText(this, "רשימת הקבצים החדשים נוקתה", Toast.LENGTH_SHORT).show();
-                    } else if (chosen.startsWith("רוקן את כל")) {
-                        confirmEmptyRecycleBinTwoStep();
-                    }
-                }
-        );
+                    }));
+        }
+        if (MODE_RECYCLE_BIN.equals(currentMode)) {
+            items.add(GlassSideDrawerHelper.DrawerItem.destructive(
+                    "רוקן את כל סל המיחזור",
+                    R.drawable.ic_delete,
+                    this::confirmEmptyRecycleBinTwoStep));
+        }
+
+        String subTitle = currentDir != null ? currentDir.getName() : baseCategoryTitle;
+        GlassSideDrawerHelper.show(this, btnHamburger, subTitle, items, false);
     }
 
     private String currentSortNameHe() {
@@ -839,38 +1182,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (s == PrefsManager.SORT_CREATED) return "יצירה";
         if (s == PrefsManager.SORT_TYPE) return "סוג";
         return "שם";
-    }
-
-    private void showQuickSortMenu() {
-        final String[] labels = {
-                "לפי שם (עברית תחילה)",
-                "לפי תאריך יצירה",
-                "לפי תאריך שינוי",
-                "לפי גודל",
-                "לפי סוג קובץ",
-                PrefsManager.isSortAscending(this) ? "החלף לסדר יורד" : "החלף לסדר עולה"
-        };
-        final int[] vals = {
-                PrefsManager.SORT_NAME,
-                PrefsManager.SORT_CREATED,
-                PrefsManager.SORT_DATE,
-                PrefsManager.SORT_SIZE,
-                PrefsManager.SORT_TYPE
-        };
-        ThemedDialogHelper.showThemedMenu(
-                this,
-                "מיון פריטים",
-                "בחר שדה מיון או היפוך סדר:",
-                Arrays.asList(labels),
-                which -> {
-                    if (which == labels.length - 1) {
-                        PrefsManager.setSortAscending(this, !PrefsManager.isSortAscending(this));
-                    } else {
-                        PrefsManager.setSortMode(this, vals[which]);
-                    }
-                    loadFilesForCurrentMode(false);
-                }
-        );
     }
 
     // ==================== פס הרצה בצד ימין ====================
@@ -904,6 +1215,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
                 isDraggingFastScroll = true;
+                fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+                rightFastScrollContainer.setVisibility(View.VISIBLE);
                 if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
                 rightFastScrollThumb.setScaleX(1.25f);
                 int topPad = rightFastScrollContainer.getPaddingTop();
@@ -925,7 +1238,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 isDraggingFastScroll = false;
                 rightFastScrollThumb.setScaleX(1.0f);
-                syncRightFastScrollerFromRecycler();
+                updateRightFastScrollerThumbOnly();
+                scheduleHideRightFastScroller();
                 return true;
             }
             return false;
@@ -933,27 +1247,63 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
+            public void onScrollStateChanged(@NonNull RecyclerView rv, int newState) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    if (!isDraggingFastScroll && rightFastScrollContainer.getVisibility() == View.VISIBLE) {
+                        scheduleHideRightFastScroller();
+                    }
+                } else {
+                    if (canShowRightFastScroller()) {
+                        showRightFastScrollerDuringScroll();
+                    }
+                }
+            }
+
+            @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (!isDraggingFastScroll) syncRightFastScrollerFromRecycler();
+                if (!isDraggingFastScroll && (dy != 0 || dx != 0) && canShowRightFastScroller()) {
+                    showRightFastScrollerDuringScroll();
+                    if (rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) {
+                        scheduleHideRightFastScroller();
+                    }
+                }
             }
         });
     }
 
-    private void syncRightFastScrollerFromRecycler() {
-        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+    private boolean canShowRightFastScroller() {
+        if (recyclerView == null) return false;
         int count = showingInstalledAppsTab ? displayedInstalledApps.size() : displayedFiles.size();
-        if (count == 0) {
+        if (count == 0) return false;
+        int range = recyclerView.computeVerticalScrollRange();
+        int extent = recyclerView.computeVerticalScrollExtent();
+        return !(range <= extent + dp(10) && count <= 6);
+    }
+
+    private void showRightFastScrollerDuringScroll() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+        if (rightFastScrollContainer.getVisibility() != View.VISIBLE) {
+            rightFastScrollContainer.setVisibility(View.VISIBLE);
+        }
+        updateRightFastScrollerThumbOnly();
+    }
+
+    private void scheduleHideRightFastScroller() {
+        fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+        fastScrollHideHandler.postDelayed(hideFastScrollRunnable, 1500L);
+    }
+
+    private void updateRightFastScrollerThumbOnly() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        if (!canShowRightFastScroller()) {
+            fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
             rightFastScrollContainer.setVisibility(View.GONE);
             return;
         }
         int range = recyclerView.computeVerticalScrollRange();
         int extent = recyclerView.computeVerticalScrollExtent();
         int offset = recyclerView.computeVerticalScrollOffset();
-        if (range <= extent + dp(10) && count <= 6) {
-            rightFastScrollContainer.setVisibility(View.GONE);
-            return;
-        }
-        rightFastScrollContainer.setVisibility(View.VISIBLE);
         int topPad = rightFastScrollContainer.getPaddingTop();
         int botPad = rightFastScrollContainer.getPaddingBottom();
         int thumbH = rightFastScrollThumb.getHeight() > 0 ? rightFastScrollThumb.getHeight() : dp(48);
@@ -961,6 +1311,18 @@ public class FileBrowserActivity extends AppCompatActivity {
         int maxScroll = Math.max(1, range - extent);
         float fraction = Math.max(0f, Math.min(1f, (float) offset / (float) maxScroll));
         rightFastScrollThumb.setTranslationY(fraction * trackH);
+    }
+
+    private void syncRightFastScrollerFromRecycler() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        if (!canShowRightFastScroller()) {
+            fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+            rightFastScrollContainer.setVisibility(View.GONE);
+            return;
+        }
+        if (rightFastScrollContainer.getVisibility() == View.VISIBLE) {
+            updateRightFastScrollerThumbOnly();
+        }
     }
 
     @Override
@@ -978,6 +1340,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         if (intent != null) {
             setIntent(intent);
+            exitMultiSelectMode();
             String newMode = intent.getStringExtra(EXTRA_MODE);
             if (newMode != null) currentMode = newMode;
             String newTitle = intent.getStringExtra(EXTRA_TITLE);
@@ -1147,6 +1510,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                         rootBoundary = Environment.getExternalStorageDirectory();
                     }
                 }
+                baseCategoryTitle = MODE_SD_CARD.equals(currentMode) ? "כרטיס SD"
+                        : (MODE_USB_OTG.equals(currentMode) ? "כונן USB חיצוני" : "אחסון ראשי");
                 currentDir = target;
                 tvHeaderTitle.setText(target.equals(rootBoundary) ? baseCategoryTitle : target.getName());
                 return;
@@ -1325,8 +1690,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                     cachedModifiedByPath.putAll(snap.modifiedByPath);
                     List<File> allMediaFiles = FileScanCache.extractCategoryFiles(snap, currentMode);
                     Map<String, File> foldersByPath = new LinkedHashMap<>();
-                    Map<String, Integer> countsByPath = new LinkedHashMap<>();
                     Map<String, File> firstFileByPath = new LinkedHashMap<>();
+                    Map<String, Integer> countsByPath = new LinkedHashMap<>();
                     for (File mf : allMediaFiles) {
                         File parent = mf.getParentFile();
                         if (parent == null) continue;
@@ -1366,14 +1731,22 @@ public class FileBrowserActivity extends AppCompatActivity {
 
             sortFileList(result);
 
+            final String scopeKey = currentMode
+                    + "|" + (currentDir != null ? currentDir.getAbsolutePath() : "")
+                    + "|" + (activeMediaFolder != null ? activeMediaFolder.getAbsolutePath() : "");
             final String refreshedMsg = (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode) || activeMediaFolder != null)
                     ? "התיקייה רועננה"
                     : "הקטגוריה רועננה";
             runOnUiThread(() -> {
+                boolean scopeChanged = !scopeKey.equals(lastLoadedScopeKey);
+                lastLoadedScopeKey = scopeKey;
                 loadingSpinner.setVisibility(View.GONE);
                 allLoadedFiles.clear();
                 allLoadedFiles.addAll(result);
                 filterCurrentList(etSearch.getText().toString());
+                if (scopeChanged && recyclerView != null) {
+                    recyclerView.scrollToPosition(0);
+                }
                 updateClipboardBar();
                 if (fromUserPullToRefresh) {
                     swipeRefresh.setRefreshing(false);
@@ -1463,7 +1836,6 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         // חישוב מטא-דאטה פעם אחת (O(N)) לפני המיון במקום אלפי קריאות מערכת בתוך ה-Comparator
         final Map<File, Boolean> isDirMap = new HashMap<>(list.size());
-        final Map<File, Boolean> hebMap = new HashMap<>(list.size());
         final Map<File, Long> metricMap = (sortMode == PrefsManager.SORT_SIZE
                 || sortMode == PrefsManager.SORT_DATE
                 || sortMode == PrefsManager.SORT_CREATED)
@@ -1473,7 +1845,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         for (File f : list) {
             boolean dir = !onlyFileCategories && f.isDirectory();
             isDirMap.put(f, dir);
-            hebMap.put(f, StorageUtils.startsWithHebrew(f.getName()));
             if (metricMap != null) {
                 String p = f.getAbsolutePath();
                 if (sortMode == PrefsManager.SORT_SIZE) {
@@ -1495,11 +1866,6 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (aDir != bDir) {
                 return aDir ? -1 : 1;
             }
-            if (aDir && bDir) {
-                boolean aHeb = Boolean.TRUE.equals(hebMap.get(a));
-                boolean bHeb = Boolean.TRUE.equals(hebMap.get(b));
-                if (aHeb != bHeb) return aHeb ? -1 : 1;
-            }
             int cmp;
             if (metricMap != null) {
                 Long va = metricMap.get(a);
@@ -1508,6 +1874,9 @@ public class FileBrowserActivity extends AppCompatActivity {
             } else if (sortMode == PrefsManager.SORT_TYPE) {
                 cmp = getExtension(a.getName()).compareToIgnoreCase(getExtension(b.getName()));
             } else {
+                cmp = StorageUtils.compareHebrewFirst(a.getName(), b.getName());
+            }
+            if (cmp == 0 && sortMode != PrefsManager.SORT_NAME) {
                 cmp = StorageUtils.compareHebrewFirst(a.getName(), b.getName());
             }
             return asc ? cmp : -cmp;
@@ -1545,11 +1914,16 @@ public class FileBrowserActivity extends AppCompatActivity {
         } else {
             displayedFiles.clear();
             final Set<String> seen = new HashSet<>();
+            String[] qTokens = nq.isEmpty() ? new String[0] : FileIndexDatabase.tokenize(nq);
             for (File f : allLoadedFiles) {
-                if (nq.isEmpty() || normalizeSearchText(f.getName()).contains(nq)) {
+                String nameNorm = normalizeSearchText(f.getName());
+                if (nq.isEmpty() || FileIndexDatabase.matchesAllTokens(nameNorm, qTokens)) {
                     displayedFiles.add(f);
                     seen.add(f.getAbsolutePath());
                 }
+            }
+            if (!nq.isEmpty() && displayedFiles.size() > 1) {
+                rankSearchResultsByName(displayedFiles, nq, qTokens);
             }
             tvEmptyState.setVisibility(displayedFiles.isEmpty() ? View.VISIBLE : View.GONE);
             adapter.notifyDataSetChanged();
@@ -1574,17 +1948,58 @@ public class FileBrowserActivity extends AppCompatActivity {
                     }
                     if (gen != searchGeneration.get() || deepMatches.isEmpty()) return;
                     sortFileList(deepMatches);
+                    rankSearchResultsByName(deepMatches, nq, qTokens);
                     runOnUiThread(() -> {
                         if (gen != searchGeneration.get()) return;
+                        int startPos = displayedFiles.size();
                         displayedFiles.addAll(deepMatches);
+                        rankSearchResultsByName(displayedFiles, nq, qTokens);
                         tvEmptyState.setVisibility(displayedFiles.isEmpty() ? View.VISIBLE : View.GONE);
-                        adapter.notifyDataSetChanged();
+                        if (startPos == 0) {
+                            adapter.notifyDataSetChanged();
+                        } else {
+                            adapter.notifyDataSetChanged();
+                        }
                         if (recyclerView != null) recyclerView.post(this::syncRightFastScrollerFromRecycler);
                     });
                 });
             }
         }
         if (recyclerView != null) recyclerView.post(this::syncRightFastScrollerFromRecycler);
+    }
+
+    private void rankSearchResultsByName(List<File> list, String nq, String[] tokens) {
+        if (list.size() <= 1 || nq.isEmpty()) return;
+        Map<File, Integer> scoreMap = new HashMap<>(list.size());
+        Map<File, String> normMap = new HashMap<>(list.size());
+        for (File f : list) {
+            String nm = normalizeSearchText(f.getName());
+            normMap.put(f, nm);
+            String base = nm;
+            int dot = nm.lastIndexOf('.');
+            if (dot > 0) base = nm.substring(0, dot);
+            int score;
+            if (nm.equals(nq) || base.equals(nq)) {
+                score = 0;
+            } else if (nm.startsWith(nq) || base.startsWith(nq)) {
+                score = 1;
+            } else if (tokens.length > 0 && nm.contains(nq)) {
+                score = 2;
+            } else {
+                score = 3;
+            }
+            scoreMap.put(f, score);
+        }
+        Collections.sort(list, (a, b) -> {
+            int sa = scoreMap.getOrDefault(a, 3);
+            int sb = scoreMap.getOrDefault(b, 3);
+            if (sa != sb) return Integer.compare(sa, sb);
+            String na = normMap.getOrDefault(a, "");
+            String nb = normMap.getOrDefault(b, "");
+            int lenCmp = Integer.compare(na.length(), nb.length());
+            if (lenCmp != 0) return lenCmp;
+            return StorageUtils.compareHebrewFirst(a.getName(), b.getName());
+        });
     }
 
     private void searchRecursiveFiles(File dir, String nq, boolean showHidden, List<File> out, Set<String> seen, int depth) {
@@ -1624,65 +2039,153 @@ public class FileBrowserActivity extends AppCompatActivity {
         return input;
     }
 
-    private void promptCreateFolder() {
-        if (currentDir == null) return;
-        EditText input = createStyledInput("שם התיקייה החדשה...", null);
-        ThemedDialogHelper.showCustomDialog(
-                this,
-                "תיקייה חדשה",
-                "התיקייה תיווצר ב-" + currentDir.getName() + ":",
-                input,
-                "צור תיקייה",
-                () -> {
-                    String folderName = input.getText().toString().trim();
-                    if (!folderName.isEmpty()) {
-                        File nf = new File(currentDir, folderName);
-                        if (nf.mkdirs()) {
-                            FileIndexDatabase.getInstance(this).upsertFile(nf);
-                            FileScanCache.invalidate();
-                            loadFilesForCurrentMode();
-                            Toast.makeText(this, "התיקייה נוצרה", Toast.LENGTH_SHORT).show();
-                        } else {
-                            Toast.makeText(this, "לא ניתן ליצור תיקייה במיקום זה", Toast.LENGTH_SHORT).show();
-                        }
-                    }
-                },
-                "סגור",
-                null,
-                false
-        );
+    private static boolean isValidEntryName(String name) {
+        if (name == null) return false;
+        String t = name.trim();
+        if (t.isEmpty() || ".".equals(t) || "..".equals(t)) return false;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c < 32 || c == '/' || c == '\\' || c == ':' || c == '*'
+                    || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+                return false;
+            }
+        }
+        return true;
     }
 
-    private void promptCreateNewFile() {
+    private void promptNewItemDialog() {
         if (currentDir == null) return;
-        EditText etFileName = createStyledInput("שם הקובץ (לדוגמה: notes.txt או script.py)", "מסמך_חדש.txt");
-        ThemedDialogHelper.showCustomDialog(
-                this,
-                "קובץ חדש",
-                "הקובץ ייפתח מיד בעורך הקוד והטקסט המובנה:",
-                etFileName,
-                "צור ופתח",
-                () -> {
-                    String name = etFileName.getText().toString().trim();
-                    if (name.isEmpty()) return;
-                    if (!name.contains(".")) name = name + ".txt";
-                    File target = StorageUtils.uniqueDestinationFile(currentDir, name);
-                    try (FileOutputStream fos = new FileOutputStream(target)) {
-                        fos.write("".getBytes(StandardCharsets.UTF_8));
-                        FileIndexDatabase.getInstance(this).upsertFile(target);
-                        FileScanCache.invalidate();
-                        loadFilesForCurrentMode();
-                        Intent ed = new Intent(this, CodeEditorActivity.class);
-                        ed.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, target.getAbsolutePath());
-                        startActivity(ed);
-                    } catch (Exception e) {
-                        Toast.makeText(this, "יצירת הקובץ נכשלה: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                    }
-                },
-                "סגור",
-                null,
-                false
-        );
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        card.setPadding(dp(18), dp(18), dp(18), dp(14));
+        card.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 20f, true, true));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText("חדש");
+        tvTitle.setTextColor(textPrimary);
+        tvTitle.setTextSize(ThemeHelper.spScaled(this, 17.5f));
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(tvTitle);
+
+        TextView tvSub = new TextView(this);
+        tvSub.setText("ב-" + currentDir.getName());
+        tvSub.setTextColor(textSecondary);
+        tvSub.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        tvSub.setPadding(0, dp(2), 0, dp(10));
+        card.addView(tvSub);
+
+        EditText etName = createStyledInput("הזן שם...", "");
+        etName.setSingleLine(true);
+        card.addView(etName);
+
+        TextView tvError = new TextView(this);
+        tvError.setText("שם לא חוקי");
+        tvError.setTextColor(Color.parseColor("#EF4444"));
+        tvError.setTextSize(ThemeHelper.spScaled(this, 11.5f));
+        tvError.setPadding(dp(4), dp(4), dp(4), 0);
+        tvError.setVisibility(View.GONE);
+        card.addView(tvError);
+
+        etName.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (tvError.getVisibility() == View.VISIBLE) {
+                    tvError.setVisibility(View.GONE);
+                }
+            }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams brLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        brLp.topMargin = dp(14);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setView(card)
+                .create();
+        dlg.setCanceledOnTouchOutside(true);
+
+        Button btnCancel = ThemedDialogHelper.createThemedButton(this, "ביטול", theme, false, false);
+        btnCancel.setOnClickListener(v -> dlg.dismiss());
+
+        Button btnFolder = ThemedDialogHelper.createThemedButton(this, "תיקייה", theme, true, false);
+        btnFolder.setOnClickListener(v -> {
+            String name = etName.getText() != null ? etName.getText().toString().trim() : "";
+            if (!isValidEntryName(name)) {
+                tvError.setText("שם לא חוקי");
+                tvError.setVisibility(View.VISIBLE);
+                return;
+            }
+            File nf = new File(currentDir, name);
+            if (nf.exists()) {
+                tvError.setText("שם לא חוקי");
+                tvError.setVisibility(View.VISIBLE);
+                return;
+            }
+            if (nf.mkdirs()) {
+                FileIndexDatabase.getInstance(this).upsertFile(nf);
+                FileScanCache.invalidate();
+                loadFilesForCurrentMode();
+                Toast.makeText(this, "התיקייה נוצרה", Toast.LENGTH_SHORT).show();
+                dlg.dismiss();
+            } else {
+                tvError.setText("שם לא חוקי");
+                tvError.setVisibility(View.VISIBLE);
+            }
+        });
+
+        Button btnFile = ThemedDialogHelper.createThemedButton(this, "קובץ", theme, false, false);
+        btnFile.setOnClickListener(v -> {
+            String name = etName.getText() != null ? etName.getText().toString().trim() : "";
+            if (!isValidEntryName(name)) {
+                tvError.setText("שם לא חוקי");
+                tvError.setVisibility(View.VISIBLE);
+                return;
+            }
+            if (!name.contains(".")) name = name + ".txt";
+            File target = new File(currentDir, name);
+            if (target.exists()) {
+                tvError.setText("שם לא חוקי");
+                tvError.setVisibility(View.VISIBLE);
+                return;
+            }
+            try (FileOutputStream fos = new FileOutputStream(target)) {
+                fos.write("".getBytes(StandardCharsets.UTF_8));
+                FileIndexDatabase.getInstance(this).upsertFile(target);
+                FileScanCache.invalidate();
+                loadFilesForCurrentMode();
+                dlg.dismiss();
+                Intent ed = new Intent(this, CodeEditorActivity.class);
+                ed.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, target.getAbsolutePath());
+                startActivity(ed);
+                ThemeHelper.overrideOpenTransition(this);
+            } catch (Exception e) {
+                tvError.setText("שם לא חוקי");
+                tvError.setVisibility(View.VISIBLE);
+            }
+        });
+
+        LinearLayout.LayoutParams b1Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        b1Lp.setMarginEnd(dp(8));
+        LinearLayout.LayoutParams b2Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        b2Lp.setMarginEnd(dp(8));
+
+        btnRow.addView(btnCancel, b1Lp);
+        btnRow.addView(btnFile, b2Lp);
+        btnRow.addView(btnFolder);
+        card.addView(btnRow, brLp);
+
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        }
+        dlg.show();
+        ThemedDialogHelper.applyResponsiveDialogWindow(this, dlg);
     }
 
     // ==================== פעולות לוח ופעולות מרובות + התראות התקדמות (סעיף 28) ====================
@@ -1733,24 +2236,25 @@ public class FileBrowserActivity extends AppCompatActivity {
         final boolean toTrash = PrefsManager.isUseRecycleBin(this);
         Runnable run = () -> {
             exitMultiSelectMode();
-            final int opId = (int) (System.currentTimeMillis() % 10000);
-            FileOperationNotificationHelper.begin(opId);
-            Toast.makeText(this, "מוחק " + sel.size() + " פריטים...", Toast.LENGTH_SHORT).show();
+            final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                    this, "מחיקת קבצים", sel.get(0).getName(), true);
             executor.execute(() -> {
                 int done = 0;
                 int total = sel.size();
                 for (File f : sel) {
-                    FileOperationNotificationHelper.updateProgress(this, opId,
-                            "מחיקת קבצים", f.getName(), done, total);
+                    progress.updateCounts(f.getName(), done, total, "");
                     if (toTrash) RecycleBinManager.moveToTrash(this, f);
                     else StorageUtils.deleteRecursively(f);
                     FileIndexDatabase.getInstance(this).removePath(f.getAbsolutePath());
                     done++;
+                    progress.updateCounts(f.getName(), done, total, "");
                 }
-                FileOperationNotificationHelper.finish(this, opId,
-                        "המחיקה הושלמה", "טופלו " + done + " פריטים");
+                progress.finish();
                 FileScanCache.invalidate();
-                runOnUiThread(() -> loadFilesForCurrentMode(false));
+                runOnUiThread(() -> {
+                    loadFilesForCurrentMode(false);
+                    Toast.makeText(this, "טופלו " + total + " פריטים", Toast.LENGTH_SHORT).show();
+                });
             });
         };
         if (PrefsManager.isConfirmDelete(this)) {
@@ -1770,68 +2274,11 @@ public class FileBrowserActivity extends AppCompatActivity {
         final List<File> items = new ArrayList<>(clipboardFiles);
         final boolean isMove = clipboardIsMove;
         final File dst = currentDir;
-        final int opId = (int) (System.currentTimeMillis() % 10000);
-        FileOperationNotificationHelper.begin(opId);
         final String actionVerb = isMove ? "הועברו" : "הועתקו";
         final String dialogTitle = isMove ? "העברת קבצים" : "העתקת קבצים";
 
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        box.setPadding(dp(20), dp(18), dp(20), dp(18));
-        box.setBackground(ThemedDialogHelper.createDialogBackground(this, theme));
-
-        TextView tvTitle = new TextView(this);
-        tvTitle.setText(dialogTitle);
-        tvTitle.setTextColor(textPrimary);
-        tvTitle.setTextSize(ThemeHelper.spScaled(this, 16f));
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        box.addView(tvTitle);
-
-        TextView tvFileName = new TextView(this);
-        tvFileName.setText(items.get(0).getName());
-        tvFileName.setTextColor(textSecondary);
-        tvFileName.setTextSize(ThemeHelper.spScaled(this, 13f));
-        tvFileName.setSingleLine(true);
-        tvFileName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        tvFileName.setPadding(0, dp(8), 0, dp(10));
-        box.addView(tvFileName);
-
-        ProgressBar pb = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        pb.setMax(1000);
-        pb.setProgress(0);
-        pb.setProgressTintList(ColorStateList.valueOf(accent));
-        pb.setProgressBackgroundTintList(ColorStateList.valueOf(divider));
-        box.addView(pb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        LinearLayout statsRow = new LinearLayout(this);
-        statsRow.setOrientation(LinearLayout.HORIZONTAL);
-        statsRow.setPadding(0, dp(8), 0, 0);
-
-        TextView tvCounts = new TextView(this);
-        tvCounts.setText(actionVerb + ": 0  •  נותרו: " + items.size());
-        tvCounts.setTextColor(textPrimary);
-        tvCounts.setTextSize(ThemeHelper.spScaled(this, 12.5f));
-        statsRow.addView(tvCounts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView tvWeight = new TextView(this);
-        tvWeight.setText("");
-        tvWeight.setTextColor(accent);
-        tvWeight.setTypeface(Typeface.DEFAULT_BOLD);
-        tvWeight.setTextSize(ThemeHelper.spScaled(this, 12.5f));
-        statsRow.addView(tvWeight);
-
-        box.addView(statsRow);
-
-        AlertDialog progressDialog = new AlertDialog.Builder(this)
-                .setView(box)
-                .setCancelable(false)
-                .create();
-        progressDialog.show();
-        if (progressDialog.getWindow() != null) {
-            progressDialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
-        ThemedDialogHelper.applyResponsiveDialogWindow(this, progressDialog);
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this, dialogTitle, items.get(0).getName(), true);
 
         executor.execute(() -> {
             int totalEntries = 0;
@@ -1840,7 +2287,6 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
             final int totalFiles = Math.max(1, totalEntries);
             final int[] completedCounter = new int[]{0};
-            final long[] lastNotifyMs = new long[]{0L};
 
             StorageUtils.CopyProgressCallback cb = (curName, bytesDone, bytesTotal, doneFiles, totalF) -> {
                 int remaining = Math.max(0, totalF - doneFiles);
@@ -1850,22 +2296,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                         : "";
                 double fileFrac = bytesTotal > 0 ? Math.min(1.0, (double) bytesDone / (double) bytesTotal) : 0.0;
                 int permille = (int) Math.max(0, Math.min(1000, Math.round(((doneFiles + fileFrac) / totalF) * 1000.0)));
-
-                runOnUiThread(() -> {
-                    if (!isFinishing()) {
-                        tvFileName.setText(curName);
-                        tvCounts.setText(countsLine);
-                        tvWeight.setText(weightLine);
-                        pb.setProgress(permille);
-                    }
-                });
-
-                long now = System.currentTimeMillis();
-                if (now - lastNotifyMs[0] >= 250L || doneFiles >= totalF) {
-                    lastNotifyMs[0] = now;
-                    String notifDetail = curName + " • " + countsLine + (weightLine.isEmpty() ? "" : (" • " + weightLine));
-                    FileOperationNotificationHelper.updateProgress(this, opId, dialogTitle, notifDetail, permille, 1000);
-                }
+                String notifDetail = curName + " • " + countsLine + (weightLine.isEmpty() ? "" : (" • " + weightLine));
+                progress.updateCustom(curName, countsLine, weightLine, permille, notifDetail);
             };
 
             try {
@@ -1877,9 +2309,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     }
                 }
                 final int finalDone = completedCounter[0];
-                FileOperationNotificationHelper.finish(this, opId,
-                        isMove ? "ההעברה הושלמה" : "ההעתקה הושלמה",
-                        actionVerb + " " + finalDone + " קבצים בהצלחה");
+                progress.finish();
                 FileIndexDatabase idxDb = FileIndexDatabase.getInstance(this);
                 for (File src : items) {
                     if (isMove) idxDb.removePath(src.getAbsolutePath());
@@ -1888,24 +2318,21 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
                 FileScanCache.invalidate();
                 runOnUiThread(() -> {
-                    if (progressDialog.isShowing()) progressDialog.dismiss();
                     clipboardFiles.clear();
                     updateClipboardBar();
                     loadFilesForCurrentMode();
                     Toast.makeText(this, actionVerb + " " + finalDone + " קבצים", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
-                FileOperationNotificationHelper.finish(this, opId, "שגיאה בפעולת קבצים", e.getMessage());
+                progress.finish();
                 AppLogger.error(this, "FileOps", "Paste failed", e);
-                runOnUiThread(() -> {
-                    if (progressDialog.isShowing()) progressDialog.dismiss();
-                    Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                });
+                runOnUiThread(() ->
+                        Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         });
     }
 
-    // ==================== שינוי שם אצווה (סעיף 43) ====================
+    // ==================== שינוי שם אצווה מעוצב ====================
     private void promptBatchRename(List<File> items) {
         if (items.isEmpty()) {
             Toast.makeText(this, "בחר פריטים לשינוי שם אצווה", Toast.LENGTH_SHORT).show();
@@ -1913,23 +2340,109 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
+        form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
-        EditText etPrefix = createStyledInput("תבנית שם (לדוגמה: תמונה_טיול_)", "קובץ_");
-        EditText etStartNum = createStyledInput("מספר התחלתי (ברירת מחדל 1)", "1");
-        etStartNum.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        EditText etExt = createStyledInput("סיומת אחידה (אופציונלי, ריק = שמור מקורית)", "");
+        TextView lblPrefix = new TextView(this);
+        lblPrefix.setText("תבנית שם קבועה:");
+        lblPrefix.setTextColor(textSecondary);
+        lblPrefix.setTextSize(ThemeHelper.spScaled(this, 12f));
+        lblPrefix.setTypeface(Typeface.DEFAULT_BOLD);
+        form.addView(lblPrefix);
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+        EditText etPrefix = createStyledInput("לדוגמה: תמונה_טיול_", "קובץ_");
+        etPrefix.setSingleLine(true);
+        LinearLayout.LayoutParams fieldLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(8);
-        form.addView(etPrefix);
-        form.addView(etStartNum, lp);
-        form.addView(etExt, lp);
+        fieldLp.topMargin = dp(4);
+        fieldLp.bottomMargin = dp(10);
+        form.addView(etPrefix, fieldLp);
+
+        LinearLayout rowTwo = new LinearLayout(this);
+        rowTwo.setOrientation(LinearLayout.HORIZONTAL);
+        rowTwo.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
+        LinearLayout colNum = new LinearLayout(this);
+        colNum.setOrientation(LinearLayout.VERTICAL);
+        TextView lblNum = new TextView(this);
+        lblNum.setText("מספר התחלה:");
+        lblNum.setTextColor(textSecondary);
+        lblNum.setTextSize(ThemeHelper.spScaled(this, 12f));
+        lblNum.setTypeface(Typeface.DEFAULT_BOLD);
+        colNum.addView(lblNum);
+        EditText etStartNum = createStyledInput("1", "1");
+        etStartNum.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etStartNum.setSingleLine(true);
+        LinearLayout.LayoutParams cFldLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cFldLp.topMargin = dp(4);
+        colNum.addView(etStartNum, cFldLp);
+
+        LinearLayout colExt = new LinearLayout(this);
+        colExt.setOrientation(LinearLayout.VERTICAL);
+        TextView lblExt = new TextView(this);
+        lblExt.setText("סיומת (ריק = מקורית):");
+        lblExt.setTextColor(textSecondary);
+        lblExt.setTextSize(ThemeHelper.spScaled(this, 12f));
+        lblExt.setTypeface(Typeface.DEFAULT_BOLD);
+        colExt.addView(lblExt);
+        EditText etExt = createStyledInput("אופציונלי", "");
+        etExt.setSingleLine(true);
+        colExt.addView(etExt, cFldLp);
+
+        LinearLayout.LayoutParams colLeftLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        colLeftLp.setMarginEnd(dp(8));
+        rowTwo.addView(colNum, colLeftLp);
+        rowTwo.addView(colExt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f));
+        form.addView(rowTwo);
+
+        TextView tvPreview = new TextView(this);
+        tvPreview.setTextColor(accent);
+        tvPreview.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        tvPreview.setTypeface(Typeface.DEFAULT_BOLD);
+        tvPreview.setPadding(dp(12), dp(9), dp(12), dp(9));
+        tvPreview.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 12f, false, false));
+        LinearLayout.LayoutParams prevLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        prevLp.topMargin = dp(12);
+        form.addView(tvPreview, prevLp);
+
+        Runnable updatePreview = () -> {
+            String pfx = etPrefix.getText() != null ? etPrefix.getText().toString().trim() : "";
+            if (pfx.isEmpty()) pfx = "file_";
+            int s = 1;
+            try {
+                s = Integer.parseInt(etStartNum.getText().toString().trim());
+            } catch (Throwable ignored) {
+            }
+            String fx = etExt.getText() != null ? etExt.getText().toString().trim() : "";
+            if (!fx.isEmpty() && !fx.startsWith(".")) fx = "." + fx;
+            File first = items.get(0);
+            String sampleExt = "";
+            if (!first.isDirectory()) {
+                if (!fx.isEmpty()) sampleExt = fx;
+                else {
+                    int dot = first.getName().lastIndexOf('.');
+                    if (dot > 0) sampleExt = first.getName().substring(dot);
+                }
+            }
+            String sample1 = pfx + String.format(Locale.US, "%02d", s) + sampleExt;
+            String sample2 = items.size() > 1 ? ("  •  " + pfx + String.format(Locale.US, "%02d", s + 1) + sampleExt) : "";
+            tvPreview.setText("תצוגה מקדימה: " + sample1 + sample2);
+        };
+        updatePreview.run();
+        TextWatcher watcher = new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { updatePreview.run(); }
+            @Override public void afterTextChanged(Editable s) {}
+        };
+        etPrefix.addTextChangedListener(watcher);
+        etStartNum.addTextChangedListener(watcher);
+        etExt.addTextChangedListener(watcher);
 
         ThemedDialogHelper.showCustomDialog(
                 this,
                 "שינוי שם אצווה (" + items.size() + " פריטים)",
-                "לדוגמה: תמונה_01, תמונה_02...",
+                "בחר תבנית אחידה לכל הקבצים המסומנים:",
                 form,
                 "בצע שינוי שם",
                 () -> {
@@ -1991,26 +2504,89 @@ public class FileBrowserActivity extends AppCompatActivity {
         EditText etName = createStyledInput("שם הארכיון (ללא סיומת)", baseName);
         form.addView(etName);
 
-        RadioGroup rgFmt = new RadioGroup(this);
-        rgFmt.setOrientation(RadioGroup.VERTICAL);
-        String[] fmts = {"zip", "tar", "tar.gz", "gz"};
-        String[] fmtLabels = {"ZIP (סטנדרטי + תמיכה בסיסמה)", "TAR (לא דחוס)", "TAR.GZ (דחיסת GZip גבוהה)", "GZ (קובץ בודד)"};
-        for (int i = 0; i < fmts.length; i++) {
-            RadioButton rb = new RadioButton(this);
-            rb.setId(2000 + i);
-            rb.setText(fmtLabels[i]);
-            rb.setTextColor(textPrimary);
-            if (i == 0) rb.setChecked(true);
-            rgFmt.addView(rb);
-        }
-        LinearLayout.LayoutParams rgLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rgLp.topMargin = dp(8);
-        form.addView(rgFmt, rgLp);
+        TextView tvFmtLabel = new TextView(this);
+        tvFmtLabel.setText("פורמט דחיסה");
+        tvFmtLabel.setTextColor(textSecondary);
+        tvFmtLabel.setTextSize(12f);
+        tvFmtLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvFmtLabel.setPadding(0, dp(12), 0, dp(6));
+        form.addView(tvFmtLabel);
 
-        EditText etPwd = createStyledInput("סיסמה לארכיון ZIP (אופציונלי)...", "");
+        final String[] fmts = {"zip", "tar.gz", "tar", "gz"};
+        final String[] fmtTitles = {"ZIP", "TAR.GZ", "TAR", "GZ"};
+        final String[] fmtDescs = {"סטנדרטי + סיסמה", "דחיסה גבוהה", "אריזה מהירה", "קובץ בודד"};
+        final int[] selectedFmt = new int[]{0};
+        final LinearLayout[] fmtCards = new LinearLayout[4];
+        final EditText etPwd = createStyledInput("סיסמה לארכיון ZIP (אופציונלי)...", "");
         etPwd.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        form.addView(etPwd, rgLp);
+
+        final Runnable refreshFmtCards = () -> {
+            boolean isDark = ThemeHelper.isDarkSurface(this, theme);
+            for (int i = 0; i < fmtCards.length; i++) {
+                if (fmtCards[i] == null) continue;
+                boolean active = i == selectedFmt[0];
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(dp(12));
+                bg.setColor(active
+                        ? ColorUtils.setAlphaComponent(accent, isDark ? 45 : 28)
+                        : ColorUtils.setAlphaComponent(cardColor, isDark ? 190 : 220));
+                bg.setStroke(dp(active ? 2 : 1), active ? accent : divider);
+                fmtCards[i].setBackground(bg);
+            }
+            etPwd.setVisibility(selectedFmt[0] == 0 ? View.VISIBLE : View.GONE);
+        };
+
+        LinearLayout fmtGridRow1 = new LinearLayout(this);
+        fmtGridRow1.setOrientation(LinearLayout.HORIZONTAL);
+        fmtGridRow1.setWeightSum(2f);
+        LinearLayout fmtGridRow2 = new LinearLayout(this);
+        fmtGridRow2.setOrientation(LinearLayout.HORIZONTAL);
+        fmtGridRow2.setWeightSum(2f);
+
+        for (int i = 0; i < 4; i++) {
+            final int idx = i;
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(10), dp(8), dp(10), dp(8));
+
+            TextView tvT = new TextView(this);
+            tvT.setText(fmtTitles[i]);
+            tvT.setTextColor(textPrimary);
+            tvT.setTextSize(13.5f);
+            tvT.setTypeface(Typeface.DEFAULT_BOLD);
+            card.addView(tvT);
+
+            TextView tvD = new TextView(this);
+            tvD.setText(fmtDescs[i]);
+            tvD.setTextColor(textSecondary);
+            tvD.setTextSize(11f);
+            card.addView(tvD);
+
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            cLp.setMarginStart(dp(3));
+            cLp.setMarginEnd(dp(3));
+            card.setLayoutParams(cLp);
+            card.setOnClickListener(v -> {
+                selectedFmt[0] = idx;
+                refreshFmtCards.run();
+            });
+            fmtCards[i] = card;
+            if (i < 2) fmtGridRow1.addView(card);
+            else fmtGridRow2.addView(card);
+        }
+        form.addView(fmtGridRow1, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r2Lp.topMargin = dp(6);
+        form.addView(fmtGridRow2, r2Lp);
+
+        LinearLayout.LayoutParams pwdLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pwdLp.topMargin = dp(10);
+        form.addView(etPwd, pwdLp);
+        refreshFmtCards.run();
 
         ThemedDialogHelper.showCustomDialog(
                 this,
@@ -2019,30 +2595,27 @@ public class FileBrowserActivity extends AppCompatActivity {
                 form,
                 "צור ארכיון",
                 () -> {
-                    int idx = rgFmt.getCheckedRadioButtonId() - 2000;
+                    int idx = selectedFmt[0];
                     if (idx < 0 || idx >= fmts.length) idx = 0;
                     String fmt = fmts[idx];
                     String rawName = etName.getText().toString().trim();
                     if (rawName.isEmpty()) rawName = baseName;
                     String fullFileName = rawName.toLowerCase(Locale.ROOT).endsWith("." + fmt)
                             ? rawName : (rawName + "." + fmt);
-                    String pwd = etPwd.getText().toString();
+                    String pwd = idx == 0 && etPwd.getText() != null ? etPwd.getText().toString() : "";
                     File parent = first.getParentFile() != null
                             ? first.getParentFile()
                             : Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                     final File targetArchive = StorageUtils.uniqueDestinationFile(parent, fullFileName);
-                    final int opId = (int) (System.currentTimeMillis() % 10000);
-                    FileOperationNotificationHelper.begin(opId);
 
                     exitMultiSelectMode();
-                    Toast.makeText(this, "דוחס קבצים...", Toast.LENGTH_SHORT).show();
+                    final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                            this, "דחיסת קבצים לארכיון", targetArchive.getName(), true);
                     executor.execute(() -> {
                         try {
-                            FileOperationNotificationHelper.updateProgress(this, opId,
-                                    "דחיסת ארכיון", targetArchive.getName(), 0, 0);
-                            ArchiveUtils.compressFiles(sources, targetArchive, fmt, pwd);
-                            FileOperationNotificationHelper.finish(this, opId,
-                                    "הארכיון נוצר בהצלחה", targetArchive.getName());
+                            ArchiveUtils.compressFiles(sources, targetArchive, fmt, pwd,
+                                    (itemName, done, total) -> progress.updateCounts(itemName, done, total, targetArchive.getName()));
+                            progress.finish();
                             FileIndexDatabase.getInstance(this).upsertFile(targetArchive);
                             FileScanCache.invalidate();
                             runOnUiThread(() -> {
@@ -2050,7 +2623,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                                 Toast.makeText(this, "נוצר בהצלחה: " + targetArchive.getName(), Toast.LENGTH_LONG).show();
                             });
                         } catch (Exception e) {
-                            FileOperationNotificationHelper.finish(this, opId, "שגיאה בדחיסה", e.getMessage());
+                            progress.finish();
                             AppLogger.error(this, "Archive", "Compress failed", e);
                             runOnUiThread(() -> Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_LONG).show());
                         }
@@ -2076,10 +2649,17 @@ public class FileBrowserActivity extends AppCompatActivity {
                         null,
                         "כן, רוקן לצמיתות",
                         () -> {
-                            int count = RecycleBinManager.emptyTrash(this);
-                            FileScanCache.invalidate();
-                            loadFilesForCurrentMode();
-                            Toast.makeText(this, "נמחקו לצמיתות " + count + " פריטים", Toast.LENGTH_SHORT).show();
+                            final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                                    this, "ריקון סל המיחזור", "מוחק קבצים לצמיתות...", false);
+                            executor.execute(() -> {
+                                int count = RecycleBinManager.emptyTrash(this);
+                                progress.finish();
+                                FileScanCache.invalidate();
+                                runOnUiThread(() -> {
+                                    loadFilesForCurrentMode();
+                                    Toast.makeText(this, "נמחקו לצמיתות " + count + " פריטים", Toast.LENGTH_SHORT).show();
+                                });
+                            });
                         },
                         "סגור",
                         null,
@@ -2095,8 +2675,15 @@ public class FileBrowserActivity extends AppCompatActivity {
     private void onFileClicked(File file) {
         if (multiSelectMode) {
             String p = file.getAbsolutePath();
-            if (selectedPaths.contains(p)) selectedPaths.remove(p);
-            else selectedPaths.add(p);
+            if (selectedPaths.contains(p)) {
+                selectedPaths.remove(p);
+                if (selectedPaths.isEmpty()) {
+                    exitMultiSelectMode();
+                    return;
+                }
+            } else {
+                selectedPaths.add(p);
+            }
             updateMultiSelectUi();
             return;
         }
@@ -2108,7 +2695,7 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
         }
         if (MODE_RECYCLE_BIN.equals(currentMode)) {
-            showFileOperationsMenu(file);
+            showFileOperationsMenu(file, null);
             return;
         }
         if (file.isDirectory()) {
@@ -2163,18 +2750,19 @@ public class FileBrowserActivity extends AppCompatActivity {
                     Intent i = new Intent(this, CodeEditorActivity.class);
                     i.putExtra(CodeEditorActivity.EXTRA_FILE_PATH, bakFile.getAbsolutePath());
                     startActivity(i);
+                    ThemeHelper.overrideOpenTransition(this);
                 },
                 false
         );
     }
 
-    // ==================== תפריט אפשרויות קובץ (שמאל האייקון) ====================
-    private void showFileOperationsMenu(File file) {
+    // ==================== תפריט אפשרויות קובץ (לחיצה ארוכה / אייקון ברשימה) ====================
+    private void showFileOperationsMenu(File file, View anchor) {
         String subInfo = file.isDirectory() ? "תיקייה" : StorageUtils.formatSize(file.length());
 
         if (MODE_RECYCLE_BIN.equals(currentMode)) {
             ThemedDialogHelper.showThemedMenu(
-                    this, file.getName(), "פריט בסל המיחזור",
+                    this, anchor, file.getName(), "פריט בסל המיחזור",
                     Arrays.asList("שחזר למיקום המקורי", "מחיקה לצמיתות", "פרטי פריט"),
                     which -> {
                         if (which == 0) {
@@ -2206,7 +2794,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         List<String> actions = new ArrayList<>();
         if (isAppPkg) {
             actions.add("התקן / בדוק חבילת אפליקציה");
-            actions.add("הצג מקור ה-APK (Manifest / DEX)");
+            actions.add("הצג מקור");
         } else if (!file.isDirectory()) {
             actions.add(isZip ? "פתיחה וניהול תוכן ארכיון" : "פתיחה");
             actions.add("פתיחה באמצעות...");
@@ -2218,7 +2806,7 @@ public class FileBrowserActivity extends AppCompatActivity {
             actions.add("פתח בתיקייה המקורית");
         }
         actions.add("בחירה מרובה");
-        actions.add("דחיסה (ZIP / TAR / GZ)");
+        actions.add(isZip ? "חילוץ ארכיון" : "דחיסה (ZIP / TAR / GZ)");
         actions.add("העתקה");
         actions.add("העברה");
         actions.add("שינוי שם");
@@ -2228,6 +2816,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 file.getName(),
                 subInfo,
                 actions,
@@ -2237,10 +2826,11 @@ public class FileBrowserActivity extends AppCompatActivity {
                         case "התקן / בדוק חבילת אפליקציה":
                             AppPackageInstaller.inspectAndInstall(this, file);
                             break;
-                        case "הצג מקור ה-APK (Manifest / DEX)": {
+                        case "הצג מקור": {
                             Intent i = new Intent(this, ApkSourceInspectorActivity.class);
                             i.putExtra(ApkSourceInspectorActivity.EXTRA_APK_PATH, file.getAbsolutePath());
                             startActivity(i);
+                            ThemeHelper.overrideOpenTransition(this);
                             break;
                         }
                         case "פתיחה וניהול תוכן ארכיון":
@@ -2254,6 +2844,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                             Intent vei = new Intent(this, ProVideoEditorActivity.class);
                             vei.putExtra(ProVideoEditorActivity.EXTRA_VIDEO_PATH, file.getAbsolutePath());
                             startActivity(vei);
+                            ThemeHelper.overrideOpenTransition(this);
                             break;
                         }
                         case "פתח בתיקייה המקורית": {
@@ -2262,10 +2853,14 @@ public class FileBrowserActivity extends AppCompatActivity {
                             jump.putExtra(EXTRA_INITIAL_DIR, file.getParentFile().getAbsolutePath());
                             jump.putExtra(EXTRA_TITLE, file.getParentFile().getName());
                             startActivity(jump);
+                            ThemeHelper.overrideOpenTransition(this);
                             break;
                         }
                         case "בחירה מרובה":
                             enterMultiSelectMode(file);
+                            break;
+                        case "חילוץ ארכיון":
+                            extractArchiveFromBrowser(file, "");
                             break;
                         case "דחיסה (ZIP / TAR / GZ)":
                             promptMultiFormatCompress(Collections.singletonList(file));
@@ -2301,18 +2896,63 @@ public class FileBrowserActivity extends AppCompatActivity {
         );
     }
 
-    private void showInstalledAppMenu(InstalledAppEntry app) {
+    private void extractArchiveFromBrowser(File archiveFile, String password) {
+        if (ArchiveUtils.archiveRequiresPassword(archiveFile) && (password == null || password.isEmpty())) {
+            EditText et = createStyledInput("הזן סיסמת ארכיון...", "");
+            et.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            ThemedDialogHelper.showCustomDialog(this, "ארכיון מוגן בסיסמה",
+                    "הזן סיסמה לחילוץ הארכיון:", et, "חלץ", () -> {
+                        String pwd = et.getText() != null ? et.getText().toString() : "";
+                        extractArchiveFromBrowser(archiveFile, pwd);
+                    }, "ביטול", null, false);
+            return;
+        }
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this, "חילוץ ארכיון", archiveFile.getName(), true);
+        executor.execute(() -> {
+            try {
+                String baseName = archiveFile.getName().replaceAll("(?i)\\.(tar\\.gz|tgz|zip|tar|gz|rar|7z|jar|cbz|apk|apkx|apk\\+|apks|apkm|xapk|apkp)$", "");
+                File parent = archiveFile.getParentFile() != null
+                        ? archiveFile.getParentFile()
+                        : Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File outDir = StorageUtils.uniqueDestinationFile(parent, baseName + "_מחולץ");
+                int count = ArchiveUtils.extractArchive(archiveFile, outDir, password == null ? "" : password,
+                        (itemName, done, total) -> progress.updateCounts(itemName, done, total, outDir.getName()));
+                progress.finish();
+                FileIndexDatabase.getInstance(this).upsertTree(outDir);
+                FileScanCache.invalidate();
+                runOnUiThread(() -> {
+                    loadFilesForCurrentMode(false);
+                    Toast.makeText(this, "חולצו " + count + " קבצים אל " + outDir.getName(), Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception e) {
+                progress.finish();
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                runOnUiThread(() -> {
+                    if (msg.contains("סיסמ")) {
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                        extractArchiveFromBrowser(archiveFile, "");
+                    } else {
+                        Toast.makeText(this, "שגיאה בחילוץ: " + msg, Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        });
+    }
+
+    private void showInstalledAppMenu(InstalledAppEntry app, View anchor) {
         List<String> opts = new ArrayList<>();
         if (app.sourceApk != null && app.sourceApk.exists()) {
             opts.add("גיבוי APK לתיקיית ההורדות");
             opts.add("שיתוף חבילת APK");
-            opts.add("הצג מקור ה-APK (Manifest / DEX)");
+            opts.add("הצג מקור");
         }
         opts.add("פרטי אפליקציה בהגדרות");
         opts.add("הסרת התקנה");
 
         ThemedDialogHelper.showThemedMenu(
                 this,
+                anchor,
                 app.appName,
                 app.packageName + "  •  " + app.versionName,
                 opts,
@@ -2376,7 +3016,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         }
                     }
                 },
-                "סגור",
+                "ביטול",
                 null,
                 false
         );
@@ -2385,16 +3025,28 @@ public class FileBrowserActivity extends AppCompatActivity {
     private void handleDeleteFile(File file) {
         final boolean toTrash = PrefsManager.isUseRecycleBin(this);
         Runnable performDelete = () -> {
-            String oldPath = file.getAbsolutePath();
-            boolean ok = toTrash ? RecycleBinManager.moveToTrash(this, file) : StorageUtils.deleteRecursively(file);
-            if (ok) {
-                FileIndexDatabase.getInstance(this).removePath(oldPath);
-                FileScanCache.invalidate();
-                loadFilesForCurrentMode();
-                Toast.makeText(this, toTrash ? "הועבר לסל המיחזור" : "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "המחיקה נכשלה", Toast.LENGTH_SHORT).show();
-            }
+            final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                    this,
+                    toTrash ? "העברה לסל המיחזור" : "מחיקת קבצים",
+                    file.getName(),
+                    false);
+            executor.execute(() -> {
+                String oldPath = file.getAbsolutePath();
+                boolean ok = toTrash ? RecycleBinManager.moveToTrash(this, file) : StorageUtils.deleteRecursively(file);
+                if (ok) {
+                    FileIndexDatabase.getInstance(this).removePath(oldPath);
+                }
+                progress.finish();
+                runOnUiThread(() -> {
+                    if (ok) {
+                        FileScanCache.invalidate();
+                        loadFilesForCurrentMode();
+                        Toast.makeText(this, toTrash ? "הועבר לסל המיחזור" : "נמחק לצמיתות", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(this, "המחיקה נכשלה", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            });
         };
 
         if (PrefsManager.isConfirmDelete(this)) {
@@ -2462,6 +3114,7 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
         finish();
+        ThemeHelper.overrideCloseTransition(this);
     }
 
     private class FileAdapter extends RecyclerView.Adapter<FileAdapter.VH> {
@@ -2521,14 +3174,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                 } else {
                     h.ivIcon.setTag(null);
                     h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                    h.ivIcon.clearColorFilter();
-                    if (MODE_VIDEOS.equals(currentMode)) {
-                        h.ivIcon.setImageResource(R.drawable.ic_video);
-                    } else if (MODE_AUDIO.equals(currentMode)) {
-                        h.ivIcon.setImageResource(R.drawable.ic_audio);
-                    } else {
-                        h.ivIcon.setImageResource(R.drawable.ic_images);
-                    }
+                    h.ivIcon.setImageResource(R.drawable.ic_folder);
+                    h.ivIcon.setColorFilter(accent);
                 }
             } else {
                 FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
@@ -2570,15 +3217,31 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
             h.tvMeta.setTextColor(textSecondary);
 
-            // סעיף ח: לחיצה על האייקון משמאל פותחת אפשרויות עריכה; לחיצה ארוכה נכנסת לבחירה מרובה (סעיף 5)
-            h.ivIcon.setOnClickListener(v -> {
-                if (multiSelectMode) onFileClicked(f);
-                else showFileOperationsMenu(f);
+            // בתצוגת רשימה לחיצה על האייקון פותחת אפשרויות קובץ; בתצוגת רשת האייקון אינו לחיץ בנפרד.
+            // לחיצה ארוכה פותחת את אפשרויות הקובץ, והחלקה לצד מפעילה בחירה מרובה.
+            if (isGrid) {
+                h.ivIcon.setOnClickListener(null);
+                h.ivIcon.setClickable(false);
+            } else {
+                h.ivIcon.setClickable(true);
+                h.ivIcon.setOnClickListener(v -> {
+                    if (multiSelectMode) onFileClicked(f);
+                    else showFileOperationsMenu(f, v);
+                });
+            }
+            h.rowCard.setOnClickListener(v -> {
+                if (MODE_RECYCLE_BIN.equals(currentMode) && !multiSelectMode) {
+                    showFileOperationsMenu(f, v);
+                } else {
+                    onFileClicked(f);
+                }
             });
-            h.rowCard.setOnClickListener(v -> onFileClicked(f));
             h.rowCard.setOnLongClickListener(v -> {
-                if (!multiSelectMode) enterMultiSelectMode(f);
-                else onFileClicked(f);
+                if (multiSelectMode) {
+                    onFileClicked(f);
+                } else {
+                    showFileOperationsMenu(f, v);
+                }
                 return true;
             });
         }
@@ -2646,8 +3309,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             } catch (Throwable t) {
                 h.ivIcon.setImageResource(R.drawable.ic_apps);
             }
-            h.ivIcon.setOnClickListener(v -> showInstalledAppMenu(app));
-            h.rowCard.setOnClickListener(v -> showInstalledAppMenu(app));
+            h.ivIcon.setOnClickListener(v -> showInstalledAppMenu(app, v));
+            h.rowCard.setOnClickListener(v -> showInstalledAppMenu(app, v));
         }
 
         @Override
@@ -2674,6 +3337,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        fastScrollHideHandler.removeCallbacksAndMessages(null);
         if (miniAudioListener != null) {
             AudioPlayerManager.getInstance().removeListener(miniAudioListener);
         }

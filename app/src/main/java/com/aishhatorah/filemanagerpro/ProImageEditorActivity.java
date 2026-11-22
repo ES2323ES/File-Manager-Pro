@@ -243,14 +243,19 @@ public class ProImageEditorActivity extends AppCompatActivity {
         stageRoot.addView(canvasView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // סרגל עליון שקוף למחצה: חזרה, כותרת, ביטול, ביצוע מחדש, שיתוף ושמירה
+        // סרגל עליון זכוכיתי ומעוגל כלפי מעלה
+        float barRadius = dp(22);
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setClickable(true);
-        topBar.setBackgroundColor(Color.argb(176, 18, 26, 44));
-        topBar.setPadding(dp(10), dp(24), dp(10), dp(8));
+        GradientDrawable topBarBg = new GradientDrawable();
+        topBarBg.setCornerRadii(new float[]{0f, 0f, 0f, 0f, barRadius, barRadius, barRadius, barRadius});
+        topBarBg.setColor(Color.argb(182, 16, 23, 40));
+        topBarBg.setStroke(Math.max(1, dp(1)), Color.argb(46, 255, 255, 255));
+        topBar.setBackground(topBarBg);
+        topBar.setPadding(dp(10), dp(24), dp(10), dp(10));
 
         ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
                 this, R.drawable.ic_arrow_back, Color.WHITE, "חזרה", 40, 8, v -> finish());
@@ -306,17 +311,16 @@ public class ProImageEditorActivity extends AppCompatActivity {
         stageRoot.addView(topBar, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
 
-        // פאנל כלים תחתון שקוף למחצה וצמוד לתחתית
+        // פאנל כלים תחתון זכוכיתי ומעוגל כלפי מטה
         LinearLayout bottomDock = new LinearLayout(this);
         bottomDock.setOrientation(LinearLayout.VERTICAL);
         bottomDock.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         bottomDock.setClickable(true);
-        bottomDock.setBackgroundColor(Color.argb(188, 16, 23, 40));
-
-        View topEdgeLine = new View(this);
-        topEdgeLine.setBackgroundColor(Color.argb(40, 255, 255, 255));
-        bottomDock.addView(topEdgeLine, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
+        GradientDrawable bottomDockBg = new GradientDrawable();
+        bottomDockBg.setCornerRadii(new float[]{barRadius, barRadius, barRadius, barRadius, 0f, 0f, 0f, 0f});
+        bottomDockBg.setColor(Color.argb(192, 14, 21, 38));
+        bottomDockBg.setStroke(Math.max(1, dp(1)), Color.argb(46, 255, 255, 255));
+        bottomDock.setBackground(bottomDockBg);
 
         // מגירת אפשרויות נפתחת מעל שורת האייקונים
         subDrawerContainer = new FrameLayout(this);
@@ -654,10 +658,10 @@ public class ProImageEditorActivity extends AppCompatActivity {
             final int fIdx = i;
             LinearLayout item = new LinearLayout(this);
             item.setOrientation(LinearLayout.VERTICAL);
-            item.setGravity(Gravity.CENTER);
+            item.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.TOP);
             LinearLayout.LayoutParams itemLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            itemLp.setMarginEnd(dp(10));
+                    dp(68), ViewGroup.LayoutParams.WRAP_CONTENT);
+            itemLp.setMarginEnd(dp(6));
             item.setLayoutParams(itemLp);
 
             FrameLayout thumbFrame = new FrameLayout(this);
@@ -665,8 +669,8 @@ public class ProImageEditorActivity extends AppCompatActivity {
             ImageView thumb = new ImageView(this);
             thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
             thumb.setColorFilter(new ColorMatrixColorFilter(buildColorMatrix(fIdx, 0f, 1f, 1f)));
-            thumbFrame.addView(thumb, new FrameLayout.LayoutParams(dp(46), dp(46)));
-            item.addView(thumbFrame);
+            thumbFrame.addView(thumb, new FrameLayout.LayoutParams(dp(48), dp(48)));
+            item.addView(thumbFrame, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
             TextView lbl = new TextView(this);
             lbl.setText(FILTER_NAMES[i]);
@@ -674,9 +678,11 @@ public class ProImageEditorActivity extends AppCompatActivity {
             lbl.setTypeface(Typeface.DEFAULT_BOLD);
             lbl.setTextColor(Color.WHITE);
             lbl.setGravity(Gravity.CENTER);
+            lbl.setSingleLine(true);
+            lbl.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams lLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lLp.topMargin = dp(4);
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lLp.topMargin = dp(5);
             item.addView(lbl, lLp);
 
             item.setOnClickListener(v -> {
@@ -983,8 +989,10 @@ public class ProImageEditorActivity extends AppCompatActivity {
     }
 
     private void rebuildTransformedBitmap() {
-        if (originalBitmap == null) return;
+        if (originalBitmap == null || originalBitmap.isRecycled()) return;
+        Bitmap oldTransformed = transformedBitmap;
         Bitmap src = originalBitmap;
+        Bitmap cropTemp = null;
 
         if (cropMode != 0) {
             int w = src.getWidth();
@@ -1010,7 +1018,8 @@ public class ProImageEditorActivity extends AppCompatActivity {
             }
             int x = Math.max(0, (w - targetW) / 2);
             int y = Math.max(0, (h - targetH) / 2);
-            src = Bitmap.createBitmap(src, x, y, Math.max(1, targetW), Math.max(1, targetH));
+            cropTemp = Bitmap.createBitmap(src, x, y, Math.max(1, targetW), Math.max(1, targetH));
+            src = cropTemp;
         }
 
         Matrix m = new Matrix();
@@ -1019,10 +1028,18 @@ public class ProImageEditorActivity extends AppCompatActivity {
         }
         m.postScale(flipH ? -1f : 1f, flipV ? -1f : 1f);
 
-        transformedBitmap = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+        Bitmap nextTransformed = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+        transformedBitmap = nextTransformed;
         canvasView.setImageBitmap(transformedBitmap);
         canvasView.updateColorFilter();
         canvasView.invalidate();
+
+        if (cropTemp != null && cropTemp != originalBitmap && cropTemp != nextTransformed && !cropTemp.isRecycled()) {
+            cropTemp.recycle();
+        }
+        if (oldTransformed != null && oldTransformed != originalBitmap && oldTransformed != nextTransformed && !oldTransformed.isRecycled()) {
+            oldTransformed.recycle();
+        }
     }
 
     private static ColorMatrix buildColorMatrix(int preset, float bOffset, float cFactor, float sFactor) {
@@ -1232,5 +1249,20 @@ public class ProImageEditorActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         executor.shutdownNow();
+        if (canvasView != null) {
+            canvasView.setImageDrawable(null);
+        }
+        if (transformedBitmap != null && transformedBitmap != originalBitmap && !transformedBitmap.isRecycled()) {
+            transformedBitmap.recycle();
+        }
+        transformedBitmap = null;
+        if (originalBitmap != null && !originalBitmap.isRecycled()) {
+            originalBitmap.recycle();
+        }
+        originalBitmap = null;
+        if (filterThumbBitmap != null && !filterThumbBitmap.isRecycled()) {
+            filterThumbBitmap.recycle();
+        }
+        filterThumbBitmap = null;
     }
 }

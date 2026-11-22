@@ -19,6 +19,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -45,10 +46,10 @@ import java.util.concurrent.Executors;
 
 /**
  * סעיפים 3, 6, 7, 8, 17, 18, 19, 33, 34, 38:
- * מסך הבית המינימליסטי והרספונסיבי של File Manager Pro 0.3.6:
+ * מסך הבית המינימליסטי והרספונסיבי של File Manager Pro 0.3.5:
  * - טעינה מיידית ממטמון סריקה (FileScanCache) ועדכון ברקע
  * - כרטיס גישה מהירה לתיקייה האחרונה
- * - זיהוי והצגת כונני USB OTG מחוברים בזמן אמת + לשונית הגדרות והוצאה בטוחה
+ * - זיהוי והצגת כונני USB OTG מחוברים בזמן אמת
  * - תמיכה בסידור והסתרת קטגוריות בהתאמה אישית (HomeLayoutActivity)
  */
 public class MainActivity extends AppCompatActivity {
@@ -62,6 +63,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean forceShowAllCategories = false;
     private boolean sdSettingsTabExpanded = false;
     private String expandedUsbPath = null;
+    private String expandedEjectKey = null;
+    private View activeGridEjectRow = null;
 
     private LinearLayout rootContainer;
     private LinearLayout topBar;
@@ -172,6 +175,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        ThemeHelper.invalidateSystemPaletteCache();
         applyCurrentThemeAndRefresh(false);
     }
 
@@ -211,9 +215,14 @@ public class MainActivity extends AppCompatActivity {
         Button btnOpenAnalyzerFromAlert = findViewById(R.id.btnOpenAnalyzerFromAlert);
 
         btnAbout.setOnClickListener(v -> AboutDialogHelper.show(this));
-        btnSettings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        btnOpenAnalyzerFromAlert.setOnClickListener(v ->
-                startActivity(new Intent(this, StorageAnalyzerActivity.class)));
+        btnSettings.setOnClickListener(v -> {
+            startActivity(new Intent(this, SettingsActivity.class));
+            ThemeHelper.overrideOpenTransition(this);
+        });
+        btnOpenAnalyzerFromAlert.setOnClickListener(v -> {
+            startActivity(new Intent(this, StorageAnalyzerActivity.class));
+            ThemeHelper.overrideOpenTransition(this);
+        });
 
         btnShowAllCategories.setOnClickListener(v -> {
             forceShowAllCategories = !forceShowAllCategories;
@@ -223,7 +232,9 @@ public class MainActivity extends AppCompatActivity {
         swipeRefreshHome.setColorSchemeColors(0xFF1D4ED8, 0xFF0284C7, 0xFF0D9488);
         swipeRefreshHome.setOnRefreshListener(() -> applyCurrentThemeAndRefresh(true));
 
-        miniAudioListener = MiniAudioBarHelper.attach(this, rootContainer);
+        FrameLayout mainOverlayHost = findViewById(R.id.mainOverlayHost);
+        View homeScrollView = findViewById(R.id.homeScrollView);
+        miniAudioListener = MiniAudioBarHelper.attachOverlay(this, mainOverlayHost, homeScrollView);
     }
 
     private void applyCurrentThemeAndRefresh(boolean fromUserPullToRefresh) {
@@ -244,7 +255,8 @@ public class MainActivity extends AppCompatActivity {
 
         tvAppTitle.setText("File Manager Pro");
         tvAppTitle.setTextColor(textPrimary);
-        tvAppTitle.setTextSize(ThemeHelper.spScaled(this, 15.5f));
+        tvAppTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvAppTitle.setTextSize(ThemeHelper.spScaled(this, 18f));
         tvPullHint.setTextColor(ThemeHelper.hasWallpaper(this) ? textPrimary : textSecondary);
         tvPullHint.setTextSize(ThemeHelper.spScaled(this, 11.5f));
 
@@ -306,6 +318,7 @@ public class MainActivity extends AppCompatActivity {
             i.putExtra(FileBrowserActivity.EXTRA_TITLE, dir.getName());
             i.putExtra(FileBrowserActivity.EXTRA_INITIAL_DIR, dir.getAbsolutePath());
             startActivity(i);
+            ThemeHelper.overrideOpenTransition(this);
         });
     }
 
@@ -350,7 +363,7 @@ public class MainActivity extends AppCompatActivity {
         StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
         for (int i = sdSummaryBlock.getChildCount() - 1; i >= 0; i--) {
             View ch = sdSummaryBlock.getChildAt(i);
-            if ("external_settings_tab".equals(ch.getTag())) {
+            if ("external_settings_tab".equals(ch.getTag()) || "sd_eject_row".equals(ch.getTag())) {
                 sdSummaryBlock.removeViewAt(i);
             }
         }
@@ -361,14 +374,21 @@ public class MainActivity extends AppCompatActivity {
             tvSdSummaryStats.setText(formatRtlStorageStats(sd.usedBytes, sd.totalBytes, sd.usedPercent));
             sdSummaryBlock.setClickable(true);
             sdSummaryBlock.setFocusable(true);
+            final String sdRootPath = sd.root != null ? sd.root.getAbsolutePath() : "";
             final LinearLayout sdTab = buildExternalStorageSettingsTab(
                     theme, textPrimary, accent,
-                    FileBrowserActivity.MODE_SD_CARD, "כרטיס SD", sd.root);
+                    FileBrowserActivity.MODE_SD_CARD, "כרטיס SD", sd.root, true);
             sdTab.setVisibility(sdSettingsTabExpanded ? View.VISIBLE : View.GONE);
             sdSummaryBlock.addView(sdTab);
             sdSummaryBlock.setOnClickListener(v -> {
                 sdSettingsTabExpanded = !sdSettingsTabExpanded;
                 sdTab.setVisibility(sdSettingsTabExpanded ? View.VISIBLE : View.GONE);
+            });
+            sdSummaryBlock.setOnLongClickListener(v -> {
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                sdSettingsTabExpanded = !sdSettingsTabExpanded;
+                sdTab.setVisibility(sdSettingsTabExpanded ? View.VISIBLE : View.GONE);
+                return true;
             });
         } else {
             sdSettingsTabExpanded = false;
@@ -425,7 +445,7 @@ public class MainActivity extends AppCompatActivity {
                         theme, textPrimary, accent,
                         FileBrowserActivity.MODE_USB_OTG,
                         usb.label.isEmpty() ? "כונן USB" : usb.label,
-                        usb.root);
+                        usb.root, false);
                 usbTab.setVisibility(usbPath.equals(expandedUsbPath) ? View.VISIBLE : View.GONE);
                 row.addView(usbTab);
 
@@ -433,6 +453,13 @@ public class MainActivity extends AppCompatActivity {
                     boolean nextShow = !usbPath.equals(expandedUsbPath);
                     expandedUsbPath = nextShow ? usbPath : null;
                     refreshStorageSummaryAnd96Alert(theme, textPrimary, textSecondary, accent);
+                });
+                row.setOnLongClickListener(v -> {
+                    v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                    boolean nextShow = !usbPath.equals(expandedUsbPath);
+                    expandedUsbPath = nextShow ? usbPath : null;
+                    refreshStorageSummaryAnd96Alert(theme, textPrimary, textSecondary, accent);
+                    return true;
                 });
                 usbOtgContainer.addView(row);
             }
@@ -453,7 +480,8 @@ public class MainActivity extends AppCompatActivity {
             int accent,
             String mode,
             String title,
-            File rootDir
+            File rootDir,
+            boolean isSdCard
     ) {
         float d = getResources().getDisplayMetrics().density;
         LinearLayout tab = new LinearLayout(this);
@@ -466,21 +494,14 @@ public class MainActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         tabLp.topMargin = Math.round(7 * d);
         tab.setLayoutParams(tabLp);
-
-        GradientDrawable tabBg = new GradientDrawable();
-        tabBg.setCornerRadius(Math.round(12 * d));
-        tabBg.setColor(ThemeHelper.isDarkSurface(this, theme)
-                ? Color.argb(42, 255, 255, 255)
-                : Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)));
-        tabBg.setStroke(Math.max(1, Math.round(d)), Color.argb(90, Color.red(accent), Color.green(accent), Color.blue(accent)));
-        tab.setBackground(tabBg);
+        tab.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 12f, false, false));
 
         LinearLayout btnSettingsAction = new LinearLayout(this);
         btnSettingsAction.setOrientation(LinearLayout.HORIZONTAL);
         btnSettingsAction.setGravity(Gravity.CENTER);
         btnSettingsAction.setPadding(Math.round(8 * d), Math.round(4 * d), Math.round(8 * d), Math.round(4 * d));
         ImageView ivSet = new ImageView(this);
-        ivSet.setImageResource(R.drawable.ic_settings);
+        ivSet.setImageResource(R.drawable.ic_eject);
         ivSet.setColorFilter(accent);
         btnSettingsAction.addView(ivSet, new LinearLayout.LayoutParams(Math.round(16 * d), Math.round(16 * d)));
         TextView tvSet = new TextView(this);
@@ -490,7 +511,8 @@ public class MainActivity extends AppCompatActivity {
         tvSet.setTypeface(Typeface.DEFAULT_BOLD);
         tvSet.setPadding(Math.round(6 * d), 0, Math.round(6 * d), 0);
         btnSettingsAction.addView(tvSet);
-        btnSettingsAction.setOnClickListener(v -> openSystemExternalStorageEjectSettings());
+        final String rootPath = rootDir != null ? rootDir.getAbsolutePath() : "";
+        btnSettingsAction.setOnClickListener(v -> performSafeEjectAction(rootPath, isSdCard));
         tab.addView(btnSettingsAction, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f));
 
         View sep = new View(this);
@@ -515,29 +537,10 @@ public class MainActivity extends AppCompatActivity {
                 i.putExtra(FileBrowserActivity.EXTRA_INITIAL_DIR, rootDir.getAbsolutePath());
             }
             startActivity(i);
+            ThemeHelper.overrideOpenTransition(this);
         });
         tab.addView(tvOpen, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.9f));
-
         return tab;
-    }
-
-    private void openSystemExternalStorageEjectSettings() {
-        Intent[] candidates = new Intent[]{
-                new Intent(Settings.ACTION_MEMORY_CARD_SETTINGS),
-                new Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS),
-                new Intent(Settings.ACTION_SETTINGS)
-        };
-        for (Intent intent : candidates) {
-            try {
-                if (intent.resolveActivity(getPackageManager()) != null) {
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(intent);
-                    return;
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        Toast.makeText(this, "פתח הגדרות המכשיר › אחסון להוצאה בטוחה", Toast.LENGTH_LONG).show();
     }
 
     private HomeCategory mapIdToHomeCategory(String key) {
@@ -676,10 +679,25 @@ public class MainActivity extends AppCompatActivity {
                     continue;
                 }
                 HomeCategory item = ordered.get(idx);
-                CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, rowLayout, false);
+                boolean supportsEject = FileBrowserActivity.MODE_USB_OTG.equals(item.id)
+                        || FileBrowserActivity.MODE_SD_CARD.equals(item.id);
+                boolean isSdItem = FileBrowserActivity.MODE_SD_CARD.equals(item.id);
+                String ejectKey = supportsEject
+                        ? (item.id + ":" + (item.customDirPath != null ? item.customDirPath : "sd"))
+                        : null;
+
+                LinearLayout cellWrapper = new LinearLayout(this);
+                cellWrapper.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams cellLp = new LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                cellLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
+                cellWrapper.setLayoutParams(cellLp);
+
+                CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, cellWrapper, false);
                 ThemeHelper.styleGlassCardView(this, tile, theme, 18f, false);
-                LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(0, tileHeightPx, 1f);
-                tileLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
+                LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, tileHeightPx);
+                tileLp.setMargins(0, 0, 0, 0);
                 tile.setLayoutParams(tileLp);
 
                 ImageView iv = tile.findViewById(R.id.ivTileIcon);
@@ -716,9 +734,124 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 tile.setOnClickListener(v -> onCategoryClicked(item));
-                rowLayout.addView(tile);
+                cellWrapper.addView(tile);
+
+                if (supportsEject) {
+                    String volRootPath = isSdItem
+                            ? (sd.root != null ? sd.root.getAbsolutePath() : "")
+                            : (item.customDirPath != null ? item.customDirPath : "");
+                    CardView ejectCard = new CardView(this);
+                    ThemeHelper.styleGlassCardView(this, ejectCard, theme, 12f, false);
+                    ejectCard.setClickable(true);
+                    ejectCard.setFocusable(true);
+                    LinearLayout.LayoutParams ejLp = new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                    ejLp.topMargin = Math.round(4f * d);
+                    ejectCard.setLayoutParams(ejLp);
+
+                    LinearLayout ejInner = new LinearLayout(this);
+                    ejInner.setOrientation(LinearLayout.HORIZONTAL);
+                    ejInner.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+                    ejInner.setGravity(Gravity.CENTER);
+                    ejInner.setPadding(Math.round(8f * d), Math.round(6f * d), Math.round(8f * d), Math.round(6f * d));
+
+                    ImageView ivEj = new ImageView(this);
+                    ivEj.setImageResource(R.drawable.ic_eject);
+                    ivEj.setColorFilter(0xFFEF4444);
+                    LinearLayout.LayoutParams ivEjLp = new LinearLayout.LayoutParams(
+                            Math.round(15f * d), Math.round(15f * d));
+                    ivEjLp.setMarginEnd(Math.round(5f * d));
+                    ejInner.addView(ivEj, ivEjLp);
+
+                    TextView tvEj = new TextView(this);
+                    tvEj.setText("הוצאה");
+                    tvEj.setTextColor(0xFFEF4444);
+                    tvEj.setTypeface(Typeface.DEFAULT_BOLD);
+                    tvEj.setTextSize(ThemeHelper.spScaled(this, 12f));
+                    ejInner.addView(tvEj);
+
+                    ejectCard.addView(ejInner);
+                    boolean isExpanded = ejectKey != null && ejectKey.equals(expandedEjectKey);
+                    ejectCard.setVisibility(isExpanded ? View.VISIBLE : View.GONE);
+                    if (isExpanded) activeGridEjectRow = ejectCard;
+
+                    ejectCard.setOnClickListener(v -> {
+                        expandedEjectKey = null;
+                        ejectCard.setVisibility(View.GONE);
+                        performSafeEjectAction(volRootPath, isSdItem);
+                    });
+
+                    tile.setOnLongClickListener(v -> {
+                        v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                        if (activeGridEjectRow != null && activeGridEjectRow != ejectCard) {
+                            activeGridEjectRow.setVisibility(View.GONE);
+                        }
+                        if (ejectCard.getVisibility() == View.VISIBLE) {
+                            ejectCard.setVisibility(View.GONE);
+                            expandedEjectKey = null;
+                            activeGridEjectRow = null;
+                        } else {
+                            ejectCard.setVisibility(View.VISIBLE);
+                            expandedEjectKey = ejectKey;
+                            activeGridEjectRow = ejectCard;
+                        }
+                        return true;
+                    });
+                    cellWrapper.addView(ejectCard);
+                }
+
+                rowLayout.addView(cellWrapper);
             }
             gridRowsContainer.addView(rowLayout);
+        }
+    }
+
+    private LinearLayout buildInlineEjectBar(int theme, int accent, String rootPath, boolean isSdCard) {
+        float d = getResources().getDisplayMetrics().density;
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        bar.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        bar.setPadding(Math.round(10f * d), Math.round(7f * d), Math.round(10f * d), Math.round(7f * d));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Math.round(6f * d);
+        bar.setLayoutParams(lp);
+        bar.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 12f, false, false));
+
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(R.drawable.ic_eject);
+        iv.setColorFilter(0xFFEF4444);
+        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(
+                Math.round(16f * d), Math.round(16f * d));
+        ivLp.setMarginEnd(Math.round(6f * d));
+        bar.addView(iv, ivLp);
+
+        TextView tv = new TextView(this);
+        tv.setText("הוצאה");
+        tv.setTextColor(0xFFEF4444);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTextSize(ThemeHelper.spScaled(this, 12.5f));
+        bar.addView(tv);
+
+        bar.setOnClickListener(v -> {
+            bar.setVisibility(View.GONE);
+            performSafeEjectAction(rootPath, isSdCard);
+        });
+        return bar;
+    }
+
+    private void performSafeEjectAction(String rootPath, boolean isSdCard) {
+        boolean unmounted = StorageUtils.ejectRemovableStorageOrOpenSettings(this, rootPath, isSdCard);
+        if (unmounted) {
+            Toast.makeText(this, "הכונן נותק בבטחה — ניתן לשלוף כעת", Toast.LENGTH_LONG).show();
+            rootContainer.postDelayed(() -> applyCurrentThemeAndRefresh(false), 500L);
+        } else {
+            Toast.makeText(this,
+                    isSdCard
+                            ? "להוצאה בטוחה של כרטיס ה-SD פותח הגדרות אחסון..."
+                            : "להוצאה בטוחה דרך המערכת פותח הגדרות אחסון...",
+                    Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -778,14 +911,17 @@ public class MainActivity extends AppCompatActivity {
     private void onCategoryClicked(HomeCategory item) {
         if ("TOOL_ANALYZER".equals(item.id)) {
             startActivity(new Intent(this, StorageAnalyzerActivity.class));
+            ThemeHelper.overrideOpenTransition(this);
             return;
         }
         if ("TOOL_AUDIO_CUTTER".equals(item.id)) {
             startActivity(new Intent(this, AudioCutterActivity.class));
+            ThemeHelper.overrideOpenTransition(this);
             return;
         }
         if ("TOOL_VIDEO_CUTTER".equals(item.id)) {
             startActivity(new Intent(this, VideoCutterActivity.class));
+            ThemeHelper.overrideOpenTransition(this);
             return;
         }
         Intent intent = new Intent(this, FileBrowserActivity.class);
@@ -795,6 +931,7 @@ public class MainActivity extends AppCompatActivity {
             intent.putExtra(FileBrowserActivity.EXTRA_INITIAL_DIR, item.customDirPath);
         }
         startActivity(intent);
+        ThemeHelper.overrideOpenTransition(this);
     }
 
     private void ensureStorageAndMediaPermissions() {

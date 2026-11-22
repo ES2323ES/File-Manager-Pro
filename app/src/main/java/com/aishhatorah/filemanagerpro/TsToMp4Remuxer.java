@@ -10,10 +10,14 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.PriorityQueue;
 
 /**
  * מנוע המרה וחיתוך ישיר של קבצי MPEG-TS / BDAV (.mts / .m2ts / .ts) אל קובץ MP4 תקני (H.264/HEVC + AAC):
@@ -62,6 +66,10 @@ public final class TsToMp4Remuxer {
         public byte[] aacCsd0;
         public int aacSampleRate = 48000;
         public int aacChannels = 2;
+        public int audioSampleRate = 0;
+        public int audioChannels = 0;
+        public int lpcmBitsPerSample = 16;
+        public boolean seenIdrVideo = false;
         public boolean audioTranscodeSupported = true;
 
         public boolean hasVideoFormat() {
@@ -112,9 +120,15 @@ public final class TsToMp4Remuxer {
         private long offsetUs = 0L;
         private long lastOutUs = -1L;
         private final long defaultStepUs;
+        private final boolean preserveBFrameOrder;
 
         public MonotonicPtsClock(long defaultStepUs) {
+            this(defaultStepUs, false);
+        }
+
+        public MonotonicPtsClock(long defaultStepUs, boolean preserveBFrameOrder) {
             this.defaultStepUs = Math.max(1000L, defaultStepUs);
+            this.preserveBFrameOrder = preserveBFrameOrder;
         }
 
         public void setOriginIfUnset(long raw90k) {
@@ -159,9 +173,10 @@ public final class TsToMp4Remuxer {
                 delta90k -= (1L << 33);
             }
 
-            // אם יש קפיצה אחורה (> 0.25 שניה) או קפיצה קדימה מוגזמת (> 4 שניות) עקב איפוס/מיזוג
-            if (delta90k < -22500L || delta90k > 360000L) {
-                long expectedOutUs = lastOutUs + defaultStepUs;
+            // בקפיצה משמעותית אחורה (> 333ms במצב B-frame או > 250ms רגיל) או קדימה (> 4s) מבצעים איחוד רצף
+            long backJumpThreshold = preserveBFrameOrder ? -30_000L : -22_500L;
+            if (delta90k < backJumpThreshold || delta90k > 360_000L) {
+                long expectedOutUs = Math.max(0L, lastOutUs) + defaultStepUs;
                 long rawUsFromOrigin = ((rawPts90k - originRaw90k) * 100L) / 9L;
                 offsetUs = expectedOutUs - rawUsFromOrigin;
                 lastRaw90k = rawPts90k;
@@ -172,6 +187,13 @@ public final class TsToMp4Remuxer {
             lastRaw90k = rawPts90k;
             long rawUsFromOrigin = ((rawPts90k - originRaw90k) * 100L) / 9L;
             long candidate = rawUsFromOrigin + offsetUs;
+            if (preserveBFrameOrder) {
+                if (candidate < 0L) candidate = 0L;
+                if (candidate > lastOutUs) {
+                    lastOutUs = candidate;
+                }
+                return candidate;
+            }
             if (candidate <= lastOutUs) {
                 candidate = lastOutUs + Math.max(1000L, defaultStepUs / 2L);
             }
@@ -205,8 +227,8 @@ public final class TsToMp4Remuxer {
         final long effectiveEndUs = endUs > effectiveStartUs ? endUs : Long.MAX_VALUE;
 
         StreamMetadata meta = new StreamMetadata();
-        MonotonicPtsClock videoClock = new MonotonicPtsClock(33333L);
-        MonotonicPtsClock audioClock = new MonotonicPtsClock(21333L);
+        MonotonicPtsClock videoClock = new MonotonicPtsClock(33333L, true);
+        MonotonicPtsClock audioClock = new MonotonicPtsClock(21333L, false);
 
         TsPacketSource pktSource = openPacketSource(inputFile, info);
         byte[] pkt = new byte[TS_PACKET_SIZE];
@@ -280,10 +302,12 @@ public final class TsToMp4Remuxer {
                         }
                         if (vs != null) {
                             if (!configured && meta.hasVideoFormat()) {
-                                // אם יש ערוץ AAC, נחכה מעט עד שיזוהה CSD אם עדיין לא זוהה
-                                if (meta.audioPid <= 0
-                                        || meta.audioStreamType != STREAM_AUDIO_AAC_ADTS
-                                        || meta.aacCsd0 != null
+                                // המתנה קצרה עד לזיהוי מאפייני השמע (AAC CSD או תדר דגימה של AC-3/MP2/LPCM)
+                                boolean waitingForAudioHeader = meta.audioPid > 0 && (
+                                        (meta.audioStreamType == STREAM_AUDIO_AAC_ADTS && meta.aacCsd0 == null)
+                                        || (meta.audioStreamType != STREAM_AUDIO_AAC_ADTS && meta.audioSampleRate <= 0)
+                                );
+                                if (!waitingForAudioHeader
                                         || vs.timeUs > 600_000L
                                         || (isTrimmed && vs.timeUs >= effectiveStartUs)) {
                                     sink.onConfigure(meta);
@@ -611,7 +635,11 @@ public final class TsToMp4Remuxer {
         if (!hasVclSlice || normalizedSample.size() == 0) {
             return null;
         }
-        return new ParsedVideoSample(normalizedSample.toByteArray(), timeUs, isKeyFrame || hasSps);
+        boolean effectiveKeyFrame = isKeyFrame || (hasSps && !meta.seenIdrVideo);
+        if (isKeyFrame) {
+            meta.seenIdrVideo = true;
+        }
+        return new ParsedVideoSample(normalizedSample.toByteArray(), timeUs, effectiveKeyFrame);
     }
 
     public static List<byte[]> splitAnnexBNalUnits(byte[] buf, int start, int end) {
@@ -706,10 +734,69 @@ public final class TsToMp4Remuxer {
         } else if (meta.audioStreamType == STREAM_AUDIO_AC3 || meta.audioStreamType == STREAM_AUDIO_EAC3
                 || meta.audioStreamType == STREAM_AUDIO_MP2 || meta.audioStreamType == STREAM_AUDIO_MP3
                 || meta.audioStreamType == STREAM_AUDIO_BDAV_LPCM) {
+            if (meta.audioSampleRate <= 0) {
+                parseAudioFormatHeaderIfNeeded(pes, payloadOff, pes.length, meta);
+            }
             byte[] payload = Arrays.copyOfRange(pes, payloadOff, pes.length);
             out.add(new ParsedAudioFrame(payload, baseUs));
         }
         return out;
+    }
+
+    private static void parseAudioFormatHeaderIfNeeded(byte[] buf, int off, int end, StreamMetadata meta) {
+        if (meta == null || end <= off) return;
+        if (meta.audioStreamType == STREAM_AUDIO_BDAV_LPCM) {
+            if (off + 4 <= end) {
+                int chAssign = (buf[off + 2] >> 4) & 0x0F;
+                int sFreq = buf[off + 2] & 0x0F;
+                int bpsCode = (buf[off + 3] >> 6) & 0x03;
+                meta.audioSampleRate = (sFreq == 4) ? 96000 : ((sFreq == 5) ? 192000 : 48000);
+                if (chAssign == 1) meta.audioChannels = 1;
+                else if (chAssign >= 4 && chAssign <= 8) meta.audioChannels = chAssign - 1;
+                else if (chAssign >= 9 && chAssign <= 11) meta.audioChannels = chAssign - 3;
+                else meta.audioChannels = 2;
+                meta.lpcmBitsPerSample = (bpsCode == 3) ? 24 : ((bpsCode == 2) ? 20 : 16);
+            }
+            return;
+        }
+        if (meta.audioStreamType == STREAM_AUDIO_AC3 || meta.audioStreamType == STREAM_AUDIO_EAC3) {
+            for (int i = off; i + 7 <= end; i++) {
+                if ((buf[i] & 0xFF) == 0x0B && (buf[i + 1] & 0xFF) == 0x77) {
+                    int fscod = (buf[i + 4] >> 6) & 0x03;
+                    int[] ac3Rates = {48000, 44100, 32000, 48000};
+                    meta.audioSampleRate = ac3Rates[fscod];
+                    int bsid = (buf[i + 5] >> 3) & 0x1F;
+                    int acmod = (bsid > 10)
+                            ? ((buf[i + 4] >> 1) & 0x07)
+                            : ((buf[i + 6] >> 5) & 0x07);
+                    int[] acmodCh = {2, 1, 2, 3, 3, 4, 4, 5};
+                    meta.audioChannels = Math.max(1, acmodCh[acmod & 0x07]);
+                    return;
+                }
+            }
+            return;
+        }
+        if (meta.audioStreamType == STREAM_AUDIO_MP2 || meta.audioStreamType == STREAM_AUDIO_MP3) {
+            final int[] mpeg1Rates = {44100, 48000, 32000, 48000};
+            final int[] mpeg2Rates = {22050, 24000, 16000, 24000};
+            final int[] mpeg25Rates = {11025, 12000, 8000, 12000};
+            for (int i = off; i + 4 <= end; i++) {
+                int b0 = buf[i] & 0xFF;
+                int b1 = buf[i + 1] & 0xFF;
+                int b2 = buf[i + 2] & 0xFF;
+                int b3 = buf[i + 3] & 0xFF;
+                if (b0 == 0xFF && (b1 & 0xE0) == 0xE0) {
+                    int ver = (b1 >> 3) & 0x03;
+                    int srIdx = (b2 >> 2) & 0x03;
+                    if (ver == 1 || srIdx == 3) continue;
+                    meta.audioSampleRate = (ver == 3) ? mpeg1Rates[srIdx]
+                            : ((ver == 2) ? mpeg2Rates[srIdx] : mpeg25Rates[srIdx]);
+                    int mode = (b3 >> 6) & 0x03;
+                    meta.audioChannels = (mode == 3) ? 1 : 2;
+                    return;
+                }
+            }
+        }
     }
 
     // ==================== מנתח מימדי H.264 SPS ====================
@@ -921,13 +1008,21 @@ public final class TsToMp4Remuxer {
     // ==================== Android MediaMuxer + המרת שמע ל-AAC ====================
 
     private static final class AndroidMuxerSink implements SampleSink {
+        private static final int REORDER_WINDOW = 10;
+
         private final File outFile;
         private MediaMuxer muxer;
         private int videoTrackIdx = -1;
         private int audioTrackIdx = -1;
         private boolean muxerStarted = false;
-        private long lastVideoPtsUs = -1L;
+        private long lastVideoDtsUs = -1L;
         private long lastAudioPtsUs = -1L;
+
+        private final ArrayDeque<PendingVideoSample> pendingVideoQueue = new ArrayDeque<>();
+        private final PriorityQueue<Long> videoDtsHeap = new PriorityQueue<>();
+        private final LongArray videoWrittenDtsUs = new LongArray();
+        private final LongArray videoWrittenPtsUs = new LongArray();
+        private boolean hasNonZeroCtts = false;
 
         private StreamMetadata meta;
         private AudioTranscoder audioTranscoder;
@@ -970,7 +1065,11 @@ public final class TsToMp4Remuxer {
                     }
                 } else {
                     // ניסיון המרת MP2/MP3/AC-3/LPCM ל-AAC תקני של MP4 דרך MediaCodec
-                    audioTranscoder = AudioTranscoder.tryCreate(meta.audioStreamType);
+                    audioTranscoder = AudioTranscoder.tryCreate(
+                            meta.audioStreamType,
+                            meta.audioSampleRate,
+                            meta.audioChannels,
+                            meta.lpcmBitsPerSample);
                     if (audioTranscoder != null) {
                         try {
                             MediaFormat aacFmt = audioTranscoder.getOutputAacFormat();
@@ -996,15 +1095,36 @@ public final class TsToMp4Remuxer {
             if (!muxerStarted || videoTrackIdx < 0 || data == null || len <= 0) return;
             int safeLen = Math.min(len, data.length);
             if (safeLen <= 0) return;
-            long pts = timeUs <= lastVideoPtsUs ? (lastVideoPtsUs + 1000L) : timeUs;
-            lastVideoPtsUs = pts;
+            pendingVideoQueue.add(new PendingVideoSample(Arrays.copyOf(data, safeLen), timeUs, isKeyFrame));
+            videoDtsHeap.add(timeUs);
+            while (pendingVideoQueue.size() > REORDER_WINDOW) {
+                flushOnePendingVideoSample();
+            }
+        }
+
+        private void flushOnePendingVideoSample() {
+            PendingVideoSample sample = pendingVideoQueue.poll();
+            if (sample == null) return;
+            Long polledDts = videoDtsHeap.poll();
+            long dts = polledDts != null ? polledDts : sample.ptsUs;
+            if (dts <= lastVideoDtsUs) {
+                dts = lastVideoDtsUs + 1000L;
+            }
+            lastVideoDtsUs = dts;
+
+            videoWrittenDtsUs.add(dts);
+            videoWrittenPtsUs.add(sample.ptsUs);
+            if (Math.abs(sample.ptsUs - dts) > 500L) {
+                hasNonZeroCtts = true;
+            }
+
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             info.offset = 0;
-            info.size = safeLen;
-            info.presentationTimeUs = pts;
-            info.flags = isKeyFrame ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
+            info.size = sample.data.length;
+            info.presentationTimeUs = dts;
+            info.flags = sample.isKeyFrame ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
             try {
-                muxer.writeSampleData(videoTrackIdx, ByteBuffer.wrap(data, 0, safeLen), info);
+                muxer.writeSampleData(videoTrackIdx, ByteBuffer.wrap(sample.data), info);
             } catch (Throwable ignored) {
             }
         }
@@ -1041,6 +1161,9 @@ public final class TsToMp4Remuxer {
 
         @Override
         public void onFinish() {
+            while (!pendingVideoQueue.isEmpty()) {
+                flushOnePendingVideoSample();
+            }
             if (audioTranscoder != null && muxerStarted && audioTrackIdx >= 0) {
                 audioTranscoder.flush(muxer, audioTrackIdx,
                         newPts -> {
@@ -1050,6 +1173,12 @@ public final class TsToMp4Remuxer {
                         });
             }
             releaseQuietly();
+            if (hasNonZeroCtts && videoWrittenDtsUs.size() > 1 && outFile != null && outFile.isFile()) {
+                try {
+                    injectCttsBoxIfNeeded(outFile, videoWrittenDtsUs.toArray(), videoWrittenPtsUs.toArray());
+                } catch (Throwable ignored) {
+                }
+            }
         }
 
         void releaseQuietly() {
@@ -1072,6 +1201,210 @@ public final class TsToMp4Remuxer {
         }
     }
 
+    /**
+     * הזרקת תיבת ISO-BMFF ctts אל תוך stbl של ערוץ הווידאו בסוף הקובץ (moov אחרי mdat),
+     * כך שהיסט התצוגה (PTS - DTS) של B-frames נשמר מבלי לשנות את היסטי ה-mdat ב-stco.
+     */
+    static boolean injectCttsBoxIfNeeded(File mp4File, long[] dtsUs, long[] ptsUs) throws IOException {
+        if (mp4File == null || !mp4File.isFile() || dtsUs == null || ptsUs == null
+                || dtsUs.length <= 1 || dtsUs.length != ptsUs.length) {
+            return false;
+        }
+        try (RandomAccessFile raf = new RandomAccessFile(mp4File, "rw")) {
+            long fileLen = raf.length();
+            long pos = 0L;
+            long moovPos = -1L;
+            long moovSize = 0L;
+            long maxMdatEnd = 0L;
+            byte[] hdr = new byte[16];
+
+            while (pos + 8L <= fileLen) {
+                raf.seek(pos);
+                raf.readFully(hdr, 0, 8);
+                long boxSize = readUint32BE(hdr, 0);
+                String type = new String(hdr, 4, 4, StandardCharsets.US_ASCII);
+                int hdrBytes = 8;
+                if (boxSize == 1L && pos + 16L <= fileLen) {
+                    raf.readFully(hdr, 8, 8);
+                    boxSize = readUint64BE(hdr, 8);
+                    hdrBytes = 16;
+                } else if (boxSize == 0L) {
+                    boxSize = fileLen - pos;
+                }
+                if (boxSize < hdrBytes || pos + boxSize > fileLen) break;
+                if ("mdat".equals(type)) {
+                    maxMdatEnd = Math.max(maxMdatEnd, pos + boxSize);
+                } else if ("moov".equals(type) && hdrBytes == 8) {
+                    moovPos = pos;
+                    moovSize = boxSize;
+                }
+                pos += boxSize;
+            }
+
+            if (moovPos < 0L || moovPos < maxMdatEnd || moovSize <= 8L || moovSize > 16L * 1024L * 1024L) {
+                return false;
+            }
+            byte[] moov = new byte[(int) moovSize];
+            raf.seek(moovPos);
+            raf.readFully(moov);
+
+            int moovEnd = moov.length;
+            int trakCursor = 8;
+            while (trakCursor + 8 <= moovEnd) {
+                int trakSize = (int) readUint32BE(moov, trakCursor);
+                if (trakSize < 8 || trakCursor + trakSize > moovEnd) break;
+                if (matchesBoxType(moov, trakCursor + 4, "trak")) {
+                    int mdiaPos = findChildBox(moov, trakCursor + 8, trakCursor + trakSize, "mdia");
+                    if (mdiaPos >= 0) {
+                        int mdiaSize = (int) readUint32BE(moov, mdiaPos);
+                        int hdlrPos = findChildBox(moov, mdiaPos + 8, mdiaPos + mdiaSize, "hdlr");
+                        if (hdlrPos >= 0 && hdlrPos + 20 <= mdiaPos + mdiaSize
+                                && matchesBoxType(moov, hdlrPos + 16, "vide")) {
+                            int mdhdPos = findChildBox(moov, mdiaPos + 8, mdiaPos + mdiaSize, "mdhd");
+                            long timescale = readMdhdTimescale(moov, mdhdPos);
+                            int minfPos = findChildBox(moov, mdiaPos + 8, mdiaPos + mdiaSize, "minf");
+                            int stblPos = minfPos >= 0
+                                    ? findChildBox(moov, minfPos + 8, minfPos + (int) readUint32BE(moov, minfPos), "stbl")
+                                    : -1;
+                            if (timescale > 0L && stblPos >= 0) {
+                                int stblSize = (int) readUint32BE(moov, stblPos);
+                                int stblEnd = stblPos + stblSize;
+                                if (findChildBox(moov, stblPos + 8, stblEnd, "ctts") >= 0) {
+                                    return false;
+                                }
+                                int stszPos = findChildBox(moov, stblPos + 8, stblEnd, "stsz");
+                                int sampleCount = (stszPos >= 0 && stszPos + 20 <= stblEnd)
+                                        ? (int) readUint32BE(moov, stszPos + 16)
+                                        : dtsUs.length;
+                                if (sampleCount != dtsUs.length) {
+                                    return false;
+                                }
+                                byte[] cttsBox = buildCttsBoxBytes(dtsUs, ptsUs, timescale);
+                                if (cttsBox == null) return false;
+
+                                int minfSize = (int) readUint32BE(moov, minfPos);
+                                writeUint32BE(moov, 0, moovSize + cttsBox.length);
+                                writeUint32BE(moov, trakCursor, trakSize + (long) cttsBox.length);
+                                writeUint32BE(moov, mdiaPos, mdiaSize + (long) cttsBox.length);
+                                writeUint32BE(moov, minfPos, minfSize + (long) cttsBox.length);
+                                writeUint32BE(moov, stblPos, stblSize + (long) cttsBox.length);
+
+                                byte[] newMoov = new byte[moov.length + cttsBox.length];
+                                System.arraycopy(moov, 0, newMoov, 0, stblEnd);
+                                System.arraycopy(cttsBox, 0, newMoov, stblEnd, cttsBox.length);
+                                System.arraycopy(moov, stblEnd, newMoov, stblEnd + cttsBox.length, moov.length - stblEnd);
+
+                                raf.seek(moovPos);
+                                raf.write(newMoov);
+                                if (moovPos + moovSize == fileLen) {
+                                    raf.setLength(moovPos + newMoov.length);
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+                trakCursor += trakSize;
+            }
+        }
+        return false;
+    }
+
+    private static byte[] buildCttsBoxBytes(long[] dtsUs, long[] ptsUs, long timescale) throws IOException {
+        int n = dtsUs.length;
+        int[] offsets = new int[n];
+        int minOffset = 0;
+        boolean anyNonZero = false;
+        for (int i = 0; i < n; i++) {
+            int off = (int) Math.round(((ptsUs[i] - dtsUs[i]) * (double) timescale) / 1_000_000.0);
+            offsets[i] = off;
+            if (off != 0) anyNonZero = true;
+            if (off < minOffset) minOffset = off;
+        }
+        if (!anyNonZero) return null;
+
+        int version = (minOffset < 0) ? 1 : 0;
+        List<int[]> runs = new ArrayList<>();
+        int curOff = offsets[0];
+        int curCount = 1;
+        for (int i = 1; i < n; i++) {
+            if (offsets[i] == curOff) {
+                curCount++;
+            } else {
+                runs.add(new int[]{curCount, curOff});
+                curOff = offsets[i];
+                curCount = 1;
+            }
+        }
+        runs.add(new int[]{curCount, curOff});
+
+        int totalSize = 16 + runs.size() * 8;
+        byte[] box = new byte[totalSize];
+        writeUint32BE(box, 0, totalSize);
+        box[4] = 'c';
+        box[5] = 't';
+        box[6] = 't';
+        box[7] = 's';
+        box[8] = (byte) version;
+        writeUint32BE(box, 12, runs.size());
+        int p = 16;
+        for (int[] r : runs) {
+            writeUint32BE(box, p, r[0]);
+            writeUint32BE(box, p + 4, r[1] & 0xFFFFFFFFL);
+            p += 8;
+        }
+        return box;
+    }
+
+    private static int findChildBox(byte[] buf, int start, int end, String targetType) {
+        int p = start;
+        while (p + 8 <= end) {
+            long sz = readUint32BE(buf, p);
+            if (sz < 8 || p + sz > end) break;
+            if (matchesBoxType(buf, p + 4, targetType)) return p;
+            p += (int) sz;
+        }
+        return -1;
+    }
+
+    private static boolean matchesBoxType(byte[] buf, int off, String type4) {
+        return off + 4 <= buf.length
+                && buf[off] == type4.charAt(0)
+                && buf[off + 1] == type4.charAt(1)
+                && buf[off + 2] == type4.charAt(2)
+                && buf[off + 3] == type4.charAt(3);
+    }
+
+    private static long readMdhdTimescale(byte[] moov, int mdhdPos) {
+        if (mdhdPos < 0 || mdhdPos + 24 > moov.length) return -1L;
+        int version = moov[mdhdPos + 8] & 0xFF;
+        if (version == 0) {
+            return readUint32BE(moov, mdhdPos + 20);
+        }
+        if (version == 1 && mdhdPos + 32 <= moov.length) {
+            return readUint32BE(moov, mdhdPos + 28);
+        }
+        return -1L;
+    }
+
+    private static long readUint32BE(byte[] b, int off) {
+        return ((b[off] & 0xFFL) << 24)
+                | ((b[off + 1] & 0xFFL) << 16)
+                | ((b[off + 2] & 0xFFL) << 8)
+                | (b[off + 3] & 0xFFL);
+    }
+
+    private static long readUint64BE(byte[] b, int off) {
+        return (readUint32BE(b, off) << 32) | readUint32BE(b, off + 4);
+    }
+
+    private static void writeUint32BE(byte[] b, int off, long val) {
+        b[off] = (byte) ((val >> 24) & 0xFF);
+        b[off + 1] = (byte) ((val >> 16) & 0xFF);
+        b[off + 2] = (byte) ((val >> 8) & 0xFF);
+        b[off + 3] = (byte) (val & 0xFF);
+    }
+
     private interface PtsAllocator {
         long allocatePts(long candidateUs);
     }
@@ -1080,18 +1413,26 @@ public final class TsToMp4Remuxer {
         private final MediaCodec decoder;
         private final MediaCodec encoder;
         private final boolean isLpcm;
-        private int decoderChannels = 2;
-        private int decoderSampleRate = 48000;
-        private MediaFormat outputAacFormat;
+        private final int lpcmChannels;
+        private final int lpcmBitsPerSample;
+        private int decoderChannels;
+        private int decoderSampleRate;
+        private final MediaFormat outputAacFormat;
 
-        private AudioTranscoder(MediaCodec decoder, MediaCodec encoder, boolean isLpcm, MediaFormat initialAacFormat) {
+        private AudioTranscoder(MediaCodec decoder, MediaCodec encoder, boolean isLpcm,
+                                int inputSampleRate, int inputChannels, int lpcmBitsPerSample,
+                                MediaFormat initialAacFormat) {
             this.decoder = decoder;
             this.encoder = encoder;
             this.isLpcm = isLpcm;
+            this.decoderSampleRate = inputSampleRate;
+            this.decoderChannels = inputChannels;
+            this.lpcmChannels = inputChannels;
+            this.lpcmBitsPerSample = lpcmBitsPerSample;
             this.outputAacFormat = initialAacFormat;
         }
 
-        static AudioTranscoder tryCreate(int streamType) {
+        static AudioTranscoder tryCreate(int streamType, int detectedSampleRate, int detectedChannels, int lpcmBitsPerSample) {
             boolean lpcm = (streamType == STREAM_AUDIO_BDAV_LPCM);
             String decMime = null;
             if (streamType == STREAM_AUDIO_MP2) decMime = "audio/mpeg-L2";
@@ -1101,27 +1442,40 @@ public final class TsToMp4Remuxer {
 
             if (!lpcm && decMime == null) return null;
 
+            int inSr = detectedSampleRate > 0 ? detectedSampleRate : 48000;
+            int inCh = detectedChannels > 0 ? detectedChannels : 2;
+            int encSr = (inSr == 44100 || inSr == 48000 || inSr == 32000) ? inSr : 48000;
+            int freqIdx = 3; // 48000
+            for (int i = 0; i < ADTS_SAMPLE_RATES.length; i++) {
+                if (ADTS_SAMPLE_RATES[i] == encSr) {
+                    freqIdx = i;
+                    break;
+                }
+            }
+
             MediaCodec dec = null;
             MediaCodec enc = null;
             try {
                 if (!lpcm) {
                     dec = MediaCodec.createDecoderByType(decMime);
-                    MediaFormat df = MediaFormat.createAudioFormat(decMime, 48000, 2);
+                    MediaFormat df = MediaFormat.createAudioFormat(decMime, inSr, inCh);
                     dec.configure(df, null, null, 0);
                     dec.start();
                 }
                 enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
-                MediaFormat ef = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 48000, 2);
+                MediaFormat ef = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, encSr, 2);
                 ef.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
                 ef.setInteger(MediaFormat.KEY_BIT_RATE, 128000);
                 ef.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384);
                 enc.configure(ef, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
                 enc.start();
 
-                // יצירת csd-0 ראשוני ל-48kHz stereo AAC-LC כדי שניתן יהיה לרשום את הערוץ ב-MediaMuxer
-                byte[] csd0 = new byte[]{(byte) ((2 << 3) | (3 >> 1)), (byte) (((3 & 1) << 7) | (2 << 3))};
+                byte[] csd0 = new byte[]{
+                        (byte) ((2 << 3) | (freqIdx >> 1)),
+                        (byte) (((freqIdx & 1) << 7) | (2 << 3))
+                };
                 ef.setByteBuffer("csd-0", ByteBuffer.wrap(csd0));
-                return new AudioTranscoder(dec, enc, lpcm, ef);
+                return new AudioTranscoder(dec, enc, lpcm, inSr, inCh, lpcmBitsPerSample, ef);
             } catch (Throwable t) {
                 if (dec != null) {
                     try { dec.stop(); dec.release(); } catch (Throwable ignored) {}
@@ -1141,14 +1495,26 @@ public final class TsToMp4Remuxer {
             try {
                 if (isLpcm) {
                     if (len <= 4) return;
-                    int pcmLen = len - 4;
-                    byte[] pcm = new byte[pcmLen & ~1];
-                    // המרת Big-Endian BDAV LPCM ל-Little-Endian PCM
-                    for (int i = 0; i + 1 < pcm.length; i += 2) {
-                        pcm[i] = data[4 + i + 1];
-                        pcm[i + 1] = data[4 + i];
+                    byte[] pcm16;
+                    if (lpcmBitsPerSample == 24) {
+                        int samples = (len - 4) / 3;
+                        pcm16 = new byte[samples * 2];
+                        for (int s = 0; s < samples; s++) {
+                            int src = 4 + s * 3;
+                            // 24-bit Big-Endian -> 16-bit Little-Endian (שני הבתים העליונים)
+                            pcm16[s * 2] = data[src + 1];
+                            pcm16[s * 2 + 1] = data[src];
+                        }
+                    } else {
+                        int pcmLen = (len - 4) & ~1;
+                        pcm16 = new byte[pcmLen];
+                        for (int i = 0; i + 1 < pcm16.length; i += 2) {
+                            pcm16[i] = data[4 + i + 1];
+                            pcm16[i + 1] = data[4 + i];
+                        }
                     }
-                    feedEncoder(pcm, pcm.length, timeUs, muxer, trackIdx, ptsAlloc);
+                    byte[] stereoPcm = ensureStereoPcm16(pcm16, lpcmChannels);
+                    feedEncoder(stereoPcm, stereoPcm.length, timeUs, muxer, trackIdx, ptsAlloc);
                     return;
                 }
                 if (decoder == null) return;
@@ -1259,6 +1625,10 @@ public final class TsToMp4Remuxer {
 
         void flush(MediaMuxer muxer, int trackIdx, PtsAllocator ptsAlloc) {
             try {
+                int inIdx = encoder.dequeueInputBuffer(5000);
+                if (inIdx >= 0) {
+                    encoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                }
                 drainEncoder(muxer, trackIdx, ptsAlloc);
             } catch (Throwable ignored) {
             }
@@ -1305,6 +1675,38 @@ public final class TsToMp4Remuxer {
             this.data = data;
             this.timeUs = timeUs;
             this.isKeyFrame = isKeyFrame;
+        }
+    }
+
+    private static final class PendingVideoSample {
+        final byte[] data;
+        final long ptsUs;
+        final boolean isKeyFrame;
+
+        PendingVideoSample(byte[] data, long ptsUs, boolean isKeyFrame) {
+            this.data = data;
+            this.ptsUs = ptsUs;
+            this.isKeyFrame = isKeyFrame;
+        }
+    }
+
+    private static final class LongArray {
+        private long[] data = new long[128];
+        private int count = 0;
+
+        void add(long v) {
+            if (count == data.length) {
+                data = Arrays.copyOf(data, data.length * 2);
+            }
+            data[count++] = v;
+        }
+
+        int size() {
+            return count;
+        }
+
+        long[] toArray() {
+            return Arrays.copyOf(data, count);
         }
     }
 }

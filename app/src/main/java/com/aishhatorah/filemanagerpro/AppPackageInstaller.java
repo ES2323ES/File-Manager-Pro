@@ -90,7 +90,14 @@ public final class AppPackageInstaller {
      * ו"צפה בתוכן הארכיון".
      */
     public static void inspectAndInstall(Activity activity, File packageFile) {
-        if (activity == null || packageFile == null || !packageFile.exists()) return;
+        inspectAndInstall(activity, packageFile, null);
+    }
+
+    public static void inspectAndInstall(Activity activity, File packageFile, Runnable onClosedWithoutInstall) {
+        if (activity == null || packageFile == null || !packageFile.exists()) {
+            if (onClosedWithoutInstall != null) onClosedWithoutInstall.run();
+            return;
+        }
         INSTALL_EXEC.execute(() -> {
             PackageManager pm = activity.getPackageManager();
             String label = packageFile.getName();
@@ -142,7 +149,7 @@ public final class AppPackageInstaller {
                     activity.startActivity(i);
                 });
 
-                ThemedDialogHelper.showCustomDialog(
+                AlertDialog dlg = ThemedDialogHelper.showCustomDialog(
                         activity,
                         "מנהל התקנת אפליקציה",
                         msg,
@@ -150,9 +157,12 @@ public final class AppPackageInstaller {
                         "התקן",
                         () -> installAnyPackage(activity, packageFile),
                         "סגור",
-                        null,
+                        onClosedWithoutInstall,
                         false
                 );
+                if (dlg != null && onClosedWithoutInstall != null) {
+                    dlg.setOnCancelListener(d -> onClosedWithoutInstall.run());
+                }
             });
         });
     }

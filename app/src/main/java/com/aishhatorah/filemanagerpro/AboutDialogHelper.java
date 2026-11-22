@@ -73,7 +73,8 @@ public class AboutDialogHelper {
         root.addView(headerOverlay);
 
         TextView tvAppNameVersion = new TextView(activity);
-        tvAppNameVersion.setText("File Manager Pro  " + BuildConfig.VERSION_NAME + " רשמית");
+        tvAppNameVersion.setText("\u200F\u2066" + BuildConfig.VERSION_NAME + "\u2069 רשמית  •  \u2066File Manager Pro\u2069");
+        tvAppNameVersion.setTextDirection(View.TEXT_DIRECTION_RTL);
         tvAppNameVersion.setTextColor(accent);
         tvAppNameVersion.setTextSize(ThemeHelper.spScaled(activity, 14.5f));
         tvAppNameVersion.setTypeface(Typeface.DEFAULT_BOLD);
@@ -166,7 +167,7 @@ public class AboutDialogHelper {
         root.addView(creditCard, creditLp);
 
         root.addView(buildFloatingGlassButton(activity, theme, "בדיקת עידכונים והתקנה אוטומטית",
-                true, accent, theme == PrefsManager.THEME_NEON ? Color.parseColor("#04101A") : Color.WHITE,
+                true, accent, ThemeHelper.getOnAccentTextColor(accent),
                 v -> UpdateChecker.checkForUpdates(activity, true)));
 
         root.addView(buildFloatingGlassButton(activity, theme, "יומן שינויים",
@@ -175,11 +176,17 @@ public class AboutDialogHelper {
 
         root.addView(buildFloatingGlassButton(activity, theme, "מדריך למשתמש",
                 false, accent, textPrimary,
-                v -> activity.startActivity(new Intent(activity, UserGuideActivity.class))));
+                v -> {
+                    activity.startActivity(new Intent(activity, UserGuideActivity.class));
+                    ThemeHelper.overrideOpenTransition(activity);
+                }));
 
         root.addView(buildFloatingGlassButton(activity, theme, "יומן שגיאות ודיווח תקלות",
                 false, accent, textSecondary,
-                v -> activity.startActivity(new Intent(activity, DiagnosticsActivity.class))));
+                v -> {
+                    activity.startActivity(new Intent(activity, DiagnosticsActivity.class));
+                    ThemeHelper.overrideOpenTransition(activity);
+                }));
 
         scroll.addView(root);
         dialog.show();

@@ -18,6 +18,18 @@ public class StorageAndVersionTest {
     }
 
     @Test
+    public void digitsFirstNaturalSortOrdersNumbersAndHebrewCorrectly() {
+        assertTrue(StorageUtils.startsWithDigit("01_פרק"));
+        assertFalse(StorageUtils.startsWithDigit("אגרת"));
+        assertTrue(StorageUtils.compareHebrewFirst("1", "אגרת") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("9_שיר", "א_בראשית") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("2", "10") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("02_הלכות", "10_הלכות") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("10_הלכות", "אגרת") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("אגרת", "notes") < 0);
+    }
+
+    @Test
     public void videoFormatsRecognizedConsistently() {
         String[] videoExts = {"clip.mp4", "movie.mkv", "legacy.avi", "stream.ts", "camcorder.mts", "bluray.m2ts", "flash.flv", "win.wmv", "apple.mov", "web.webm", "mobile.3gp"};
         for (String name : videoExts) {
@@ -46,9 +58,10 @@ public class StorageAndVersionTest {
 
     @Test
     public void versionHelperFormatsOfficialAndComparesSemver() {
-        assertEquals("0.3.6", UpdateChecker.formatOfficialVer("0.3.6"));
+        assertEquals("0.3.7", UpdateChecker.formatOfficialVer("0.3.7"));
+        assertTrue(UpdateChecker.compareSemver("0.3.7", "0.3.6") > 0);
         assertTrue(UpdateChecker.compareSemver("0.3.6", "0.3.5") > 0);
-        assertEquals(0, UpdateChecker.compareSemver("0.3.6", "0.3.6"));
-        assertTrue(UpdateChecker.compareSemver("0.3.5", "0.3.4") > 0);
+        assertEquals(0, UpdateChecker.compareSemver("0.3.7", "0.3.7"));
+        assertTrue(UpdateChecker.compareSemver("0.3.4", "0.3.3") > 0);
     }
 }

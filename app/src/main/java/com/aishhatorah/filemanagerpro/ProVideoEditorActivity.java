@@ -378,7 +378,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     }
 
     private void exportAsGif() {
-        Toast.makeText(this, "מייצא GIF מונפש...", Toast.LENGTH_SHORT).show();
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this, "ייצוא GIF מונפש", sourceVideo.getName(), false);
         executor.execute(() -> {
             try {
                 File outDir = sourceVideo.getParentFile();
@@ -387,13 +388,16 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 }
                 String base = sourceVideo.getName().replaceAll("\\.[^.]+$", "");
                 File outGif = StorageUtils.uniqueDestinationFile(outDir, base + ".gif");
+                progress.updateIndeterminate(outGif.getName(), "מעבד פריימים ל-GIF...");
                 GifToolsHelper.videoToGif(this, sourceVideo, outGif, 420, 10);
+                progress.finish();
                 runOnUiThread(() -> {
                     lastExportedFile = outGif;
                     btnShareOutput.setVisibility(View.VISIBLE);
                     Toast.makeText(this, "ה-GIF נשמר: " + outGif.getName(), Toast.LENGTH_LONG).show();
                 });
             } catch (Exception e) {
+                progress.finish();
                 runOnUiThread(() -> Toast.makeText(this, "שגיאה ביצירת GIF: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         });
@@ -403,9 +407,11 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         btnExport.setEnabled(false);
         final VideoCompressor.QualityPreset preset = selectedPreset;
         final boolean compress = preset != VideoCompressor.QualityPreset.ORIGINAL;
-        Toast.makeText(this,
-                compress ? "דוחס ומפחית משקל וידאו..." : "מייצא סרטון ערוך באיכות מלאה...",
-                Toast.LENGTH_SHORT).show();
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this,
+                compress ? "דחיסת והפחתת משקל וידאו" : "ייצוא סרטון ערוך",
+                sourceVideo.getName(),
+                true);
 
         final long startUs = trimStartMs * 1000L;
         final long endUs = Math.max(startUs + 500_000L, trimEndMs * 1000L);
@@ -435,8 +441,12 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                             dropAudio,
                             speedVal,
                             preset,
-                            pct -> runOnUiThread(() -> btnExport.setText("דוחס " + pct + "%"))
+                            pct -> {
+                                progress.updatePercent(outFile.getName(), pct, preset.labelHe);
+                                runOnUiThread(() -> btnExport.setText("דוחס " + pct + "%"));
+                            }
                     );
+                    progress.finish();
                     final File saved = outFile;
                     long origLen = Math.max(1L, sourceVideo.length());
                     long newLen = saved.length();
@@ -451,6 +461,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                                 Toast.LENGTH_LONG).show();
                     });
                 } catch (Exception e) {
+                    progress.finish();
                     if (outFile.exists()) outFile.delete();
                     runOnUiThread(() -> {
                         btnExport.setText("ייצא ושמור");
@@ -491,6 +502,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                 muxer.start();
 
+                long totalSpanUs = Math.max(1L, endUs - startUs);
+                int lastPct = -1;
                 while (true) {
                     info.offset = 0;
                     info.size = extractor.readSampleData(buf, 0);
@@ -506,11 +519,18 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                         info.flags = (sampleFlags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
                                 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
                         muxer.writeSampleData(dstTrack, buf, info);
+                        int pct = (int) Math.min(99L, ((pts - startUs) * 100L) / totalSpanUs);
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            progress.updatePercent(outFile.getName(), pct, "ייצוא מהיר");
+                        }
                     }
                     extractor.advance();
                 }
 
+                progress.updatePercent(outFile.getName(), 100, "מסיים...");
                 muxer.stop();
+                progress.finish();
                 final File saved = outFile;
                 runOnUiThread(() -> {
                     btnExport.setEnabled(true);
@@ -519,6 +539,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                     Toast.makeText(this, "הסרטון הערוך נשמר: " + saved.getName(), Toast.LENGTH_LONG).show();
                 });
             } catch (Exception e) {
+                progress.finish();
                 if (outFile.exists()) outFile.delete();
                 runOnUiThread(() -> {
                     btnExport.setEnabled(true);

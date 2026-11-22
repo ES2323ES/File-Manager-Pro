@@ -73,6 +73,15 @@ public class PrefsManager {
         prefs(context).edit().putFloat("ui_scale_factor", clamped).apply();
     }
 
+    public static boolean isReduceAnimations(Context context) {
+        return context != null && prefs(context).getBoolean("reduce_animations", false);
+    }
+
+    public static void setReduceAnimations(Context context, boolean reduce) {
+        if (context == null) return;
+        prefs(context).edit().putBoolean("reduce_animations", reduce).apply();
+    }
+
     // סעיף 6: בחירת מנוע ניגון/צפייה (אפליקציה מול מערכת)
     public static boolean isUseInternalVideoPlayer(Context context) {
         return prefs(context).getBoolean("engine_internal_video", true);

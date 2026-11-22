@@ -270,10 +270,12 @@ public class AudioCutterActivity extends AppCompatActivity {
     private void performLosslessAudioCut() {
         if (selectedAudioUri == null || endMs <= startMs) return;
         btnCutSave.setEnabled(false);
-        Toast.makeText(this, "חותך ושומר קובץ שמע...", Toast.LENGTH_SHORT).show();
+        final OperationProgressHelper.Handle progress = OperationProgressHelper.show(
+                this, "חיתוך ושמירת קובץ שמע", "מעבד שמע...", true);
 
         final long startUs = startMs * 1000L;
         final long endUs = endMs * 1000L;
+        final long spanUs = Math.max(1L, endUs - startUs);
 
         executor.execute(() -> {
             MediaExtractor extractor = new MediaExtractor();
@@ -310,6 +312,7 @@ public class AudioCutterActivity extends AppCompatActivity {
 
                 ByteBuffer buffer = ByteBuffer.allocate(256 * 1024);
                 MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+                int lastPct = -1;
 
                 while (true) {
                     int sampleSize = extractor.readSampleData(buffer, 0);
@@ -325,11 +328,18 @@ public class AudioCutterActivity extends AppCompatActivity {
                         bufferInfo.flags = (sampleFlags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
                                 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
                         muxer.writeSampleData(dstTrack, buffer, bufferInfo);
+                        int pct = (int) Math.min(99L, ((presentationTimeUs - startUs) * 100L) / spanUs);
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            progress.updatePercent(outFile.getName(), pct, "");
+                        }
                     }
                     extractor.advance();
                 }
 
+                progress.updatePercent(outFile.getName(), 100, "");
                 muxer.stop();
+                progress.finish();
                 final File finalOut = outFile;
                 runOnUiThread(() -> {
                     lastCutOutputFile = finalOut;
@@ -349,6 +359,7 @@ public class AudioCutterActivity extends AppCompatActivity {
                     );
                 });
             } catch (Exception e) {
+                progress.finish();
                 runOnUiThread(() -> {
                     btnCutSave.setEnabled(true);
                     Toast.makeText(this, "שגיאה בחיתוך אודיו: " + e.getMessage(), Toast.LENGTH_LONG).show();

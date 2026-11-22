@@ -133,6 +133,104 @@ public class TsToMp4RemuxerTest {
         assertTrue(cutVideoPts.size() < fullVideoPts.size());
     }
 
+    @Test
+    public void bFramePtsPreservesDisplayOrderAndCttsBoxInjectedInMoov() throws Exception {
+        // 1) בדיקת מצב B-frame ב-MonotonicPtsClock: מאפשר קפיצות שליליות של סדר תצוגה (33ms..100ms),
+        //    תוך איפוס בקפיצת רצף גדולה (-45,000 ticks = -500ms)
+        TsToMp4Remuxer.MonotonicPtsClock bClock = new TsToMp4Remuxer.MonotonicPtsClock(33_333L, true);
+        long iFramePts = bClock.normalize90k(90_000L);   // 0 us (DTS 0)
+        long pFramePts = bClock.normalize90k(99_000L);   // 100,000 us (DTS 33ms)
+        long b1FramePts = bClock.normalize90k(93_000L);  // 33,333 us (DTS 67ms)
+        long b2FramePts = bClock.normalize90k(96_000L);  // 66,666 us (DTS 100ms)
+        assertEquals(0L, iFramePts);
+        assertEquals(100_000L, pFramePts);
+        assertTrue("B1 PTS must precede P-frame PTS", b1FramePts < pFramePts && b1FramePts > iFramePts);
+        assertTrue("B2 PTS must sit between B1 and P-frame", b2FramePts > b1FramePts && b2FramePts < pFramePts);
+
+        long afterDiscontinuity = bClock.normalize90k(0L); // איפוס גדול (>333ms אחורה)
+        assertTrue("Large backward jump must still reset monotonically", afterDiscontinuity > pFramePts);
+
+        // 2) בדיקת הזרקת תיבת ctts תקינה ל-moov בסוף קובץ MP4 (אחרי mdat) ועדכון כל גדלי התיבות האב
+        byte[] ftyp = makeBox("ftyp", new byte[]{'i', 's', 'o', 'm', 0, 0, 2, 0});
+        byte[] mdat = makeBox("mdat", new byte[]{1, 2, 3, 4, 5, 6, 7, 8});
+
+        // mdhd v0: version/flags(4) + creation(4) + mod(4) + timescale=90000(4) + duration(4) + lang/predef(4)
+        byte[] mdhdBody = new byte[24];
+        writeBe32(mdhdBody, 12, 90_000);
+        byte[] mdhd = makeBox("mdhd", mdhdBody);
+
+        // hdlr: version/flags(4) + pre_defined(4) + handler_type="vide"(4) + reserved(12)
+        byte[] hdlrBody = new byte[24];
+        hdlrBody[8] = 'v';
+        hdlrBody[9] = 'i';
+        hdlrBody[10] = 'd';
+        hdlrBody[11] = 'e';
+        byte[] hdlr = makeBox("hdlr", hdlrBody);
+
+        // stsz: version/flags(4) + sample_size(4) + sample_count=4(4) + 4 entries(16)
+        byte[] stszBody = new byte[12 + 16];
+        writeBe32(stszBody, 8, 4);
+        byte[] stsz = makeBox("stsz", stszBody);
+
+        byte[] stbl = makeBox("stbl", stsz);
+        byte[] minf = makeBox("minf", stbl);
+        byte[] mdia = makeBox("mdia", concat(mdhd, hdlr, minf));
+        byte[] trak = makeBox("trak", mdia);
+        byte[] moov = makeBox("moov", trak);
+
+        File mp4 = File.createTempFile("test_ctts_", ".mp4");
+        mp4.deleteOnExit();
+        try (FileOutputStream fos = new FileOutputStream(mp4)) {
+            fos.write(ftyp);
+            fos.write(mdat);
+            fos.write(moov);
+        }
+
+        long[] dtsUs = {0L, 33_333L, 66_667L, 100_000L};
+        long[] ptsUs = {0L, 100_000L, 33_333L, 66_667L};
+        assertTrue("Expected ctts box injection to succeed", TsToMp4Remuxer.injectCttsBoxIfNeeded(mp4, dtsUs, ptsUs));
+
+        byte[] patched = java.nio.file.Files.readAllBytes(mp4.toPath());
+        String ascii = new String(patched, java.nio.charset.StandardCharsets.US_ASCII);
+        assertTrue("Patched MP4 must contain ctts atom", ascii.contains("ctts"));
+        // 4 runs (0, +6000, -3000, -3000) -> 16 header + 4*8 = 48 bytes added to moov
+        int moovOff = ftyp.length + mdat.length;
+        int patchedMoovSize = readBe32(patched, moovOff);
+        assertEquals(moov.length + 48, patchedMoovSize);
+        assertEquals(patched.length, moovOff + patchedMoovSize);
+    }
+
+    private static byte[] makeBox(String type, byte[] payload) {
+        byte[] out = new byte[8 + payload.length];
+        writeBe32(out, 0, out.length);
+        out[4] = (byte) type.charAt(0);
+        out[5] = (byte) type.charAt(1);
+        out[6] = (byte) type.charAt(2);
+        out[7] = (byte) type.charAt(3);
+        System.arraycopy(payload, 0, out, 8, payload.length);
+        return out;
+    }
+
+    private static byte[] concat(byte[]... arrays) throws IOException {
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        for (byte[] a : arrays) os.write(a);
+        return os.toByteArray();
+    }
+
+    private static void writeBe32(byte[] buf, int off, int val) {
+        buf[off] = (byte) ((val >> 24) & 0xFF);
+        buf[off + 1] = (byte) ((val >> 16) & 0xFF);
+        buf[off + 2] = (byte) ((val >> 8) & 0xFF);
+        buf[off + 3] = (byte) (val & 0xFF);
+    }
+
+    private static int readBe32(byte[] buf, int off) {
+        return ((buf[off] & 0xFF) << 24)
+                | ((buf[off + 1] & 0xFF) << 16)
+                | ((buf[off + 2] & 0xFF) << 8)
+                | (buf[off + 3] & 0xFF);
+    }
+
     private static void writeBdavPacket(ByteArrayOutputStream out, byte[] ts188) throws IOException {
         out.write(0x00);
         out.write(0x01);

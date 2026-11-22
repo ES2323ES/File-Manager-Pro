@@ -450,7 +450,7 @@ public final class MpegTsNormalizer {
      * קורא חוצץ מהיר הממפה היסטים וירטואליים של 188 בתים לקבצי .mts / .m2ts של 192 בתים.
      */
     public static final class NormalizedTsStreamReader implements Closeable {
-        private static final int CACHE_PACKETS = 2048;
+        private static final int CACHE_PACKETS = 8192;
 
         private final RandomAccessFile raf;
         private final TsFormatInfo info;

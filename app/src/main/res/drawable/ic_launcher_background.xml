@@ -5,6 +5,7 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Deep glass sapphire backdrop -->
     <path android:pathData="M0,0h108v108h-108z">
         <aapt:attr name="android:fillColor">
             <gradient
@@ -13,9 +14,54 @@
                 android:startX="0"
                 android:startY="0"
                 android:type="linear">
-                <item android:color="#2563EB" android:offset="0.0" />
-                <item android:color="#1D4ED8" android:offset="0.55" />
-                <item android:color="#172554" android:offset="1.0" />
+                <item android:color="#3B82F6" android:offset="0.0" />
+                <item android:color="#1D4ED8" android:offset="0.52" />
+                <item android:color="#0F172A" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Upper-left luminous sky glow -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="22"
+                android:centerY="20"
+                android:gradientRadius="68"
+                android:type="radial">
+                <item android:color="#557DD3FC" android:offset="0.0" />
+                <item android:color="#1E38BDF8" android:offset="0.48" />
+                <item android:color="#0038BDF8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Lower-right subtle indigo rim glow -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="92"
+                android:centerY="92"
+                android:gradientRadius="56"
+                android:type="radial">
+                <item android:color="#4060A5FA" android:offset="0.0" />
+                <item android:color="#0060A5FA" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Subtle diagonal specular glass sheen across upper half -->
+    <path android:pathData="M0,0 L108,0 L108,34 C72,46 34,54 0,68 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="64"
+                android:endY="58"
+                android:startX="14"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#2EFFFFFF" android:offset="0.0" />
+                <item android:color="#0AFFFFFF" android:offset="0.7" />
+                <item android:color="#00FFFFFF" android:offset="1.0" />
             </gradient>
         </aapt:attr>
     </path>
