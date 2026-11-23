@@ -2913,7 +2913,23 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 return;
             }
             if (!videoPrepared) {
-                applyMediaImmersiveAndLayoutState();
+                if (exoPlayer != null) {
+                    exoPlayer.setPlayWhenReady(true);
+                    exoPlayer.play();
+                    if (targetFile != null
+                            && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                            || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0)
+                            && !exoRemuxFallbackAttempted
+                            && !isRemuxingMtsPlayback
+                            && exoPlayer.getPlaybackState() == Player.STATE_BUFFERING) {
+                        uiHandler.removeCallbacks(mtsBufferingWatchdog);
+                        uiHandler.postDelayed(mtsBufferingWatchdog, 4500L);
+                    }
+                }
+                syncVidButtons.run();
+                if (wasAwaiting) {
+                    applyMediaImmersiveAndLayoutState();
+                }
                 return;
             }
             try {
@@ -3470,11 +3486,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     .setEnableDecoderFallback(true);
 
             DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(
-                            isMpegTs ? 20_000 : 15_000,
-                            isMpegTs ? 50_000 : 45_000,
-                            isMpegTs ? 1_200 : 500,
-                            isMpegTs ? 2_000 : 1_000)
+                    .setBufferDurationsMs(15_000, 45_000, 250, 500)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build();
 
@@ -3549,6 +3561,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     }
                     if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
                     else if (onReadyUi != null) onReadyUi.run();
+                }
+
+                @Override
+                public void onRenderedFirstFrame() {
+                    if (!awaitingInitialVideoPlay || isVideoPlayingSafely()) {
+                        if (videoTextureView != null) videoTextureView.setAlpha(1f);
+                        if (ivVideoPreviewThumb != null) ivVideoPreviewThumb.setVisibility(View.GONE);
+                    }
                 }
 
                 @Override
@@ -3713,6 +3733,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     }
                     if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
                     else if (onReadyUi != null) onReadyUi.run();
+                }
+
+                @Override
+                public void onRenderedFirstFrame() {
+                    if (!awaitingInitialVideoPlay || isVideoPlayingSafely()) {
+                        if (videoTextureView != null) videoTextureView.setAlpha(1f);
+                        if (ivVideoPreviewThumb != null) ivVideoPreviewThumb.setVisibility(View.GONE);
+                    }
                 }
 
                 @Override
@@ -5037,19 +5065,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void evaluateVideoDeviceSilence(boolean notifyUser) {
-        boolean silenced = AudioPlayerManager.isDeviceSilenced(this);
-        if (silenced && !videoMutedByDeviceSilence) {
-            videoMutedByDeviceSilence = true;
-            applyCurrentVideoVolume();
-            if (notifyUser && isVideoMode) {
-                Toast.makeText(this, "המכשיר מושתק — הסרטון הושתק אוטומטית", Toast.LENGTH_SHORT).show();
-            }
-        } else if (!silenced && videoMutedByDeviceSilence) {
+        if (videoMutedByDeviceSilence) {
             videoMutedByDeviceSilence = false;
             applyCurrentVideoVolume();
-            if (notifyUser && isVideoMode && !videoMuted) {
-                Toast.makeText(this, "השתקת המכשיר בוטלה — שמע הסרטון חזר", Toast.LENGTH_SHORT).show();
-            }
         }
     }
 

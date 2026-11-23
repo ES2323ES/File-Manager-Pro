@@ -96,6 +96,17 @@ public class ChangelogDialogHelper {
         headerRow.addView(rightTitleGroup, rightLp);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.7.1 =====================
+        SpannableStringBuilder v371 = new SpannableStringBuilder();
+        appendBullet(v371, "תיקון מלא של נגן האודיו והשמע: ", accent,
+                "ביטול חסימת הניגון הכפויה במצבי \"נא לא להפריע\"/השתקה ב-AudioPlayerManager ובנגן הווידאו, ותיקון קריאת setPlaybackParams ב-MediaPlayer לפני תחילת הניגון.", textPrimary);
+        appendBullet(v371, "\n\nתיקון תקיעות נגינת וידאו MTS/M2TS: ", accent,
+                "החזרת הדגל FLAG_ALLOW_NON_IDR_KEYFRAMES ב-SeekableTsExtractor, תיקון לחיצת הפעלה בזמן הכנת הווידאו והפעלת מנגנון הגיבוי של MTS, ואיזון חוצץ הקריאה וההשמעה לפתיחה ודילוג חלקים.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.7.1", "הגירסה הנוכחית • תיקון אודיו ווידאו MTS",
+                accent, textPrimary, textSecondary, subtleBg, divider, v371);
+
         // ===================== גירסה 0.3.7 =====================
         SpannableStringBuilder v37 = new SpannableStringBuilder();
         appendBullet(v37, "תיקון יסודי של נגינת וידאו MTS/M2TS (מהשורש): ", accent,
@@ -107,8 +118,8 @@ public class ChangelogDialogHelper {
         appendBullet(v37, "\n\nוילונות צד מזכוכית, עורך קוד ותמונות מחודש ושיפורי ממשק (PR #3): ", accent,
                 "וילונות צד מונפשים לתפריטי המבורגר, בחירה מרובה בהחלקה לצד, תצוגת Markdown כברירת מחדל וחיפוש/החלפה משולב בעורך הקוד, נקודות 5% בפסי התקדמות, סיבוב תור גרירה באודיו, וסידור פורמט הגירסה במסך האודות.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.3.7", "הגירסה הנוכחית • לחץ לצמצום/הרחבה",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.3.7", "מיון טבעי, שדרוגי PR #3 ושיפורי ממשק",
                 accent, textPrimary, textSecondary, subtleBg, divider, v37);
 
         // ===================== גירסה 0.3.6 =====================

@@ -100,76 +100,18 @@ public class AudioPlayerManager {
     }
 
     public static boolean isDeviceSilenced(Context context) {
-        if (context == null) return false;
-        try {
-            AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
-            if (am != null) {
-                if (am.getStreamVolume(AudioManager.STREAM_MUSIC) <= 0) {
-                    return true;
-                }
-                if (am.isStreamMute(AudioManager.STREAM_MUSIC)) {
-                    return true;
-                }
-            }
-            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) {
-                int filter = nm.getCurrentInterruptionFilter();
-                if (filter == NotificationManager.INTERRUPTION_FILTER_NONE
-                        || filter == NotificationManager.INTERRUPTION_FILTER_ALARMS) {
-                    return true;
-                }
-                if (filter == NotificationManager.INTERRUPTION_FILTER_PRIORITY) {
-                    NotificationManager.Policy policy = nm.getNotificationPolicy();
-                    if (policy != null
-                            && (policy.priorityCategories & NotificationManager.Policy.PRIORITY_CATEGORY_MEDIA) == 0) {
-                        return true;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-        }
         return false;
     }
 
     public boolean isPausedByDeviceSilence() {
-        return pausedByDeviceSilence;
+        return false;
     }
 
     private void ensureSilenceMonitorRegistered(Context appCtx) {
-        if (appCtx == null || silenceReceiverRegistered) return;
-        try {
-            IntentFilter filter = new IntentFilter();
-            filter.addAction("android.media.VOLUME_CHANGED_ACTION");
-            filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION);
-            filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
-            ContextCompat.registerReceiver(appCtx, silenceReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
-            silenceReceiverRegistered = true;
-        } catch (Throwable ignored) {
-        }
     }
 
     private void evaluateDeviceSilence(Context ctx) {
-        if (ctx == null || mediaPlayer == null || !prepared) return;
-        Context appCtx = ctx.getApplicationContext();
-        boolean silenced = isDeviceSilenced(appCtx);
-        try {
-            if (silenced) {
-                if (mediaPlayer.isPlaying()) {
-                    mediaPlayer.pause();
-                    pausedByDeviceSilence = true;
-                    syncForegroundService(appCtx);
-                    notifyListeners();
-                }
-            } else if (pausedByDeviceSilence) {
-                pausedByDeviceSilence = false;
-                if (!mediaPlayer.isPlaying()) {
-                    applySpeedInternal(true);
-                    syncForegroundService(appCtx);
-                    notifyListeners();
-                }
-            }
-        } catch (Throwable ignored) {
-        }
+        pausedByDeviceSilence = false;
     }
 
     public void addListener(PlaybackListener l) {
@@ -510,9 +452,8 @@ public class AudioPlayerManager {
             mediaPlayer.prepare();
             prepared = true;
             attachAudioEffects();
-            boolean silenced = isDeviceSilenced(appCtx);
-            pausedByDeviceSilence = silenced;
-            applySpeedInternal(!silenced);
+            pausedByDeviceSilence = false;
+            applySpeedInternal(true);
             mediaPlayer.setOnCompletionListener(mp -> handleTrackCompleted(appCtx));
             syncForegroundService(appCtx);
             notifyListeners();
@@ -528,9 +469,8 @@ public class AudioPlayerManager {
             try {
                 if (mediaPlayer != null && prepared) {
                     mediaPlayer.seekTo(0);
-                    boolean silenced = isDeviceSilenced(appCtx);
-                    pausedByDeviceSilence = silenced;
-                    applySpeedInternal(!silenced);
+                    pausedByDeviceSilence = false;
+                    applySpeedInternal(true);
                     syncForegroundService(appCtx);
                     notifyListeners();
                     return;
@@ -553,11 +493,9 @@ public class AudioPlayerManager {
 
     private void startInternal(Context appCtx) {
         if (mediaPlayer == null || !prepared) return;
-        ensureSilenceMonitorRegistered(appCtx);
         try {
-            boolean silenced = isDeviceSilenced(appCtx);
-            pausedByDeviceSilence = silenced;
-            applySpeedInternal(!silenced);
+            pausedByDeviceSilence = false;
+            applySpeedInternal(true);
             syncForegroundService(appCtx);
             notifyListeners();
         } catch (Exception ignored) {
@@ -567,18 +505,21 @@ public class AudioPlayerManager {
     private void applySpeedInternal(boolean shouldPlay) {
         if (mediaPlayer == null || !prepared) return;
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PlaybackParams params = mediaPlayer.getPlaybackParams();
-                if (params == null) params = new PlaybackParams();
-                params.setSpeed(playbackSpeed);
-                mediaPlayer.setPlaybackParams(params);
-                if (!shouldPlay && mediaPlayer.isPlaying()) {
-                    mediaPlayer.pause();
-                } else if (shouldPlay && !mediaPlayer.isPlaying()) {
-                    mediaPlayer.start();
-                }
-            } else if (shouldPlay) {
+            if (shouldPlay && !mediaPlayer.isPlaying()) {
                 mediaPlayer.start();
+            } else if (!shouldPlay && mediaPlayer.isPlaying()) {
+                mediaPlayer.pause();
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                boolean customSpeed = Math.abs(playbackSpeed - 1.0f) >= 0.02f;
+                if (shouldPlay && (customSpeed || mediaPlayer.isPlaying())) {
+                    PlaybackParams params = mediaPlayer.getPlaybackParams();
+                    if (params == null) params = new PlaybackParams();
+                    if (Math.abs(params.getSpeed() - playbackSpeed) >= 0.01f) {
+                        params.setSpeed(playbackSpeed);
+                        mediaPlayer.setPlaybackParams(params);
+                    }
+                }
             }
         } catch (Exception e) {
             try {
@@ -590,8 +531,9 @@ public class AudioPlayerManager {
 
     public void setPlaybackSpeed(Context context, float speed) {
         this.playbackSpeed = Math.max(0.25f, Math.min(3.0f, speed));
-        boolean wasPlaying = isPlaying();
-        applySpeedInternal(wasPlaying);
+        if (isPlaying()) {
+            applySpeedInternal(true);
+        }
         if (context != null) syncForegroundService(context.getApplicationContext());
         notifyListeners();
     }
@@ -611,15 +553,11 @@ public class AudioPlayerManager {
         if (mediaPlayer == null || !prepared) return;
         Context appCtx = context.getApplicationContext();
         lastAppContext = appCtx;
-        ensureSilenceMonitorRegistered(appCtx);
         try {
+            pausedByDeviceSilence = false;
             if (mediaPlayer.isPlaying()) {
-                pausedByDeviceSilence = false;
                 mediaPlayer.pause();
-            } else if (isDeviceSilenced(appCtx)) {
-                pausedByDeviceSilence = true;
             } else {
-                pausedByDeviceSilence = false;
                 applySpeedInternal(true);
             }
             syncForegroundService(appCtx);
