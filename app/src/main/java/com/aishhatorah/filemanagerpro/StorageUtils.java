@@ -307,10 +307,11 @@ public class StorageUtils {
                 if (!seenPaths.add(path)) continue;
 
                 File f = new File(path);
-                if (!f.exists() || f.isDirectory()) continue;
+                long[] stat = readRegularFileSizeAndMtime(f);
+                if (stat == null) continue;
 
-                long len = f.length();
-                if (modMs <= 0L) modMs = f.lastModified();
+                long len = stat[0];
+                if (modMs <= 0L) modMs = stat[1];
 
                 snapshot.sizeByPath.put(path, len);
                 snapshot.modifiedByPath.put(path, modMs);
@@ -435,11 +436,12 @@ public class StorageUtils {
                         if (!seen.add(path)) continue;
 
                         File f = new File(path);
-                        if (!f.exists() || f.isDirectory()) continue;
+                        long[] stat = readRegularFileSizeAndMtime(f);
+                        if (stat == null) continue;
 
-                        long len = f.length();
+                        long len = stat[0];
                         long modSec = colMod >= 0 ? c.getLong(colMod) : 0L;
-                        long modMs = modSec > 0 ? modSec * 1000L : f.lastModified();
+                        long modMs = modSec > 0 ? modSec * 1000L : stat[1];
                         if (FileBrowserActivity.MODE_RECENT.equals(mode) && modMs < recentCutoff) {
                             continue;
                         }
@@ -551,27 +553,57 @@ public class StorageUtils {
         return path.contains("/.");
     }
 
+    private static long[] readRegularFileSizeAndMtime(File file) {
+        try {
+            BasicFileAttributes attr = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
+            if (!attr.isRegularFile() || attr.isDirectory()) {
+                return null;
+            }
+            return new long[]{Math.max(0L, attr.size()), Math.max(0L, attr.lastModifiedTime().toMillis())};
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     public static long computeDirectoryBytes(File dir, boolean includeHidden, int depth) {
         return computeDirectoryBytesAndCount(dir, includeHidden, depth)[0];
     }
 
     public static long[] computeDirectoryBytesAndCount(File dir, boolean includeHidden, int depth) {
-        if (dir == null || !dir.exists() || depth > 5) return new long[]{0L, 0L};
-        if (!dir.isDirectory()) return new long[]{dir.length(), 1L};
-        File[] children = dir.listFiles();
-        if (children == null) return new long[]{0L, 0L};
+        if (dir == null || depth > 5) return new long[]{0L, 0L};
+        java.nio.file.Path dirPath = dir.toPath();
+        try {
+            BasicFileAttributes rootAttr = Files.readAttributes(dirPath, BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            if (rootAttr.isSymbolicLink()) return new long[]{0L, 0L};
+            if (!rootAttr.isDirectory()) return new long[]{Math.max(0L, rootAttr.size()), 1L};
+        } catch (Throwable ignored) {
+            return new long[]{0L, 0L};
+        }
         long totalBytes = 0L;
         long totalCount = 0L;
-        for (File f : children) {
-            if (!includeHidden && f.getName().startsWith(".")) continue;
-            if (f.isDirectory()) {
-                long[] sub = computeDirectoryBytesAndCount(f, includeHidden, depth + 1);
-                totalBytes += sub[0];
-                totalCount += sub[1];
-            } else {
-                totalBytes += f.length();
-                totalCount += 1L;
+        try (java.nio.file.DirectoryStream<java.nio.file.Path> stream = Files.newDirectoryStream(dirPath)) {
+            for (java.nio.file.Path childPath : stream) {
+                java.nio.file.Path namePath = childPath.getFileName();
+                if (namePath == null) continue;
+                String name = namePath.toString();
+                if (!includeHidden && name.startsWith(".")) continue;
+                try {
+                    BasicFileAttributes attr = Files.readAttributes(childPath, BasicFileAttributes.class,
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    if (attr.isSymbolicLink()) continue;
+                    if (attr.isDirectory()) {
+                        long[] sub = computeDirectoryBytesAndCount(childPath.toFile(), includeHidden, depth + 1);
+                        totalBytes += sub[0];
+                        totalCount += sub[1];
+                    } else {
+                        totalBytes += Math.max(0L, attr.size());
+                        totalCount += 1L;
+                    }
+                } catch (Throwable ignored) {
+                }
             }
+        } catch (Throwable ignored) {
         }
         return new long[]{totalBytes, totalCount};
     }

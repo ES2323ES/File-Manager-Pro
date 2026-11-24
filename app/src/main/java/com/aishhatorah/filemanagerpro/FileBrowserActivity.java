@@ -114,7 +114,10 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService searchExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService dirCountExecutor = Executors.newFixedThreadPool(2);
     private final AtomicInteger searchGeneration = new AtomicInteger(0);
+    private final AtomicInteger loadGeneration = new AtomicInteger(0);
+    private final AtomicInteger dirCountGeneration = new AtomicInteger(0);
     private final List<File> allLoadedFiles = new ArrayList<>();
     private final List<File> displayedFiles = new ArrayList<>();
     private final Set<String> selectedPaths = new HashSet<>();
@@ -1818,9 +1821,12 @@ public class FileBrowserActivity extends AppCompatActivity {
                         ? FileScanCache.peekFreshSnapshot(showHidden)
                         : null;
 
+        final int myLoadGen = loadGeneration.incrementAndGet();
+        dirCountGeneration.incrementAndGet();
         loadingSpinner.setVisibility((allLoadedFiles.isEmpty() && quickSnap == null) ? View.VISIBLE : View.GONE);
 
         executor.execute(() -> {
+            if (loadGeneration.get() != myLoadGen) return;
             List<File> result = new ArrayList<>();
             if (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) {
                 dirItemCountCache.clear();
@@ -1829,6 +1835,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     File[] children = currentDir.listFiles();
                     if (children != null) {
                         for (File f : children) {
+                            if (loadGeneration.get() != myLoadGen) return;
                             if (MODE_RECYCLE_BIN.equals(currentMode)
                                     && ("trash_manifest.json".equals(f.getName()) || ".nomedia".equals(f.getName()))) {
                                 continue;
@@ -1909,7 +1916,9 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             }
 
+            if (loadGeneration.get() != myLoadGen) return;
             sortFileList(result);
+            if (loadGeneration.get() != myLoadGen) return;
 
             final String scopeKey = currentMode
                     + "|" + (currentDir != null ? currentDir.getAbsolutePath() : "")
@@ -1918,6 +1927,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     ? "התיקייה רועננה"
                     : "הקטגוריה רועננה";
             runOnUiThread(() -> {
+                if (loadGeneration.get() != myLoadGen) return;
                 boolean scopeChanged = !scopeKey.equals(lastLoadedScopeKey);
                 lastLoadedScopeKey = scopeKey;
                 loadingSpinner.setVisibility(View.GONE);
@@ -2028,9 +2038,12 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (metricMap != null) {
                 String p = f.getAbsolutePath();
                 if (sortMode == PrefsManager.SORT_SIZE) {
-                    long diskLen = (!dir && f.exists()) ? f.length() : -1L;
                     Long cached = cachedSizesByPath.get(p);
-                    metricMap.put(f, diskLen >= 0L ? diskLen : (cached != null ? cached : 0L));
+                    if (cached != null) {
+                        metricMap.put(f, cached);
+                    } else {
+                        metricMap.put(f, !dir ? f.length() : 0L);
+                    }
                 } else if (sortMode == PrefsManager.SORT_DATE) {
                     Long cached = cachedModifiedByPath.get(p);
                     metricMap.put(f, cached != null ? cached : f.lastModified());
@@ -3385,9 +3398,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             } else {
                 String p = f.getAbsolutePath();
-                long diskLen = f.exists() ? f.length() : -1L;
                 Long sz = cachedSizesByPath.get(p);
-                long fileLen = diskLen >= 0L ? diskLen : (sz != null ? sz : 0L);
+                long fileLen = sz != null ? sz : f.length();
                 Long md = cachedModifiedByPath.get(p);
                 long modMs = md != null ? md : f.lastModified();
                 h.tvMeta.setText(isGrid
@@ -3433,11 +3445,23 @@ public class FileBrowserActivity extends AppCompatActivity {
         private void scheduleDirChildCount(File dir, int adapterPos) {
             final String path = dir.getAbsolutePath();
             if (!pendingDirCountPaths.add(path)) return;
-            executor.execute(() -> {
-                File[] sub = dir.listFiles();
-                int count = sub != null ? sub.length : 0;
+            final int gen = dirCountGeneration.get();
+            dirCountExecutor.execute(() -> {
+                if (dirCountGeneration.get() != gen) return;
+                int count = 0;
+                try (java.nio.file.DirectoryStream<java.nio.file.Path> stream = java.nio.file.Files.newDirectoryStream(dir.toPath())) {
+                    for (java.nio.file.Path ignored : stream) {
+                        count++;
+                        if (dirCountGeneration.get() != gen) return;
+                    }
+                } catch (Throwable ignored) {
+                    File[] sub = dir.listFiles();
+                    count = sub != null ? sub.length : 0;
+                }
+                if (dirCountGeneration.get() != gen) return;
                 dirItemCountCache.put(path, count);
                 runOnUiThread(() -> {
+                    if (dirCountGeneration.get() != gen) return;
                     if (adapterPos >= 0 && adapterPos < displayedFiles.size()
                             && displayedFiles.get(adapterPos).getAbsolutePath().equals(path)) {
                         notifyItemChanged(adapterPos);
@@ -3522,5 +3546,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
         executor.shutdownNow();
         searchExecutor.shutdownNow();
+        dirCountExecutor.shutdownNow();
     }
 }

@@ -8,6 +8,11 @@ import android.database.sqlite.SQLiteStatement;
 import android.os.Environment;
 
 import java.io.File;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -25,7 +30,7 @@ public final class FileIndexDatabase extends SQLiteOpenHelper {
     private static final String DB_NAME = "file_index.db";
     private static final int DB_VERSION = 1;
     private static final int MAX_CRAWL_DEPTH = 24;
-    private static final int BATCH_SIZE = 400;
+    private static final int BATCH_SIZE = 500;
 
     private static volatile FileIndexDatabase instance;
     private volatile boolean rebuildInProgress = false;
@@ -255,13 +260,18 @@ public final class FileIndexDatabase extends SQLiteOpenHelper {
             db.setTransactionSuccessful();
             db.endTransaction();
 
-            Set<String> visitedCanonicalDirs = new HashSet<>();
+            Set<String> visitedDirs = new HashSet<>(256);
             List<PendingEntry> batch = new ArrayList<>(BATCH_SIZE);
 
-            for (File root : roots) {
-                crawlDirectory(root, root.getAbsolutePath(), false, 0, visitedCanonicalDirs, batch, db);
+            try (SQLiteStatement insertStmt = db.compileStatement(
+                    "INSERT OR REPLACE INTO entries "
+                            + "(path, parent_path, name, name_norm, is_dir, is_hidden, size_bytes, modified_ms, volume_root) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                for (File root : roots) {
+                    crawlDirectory(root.toPath(), root.getAbsolutePath(), false, 0, visitedDirs, batch, db, insertStmt);
+                }
+                flushBatch(db, batch, insertStmt);
             }
-            flushBatch(db, batch);
         } catch (Throwable ignored) {
         } finally {
             rebuildInProgress = false;
@@ -301,60 +311,74 @@ public final class FileIndexDatabase extends SQLiteOpenHelper {
     }
 
     private void crawlDirectory(
-            File dir,
+            Path dirPath,
             String volumeRoot,
             boolean ancestorHidden,
             int depth,
-            Set<String> visitedCanonicalDirs,
+            Set<String> visitedDirs,
             List<PendingEntry> batch,
-            SQLiteDatabase db
+            SQLiteDatabase db,
+            SQLiteStatement insertStmt
     ) {
-        if (dir == null || depth > MAX_CRAWL_DEPTH || !dir.exists()) return;
-        String dirName = dir.getName();
+        if (dirPath == null || depth > MAX_CRAWL_DEPTH) return;
+        Path dirNamePath = dirPath.getFileName();
+        String dirName = dirNamePath != null ? dirNamePath.toString() : "";
         if (".FileManagerPro_Trash".equals(dirName)) return;
 
-        String absPath = dir.getAbsolutePath();
+        String absPath = dirPath.toString();
         // דילוג מבוקר רק על Android/data ו-Android/obb החסומות מ-API 30; Android/media נסרקת במלואה
         if (absPath.endsWith("/Android/data") || absPath.endsWith("/Android/obb")) return;
+        if (!visitedDirs.add(absPath)) return;
 
-        String canonical;
-        try {
-            canonical = dir.getCanonicalPath();
-        } catch (Throwable t) {
-            canonical = absPath;
-        }
-        if (!visitedCanonicalDirs.add(canonical)) return;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dirPath)) {
+            for (Path childPath : stream) {
+                Path childNamePath = childPath.getFileName();
+                if (childNamePath == null) continue;
+                String name = childNamePath.toString();
+                if (".FileManagerPro_Trash".equals(name)) continue;
 
-        File[] children = dir.listFiles();
-        if (children == null) return;
+                BasicFileAttributes attr;
+                try {
+                    attr = Files.readAttributes(childPath, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                } catch (Throwable ignored) {
+                    continue;
+                }
+                if (attr.isSymbolicLink()) continue;
 
-        for (File child : children) {
-            String name = child.getName();
-            if (".FileManagerPro_Trash".equals(name)) continue;
-            boolean isHidden = ancestorHidden || name.startsWith(".");
-            boolean isDir = child.isDirectory();
-            batch.add(new PendingEntry(child, volumeRoot, isHidden, isDir));
-            if (batch.size() >= BATCH_SIZE) {
-                flushBatch(db, batch);
+                boolean isHidden = ancestorHidden || name.startsWith(".");
+                boolean isDir = attr.isDirectory();
+                String childAbs = childPath.toString();
+                long sizeBytes = isDir ? 0L : Math.max(0L, attr.size());
+                long modifiedMs = Math.max(0L, attr.lastModifiedTime().toMillis());
+                batch.add(new PendingEntry(childAbs, absPath, name, volumeRoot, isHidden, isDir, sizeBytes, modifiedMs));
+                if (batch.size() >= BATCH_SIZE) {
+                    flushBatch(db, batch, insertStmt);
+                }
+                if (isDir) {
+                    crawlDirectory(childPath, volumeRoot, isHidden, depth + 1, visitedDirs, batch, db, insertStmt);
+                }
             }
-            if (isDir) {
-                crawlDirectory(child, volumeRoot, isHidden, depth + 1, visitedCanonicalDirs, batch, db);
-            }
+        } catch (Throwable ignored) {
         }
     }
 
-    private void flushBatch(SQLiteDatabase db, List<PendingEntry> batch) {
+    private void flushBatch(SQLiteDatabase db, List<PendingEntry> batch, SQLiteStatement stmt) {
         if (batch.isEmpty()) return;
         try {
             db.beginTransaction();
-            try (SQLiteStatement stmt = db.compileStatement(
-                    "INSERT OR REPLACE INTO entries "
-                            + "(path, parent_path, name, name_norm, is_dir, is_hidden, size_bytes, modified_ms, volume_root) "
-                            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-                for (PendingEntry item : batch) {
-                    bindStatementRow(stmt, item.file, item.volumeRoot, item.isHidden, item.isDir);
-                    stmt.executeInsert();
-                }
+            for (int i = 0, n = batch.size(); i < n; i++) {
+                PendingEntry item = batch.get(i);
+                stmt.clearBindings();
+                stmt.bindString(1, item.path);
+                stmt.bindString(2, item.parentPath);
+                stmt.bindString(3, item.name);
+                stmt.bindString(4, normalize(item.name));
+                stmt.bindLong(5, item.isDir ? 1L : 0L);
+                stmt.bindLong(6, item.isHidden ? 1L : 0L);
+                stmt.bindLong(7, item.sizeBytes);
+                stmt.bindLong(8, item.modifiedMs);
+                stmt.bindString(9, item.volumeRoot != null ? item.volumeRoot : "");
+                stmt.executeInsert();
             }
             db.setTransactionSuccessful();
         } catch (Throwable ignored) {
@@ -400,16 +424,25 @@ public final class FileIndexDatabase extends SQLiteOpenHelper {
     }
 
     private static final class PendingEntry {
-        final File file;
+        final String path;
+        final String parentPath;
+        final String name;
         final String volumeRoot;
         final boolean isHidden;
         final boolean isDir;
+        final long sizeBytes;
+        final long modifiedMs;
 
-        PendingEntry(File file, String volumeRoot, boolean isHidden, boolean isDir) {
-            this.file = file;
+        PendingEntry(String path, String parentPath, String name, String volumeRoot,
+                     boolean isHidden, boolean isDir, long sizeBytes, long modifiedMs) {
+            this.path = path;
+            this.parentPath = parentPath;
+            this.name = name;
             this.volumeRoot = volumeRoot;
             this.isHidden = isHidden;
             this.isDir = isDir;
+            this.sizeBytes = sizeBytes;
+            this.modifiedMs = modifiedMs;
         }
     }
 }

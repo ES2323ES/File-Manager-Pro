@@ -113,6 +113,9 @@ public class FileThumbnailLoader {
 
         final Context appCtx = context.getApplicationContext();
         THUMB_EXECUTOR.execute(() -> {
+            if (!cacheKey.equals(targetView.getTag())) {
+                return;
+            }
             Bitmap extracted = extractRealFileBitmap(appCtx, file, nameLower, 224);
             if (extracted != null) {
                 Bitmap rounded = createRoundedSquareBitmap(extracted, 224, 30f);
@@ -128,6 +131,9 @@ public class FileThumbnailLoader {
                     }
                 });
             } else {
+                if (NO_EMBEDDED_ICON_KEYS.size() > 4000) {
+                    NO_EMBEDDED_ICON_KEYS.clear();
+                }
                 NO_EMBEDDED_ICON_KEYS.add(cacheKey);
             }
         });

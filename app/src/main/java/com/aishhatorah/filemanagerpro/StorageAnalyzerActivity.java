@@ -28,18 +28,38 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.PriorityQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class StorageAnalyzerActivity extends AppCompatActivity {
 
+    private static final int TOP_FILES_LIMIT = 50;
+
+    private static final class SizedFile {
+        final File file;
+        final long size;
+
+        SizedFile(File file, long size) {
+            this.file = file;
+            this.size = size;
+        }
+    }
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final List<File> largestFiles = new ArrayList<>();
+    private final AtomicInteger scanGen = new AtomicInteger(0);
+    private final List<SizedFile> largestFiles = new ArrayList<>();
 
     private TextView tvStatusSummary;
     private ProgressBar scanSpinner;
@@ -145,26 +165,33 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
     }
 
     private void runHeavyFilesScan() {
+        final int gen = scanGen.incrementAndGet();
         scanSpinner.setVisibility(View.VISIBLE);
         tvStatusSummary.setText("סורק אחסון פנימי וכרטיס SD לאיתור הקבצים הכבדים ביותר...");
 
         executor.execute(() -> {
-            List<File> collected = new ArrayList<>();
+            PriorityQueue<SizedFile> minHeap = new PriorityQueue<>(TOP_FILES_LIMIT + 1,
+                    (a, b) -> Long.compare(a.size, b.size));
+
             File internalRoot = Environment.getExternalStorageDirectory();
-            scanRecursive(internalRoot, collected, 0);
+            if (internalRoot != null) {
+                scanRecursive(internalRoot.toPath(), minHeap, 0, gen);
+            }
 
             StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
             if (sd.available && sd.root != null) {
-                scanRecursive(sd.root, collected, 0);
+                scanRecursive(sd.root.toPath(), minHeap, 0, gen);
             }
+            if (scanGen.get() != gen) return;
 
-            Collections.sort(collected, (a, b) -> Long.compare(b.length(), a.length()));
-            List<File> top = collected.size() > 50 ? new ArrayList<>(collected.subList(0, 50)) : collected;
+            List<SizedFile> top = new ArrayList<>(minHeap);
+            Collections.sort(top, (a, b) -> Long.compare(b.size, a.size));
 
             StorageUtils.StorageStat st = StorageUtils.getInternalStorageStat();
             String alertNote = StorageUtils.checkAndNotify96Threshold(this);
 
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed() || scanGen.get() != gen) return;
                 scanSpinner.setVisibility(View.GONE);
                 largestFiles.clear();
                 largestFiles.addAll(top);
@@ -182,17 +209,37 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
         });
     }
 
-    private void scanRecursive(File dir, List<File> out, int depth) {
-        if (dir == null || !dir.exists() || depth > 8) return;
-        if ("Android".equals(dir.getName())) return;
-        File[] children = dir.listFiles();
-        if (children == null) return;
-        for (File f : children) {
-            if (f.isDirectory()) {
-                scanRecursive(f, out, depth + 1);
-            } else if (f.length() > 1024 * 100) {
-                out.add(f);
+    private void scanRecursive(Path dir, PriorityQueue<SizedFile> minHeap, int depth, int gen) {
+        if (dir == null || depth > 8 || scanGen.get() != gen) return;
+        Path dirNamePath = dir.getFileName();
+        String dirName = dirNamePath != null ? dirNamePath.toString() : "";
+        if ("Android".equals(dirName) || ".FileManagerPro_Trash".equals(dirName)) return;
+
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path child : stream) {
+                if (scanGen.get() != gen) return;
+                BasicFileAttributes attr;
+                try {
+                    attr = Files.readAttributes(child, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                } catch (Throwable ignored) {
+                    continue;
+                }
+                if (attr.isSymbolicLink()) continue;
+                if (attr.isDirectory()) {
+                    scanRecursive(child, minHeap, depth + 1, gen);
+                } else {
+                    long len = attr.size();
+                    if (len > 1024L * 100L) {
+                        if (minHeap.size() < TOP_FILES_LIMIT) {
+                            minHeap.offer(new SizedFile(child.toFile(), len));
+                        } else if (!minHeap.isEmpty() && len > minHeap.peek().size) {
+                            minHeap.poll();
+                            minHeap.offer(new SizedFile(child.toFile(), len));
+                        }
+                    }
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -262,11 +309,12 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
-            File f = largestFiles.get(position);
+            SizedFile entry = largestFiles.get(position);
+            File f = entry.file;
             h.rowCard.setCardBackgroundColor(Color.TRANSPARENT);
             h.tvName.setText("#" + (position + 1) + "  " + f.getName());
             h.tvName.setTextColor(textPrimary);
-            h.tvMeta.setText(StorageUtils.formatSize(f.length()) + "  •  " + f.getParent());
+            h.tvMeta.setText(StorageUtils.formatSize(entry.size) + "  •  " + f.getParent());
             h.tvMeta.setTextColor(textSecondary);
             // סעיף ד + סעיף ח: האייקון האמיתי משמאל פותח בלחיצה את אפשרויות העריכה
             FileThumbnailLoader.bindFileIcon(StorageAnalyzerActivity.this, f, h.ivIcon);
@@ -306,6 +354,7 @@ public class StorageAnalyzerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        scanGen.incrementAndGet();
         if (miniAudioListener != null) {
             AudioPlayerManager.getInstance().removeListener(miniAudioListener);
         }
