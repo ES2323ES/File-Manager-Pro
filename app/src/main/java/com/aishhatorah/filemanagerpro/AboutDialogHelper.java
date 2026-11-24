@@ -73,7 +73,8 @@ public class AboutDialogHelper {
         root.addView(headerOverlay);
 
         TextView tvAppNameVersion = new TextView(activity);
-        tvAppNameVersion.setText("File Manager Pro  " + BuildConfig.VERSION_NAME + " רשמית");
+        tvAppNameVersion.setText("\u200F\u2066" + BuildConfig.VERSION_NAME + "\u2069 רשמית  •  \u2066File Manager Pro\u2069");
+        tvAppNameVersion.setTextDirection(View.TEXT_DIRECTION_RTL);
         tvAppNameVersion.setTextColor(accent);
         tvAppNameVersion.setTextSize(ThemeHelper.spScaled(activity, 14.5f));
         tvAppNameVersion.setTypeface(Typeface.DEFAULT_BOLD);

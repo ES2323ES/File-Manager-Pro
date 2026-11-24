@@ -399,6 +399,7 @@ public class MiniAudioBarHelper {
         if (activeSong != null && activeSong.exists()) {
             Intent i = new Intent(activity, BuiltInViewerActivity.class);
             i.putExtra(BuiltInViewerActivity.EXTRA_FILE_PATH, activeSong.getAbsolutePath());
+            i.putExtra(BuiltInViewerActivity.EXTRA_FROM_MINI_AUDIO_BAR, true);
             activity.startActivity(i);
             if (reduceAnimations) {
                 activity.overridePendingTransition(0, 0);

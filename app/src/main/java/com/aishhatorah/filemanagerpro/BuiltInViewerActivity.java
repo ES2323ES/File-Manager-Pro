@@ -137,6 +137,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     public static final String EXTRA_FILE_PATH = "extra_file_path";
     public static final String EXTRA_FROM_NOTIFICATION = "extra_from_notification";
+    public static final String EXTRA_FROM_MINI_AUDIO_BAR = "extra_from_mini_audio_bar";
     public static final String EXTRA_FORCE_TYPE = "extra_force_type";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -145,6 +146,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private File targetFile;
     private File externalCopiedCacheFile = null;
     private boolean openedFromNotification = false;
+    private boolean openedFromMiniAudioBar = false;
     private String forceType = null;
 
     private LinearLayout topBar;
@@ -304,9 +306,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             if (isInitialCreate) finish();
             return;
         }
-        if (intent.getBooleanExtra(EXTRA_FROM_NOTIFICATION, false)) {
-            openedFromNotification = true;
-        }
+        openedFromNotification = intent.getBooleanExtra(EXTRA_FROM_NOTIFICATION, false);
+        openedFromMiniAudioBar = intent.getBooleanExtra(EXTRA_FROM_MINI_AUDIO_BAR, false);
         forceType = intent.getStringExtra(EXTRA_FORCE_TYPE);
         String path = intent.getStringExtra(EXTRA_FILE_PATH);
         if (path != null && !path.isEmpty()) {
@@ -587,21 +588,48 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             return;
         }
         setSystemBarsFullscreen(false);
-        if (openedFromNotification && targetFile != null && targetFile.getParentFile() != null) {
+        File activeFileForFolder = (isAudioMode && AudioPlayerManager.getInstance().getCurrentFile() != null)
+                ? AudioPlayerManager.getInstance().getCurrentFile()
+                : targetFile;
+        if ((openedFromNotification || openedFromMiniAudioBar)
+                && activeFileForFolder != null && activeFileForFolder.getParentFile() != null) {
             openedFromNotification = false;
-            File songFolder = targetFile.getParentFile();
-            Intent browser = new Intent(this, FileBrowserActivity.class);
+            openedFromMiniAudioBar = false;
+            File songFolder = activeFileForFolder.getParentFile();
+            String folderPath = songFolder.getAbsolutePath();
+            String resolvedMode = FileBrowserActivity.MODE_INTERNAL;
             StorageUtils.StorageStat sd = StorageUtils.getExternalSdCardStat(this);
-            boolean onSd = sd.available && sd.root != null
-                    && songFolder.getAbsolutePath().startsWith(sd.root.getAbsolutePath());
-            browser.putExtra(FileBrowserActivity.EXTRA_MODE,
-                    onSd ? FileBrowserActivity.MODE_SD_CARD : FileBrowserActivity.MODE_INTERNAL);
-            browser.putExtra(FileBrowserActivity.EXTRA_INITIAL_DIR, songFolder.getAbsolutePath());
+            List<StorageUtils.StorageStat> otgs = StorageUtils.getConnectedUsbOtgVolumes(this);
+            boolean matchedOtg = false;
+            for (StorageUtils.StorageStat otg : otgs) {
+                if (otg.root != null && folderPath.startsWith(otg.root.getAbsolutePath())) {
+                    resolvedMode = FileBrowserActivity.MODE_USB_OTG;
+                    matchedOtg = true;
+                    break;
+                }
+            }
+            if (!matchedOtg && sd.available && sd.root != null && folderPath.startsWith(sd.root.getAbsolutePath())) {
+                resolvedMode = FileBrowserActivity.MODE_SD_CARD;
+            }
+            Intent browser = new Intent(this, FileBrowserActivity.class);
+            browser.putExtra(FileBrowserActivity.EXTRA_MODE, resolvedMode);
+            browser.putExtra(FileBrowserActivity.EXTRA_INITIAL_DIR, folderPath);
             browser.putExtra(FileBrowserActivity.EXTRA_TITLE, songFolder.getName());
             browser.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(browser);
             finish();
-            ThemeHelper.overrideCloseTransition(this);
+            if (isAudioMode) {
+                try {
+                    if (PrefsManager.isReduceAnimations(this)) {
+                        overridePendingTransition(0, 0);
+                    } else {
+                        overridePendingTransition(0, R.anim.slide_out_bottom);
+                    }
+                } catch (Throwable ignored) {
+                }
+            } else {
+                ThemeHelper.overrideCloseTransition(this);
+            }
             return;
         }
         if (isArchiveMode) {
@@ -2885,7 +2913,23 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 return;
             }
             if (!videoPrepared) {
-                applyMediaImmersiveAndLayoutState();
+                if (exoPlayer != null) {
+                    exoPlayer.setPlayWhenReady(true);
+                    exoPlayer.play();
+                    if (targetFile != null
+                            && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                            || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0)
+                            && !exoRemuxFallbackAttempted
+                            && !isRemuxingMtsPlayback
+                            && exoPlayer.getPlaybackState() == Player.STATE_BUFFERING) {
+                        uiHandler.removeCallbacks(mtsBufferingWatchdog);
+                        uiHandler.postDelayed(mtsBufferingWatchdog, 4500L);
+                    }
+                }
+                syncVidButtons.run();
+                if (wasAwaiting) {
+                    applyMediaImmersiveAndLayoutState();
+                }
                 return;
             }
             try {
@@ -3310,55 +3354,60 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             ivVideoPreviewThumb.setVisibility(awaitingInitialVideoPlay ? View.VISIBLE : View.GONE);
         }
 
+        final boolean isMpegTsFile = MpegTsNormalizer.isLikelyMpegTsName(nextFile.getName())
+                || MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0;
+
         startVideoExoPlayer(nextFile, onReadyUi, false, false);
 
-        // קריאת משך זמן, מימדים ותמונת תצוגה מקדימה ברקע (מונע תקיעות ממשק במיוחד בקבצי MTS)
+        // קריאת משך זמן (ובקבצים רגילים גם מטה-דאטה ותמונת פתיחה) ברקע;
+        // עבור MTS/TS מדלגים על MediaMetadataRetriever כדי שלא יתחרה מול ExoPlayer על המפענח החומרתי והדיסק
         executor.execute(() -> {
             int resolvedDur = 0;
             int resolvedW = 0;
             int resolvedH = 0;
             Bitmap previewFrame = null;
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            Closeable tsDs = null;
-            try {
-                tsDs = MpegTsNormalizer.setMediaMetadataRetrieverSource(mmr, nextFile);
-                String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                if (durStr != null) {
-                    int parsed = Integer.parseInt(durStr.trim());
-                    if (parsed > 0) resolvedDur = parsed;
-                }
-                String wStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
-                String hStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
-                String rotStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
-                if (wStr != null && hStr != null) {
-                    int pw = Integer.parseInt(wStr.trim());
-                    int ph = Integer.parseInt(hStr.trim());
-                    int rot = rotStr != null ? Integer.parseInt(rotStr.trim()) : 0;
-                    if (rot == 90 || rot == 270) {
-                        resolvedW = ph;
-                        resolvedH = pw;
-                    } else {
-                        resolvedW = pw;
-                        resolvedH = ph;
-                    }
-                }
-                if (awaitingInitialVideoPlay) {
-                    previewFrame = mmr.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
-                    if (previewFrame == null) {
-                        previewFrame = mmr.getFrameAtTime(-1);
-                    }
-                }
-            } catch (Throwable ignored) {
-            } finally {
-                try { mmr.release(); } catch (Throwable ignored) {}
-                if (tsDs != null) {
-                    try { tsDs.close(); } catch (Throwable ignored) {}
-                }
-            }
-            if (resolvedDur <= 0 && MpegTsNormalizer.isLikelyMpegTsName(nextFile.getName())) {
+            if (isMpegTsFile) {
                 long tsMs = MpegTsNormalizer.extractTsDurationMs(nextFile);
                 if (tsMs > 0L) {
                     resolvedDur = (int) Math.min(Integer.MAX_VALUE, tsMs);
+                }
+            } else {
+                MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+                Closeable tsDs = null;
+                try {
+                    tsDs = MpegTsNormalizer.setMediaMetadataRetrieverSource(mmr, nextFile);
+                    String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                    if (durStr != null) {
+                        int parsed = Integer.parseInt(durStr.trim());
+                        if (parsed > 0) resolvedDur = parsed;
+                    }
+                    String wStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+                    String hStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+                    String rotStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+                    if (wStr != null && hStr != null) {
+                        int pw = Integer.parseInt(wStr.trim());
+                        int ph = Integer.parseInt(hStr.trim());
+                        int rot = rotStr != null ? Integer.parseInt(rotStr.trim()) : 0;
+                        if (rot == 90 || rot == 270) {
+                            resolvedW = ph;
+                            resolvedH = pw;
+                        } else {
+                            resolvedW = pw;
+                            resolvedH = ph;
+                        }
+                    }
+                    if (awaitingInitialVideoPlay) {
+                        previewFrame = mmr.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                        if (previewFrame == null) {
+                            previewFrame = mmr.getFrameAtTime(-1);
+                        }
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    try { mmr.release(); } catch (Throwable ignored) {}
+                    if (tsDs != null) {
+                        try { tsDs.close(); } catch (Throwable ignored) {}
+                    }
                 }
             }
             final int finalResolvedDur = resolvedDur;
@@ -3470,6 +3519,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 @Override
                 public void onDroppedVideoFrames(@NonNull EventTime eventTime, int droppedFrames, long elapsedMs) {
                     if (!isMpegTs || exoRemuxFallbackAttempted || isRemuxingMtsPlayback) return;
+                    if (isUserSeekingVideo || isHold2xForwardActive || isHold2xRewindActive) return;
                     long now = System.currentTimeMillis();
                     if (firstDroppedFrameBurstMs == 0L || now - firstDroppedFrameBurstMs > 3000L) {
                         firstDroppedFrameBurstMs = now;
@@ -3477,7 +3527,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     } else {
                         droppedVideoFrameBurst += droppedFrames;
                     }
-                    if (droppedVideoFrameBurst >= 25) {
+                    if (droppedVideoFrameBurst >= 35) {
                         droppedVideoFrameBurst = 0;
                         firstDroppedFrameBurstMs = 0L;
                         uiHandler.post(() -> {
@@ -3511,6 +3561,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     }
                     if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
                     else if (onReadyUi != null) onReadyUi.run();
+                }
+
+                @Override
+                public void onRenderedFirstFrame() {
+                    if (!awaitingInitialVideoPlay || isVideoPlayingSafely()) {
+                        if (videoTextureView != null) videoTextureView.setAlpha(1f);
+                        if (ivVideoPreviewThumb != null) ivVideoPreviewThumb.setVisibility(View.GONE);
+                    }
                 }
 
                 @Override
@@ -3670,8 +3728,19 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                 @Override
                 public void onIsPlayingChanged(boolean isPlaying) {
+                    if (isPlaying) {
+                        revealVideoSurfaceIfReady();
+                    }
                     if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
                     else if (onReadyUi != null) onReadyUi.run();
+                }
+
+                @Override
+                public void onRenderedFirstFrame() {
+                    if (!awaitingInitialVideoPlay || isVideoPlayingSafely()) {
+                        if (videoTextureView != null) videoTextureView.setAlpha(1f);
+                        if (ivVideoPreviewThumb != null) ivVideoPreviewThumb.setVisibility(View.GONE);
+                    }
                 }
 
                 @Override
@@ -3679,6 +3748,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     if (exoPlayer == null) return;
                     if (playbackState == Player.STATE_READY) {
                         videoPrepared = true;
+                        revealVideoSurfaceIfReady();
                         long rawDur = exoPlayer.getDuration();
                         if (rawDur > 0L && rawDur != C.TIME_UNSET) {
                             knownVideoDurationMs = (int) Math.min(Integer.MAX_VALUE, rawDur);
@@ -4995,19 +5065,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void evaluateVideoDeviceSilence(boolean notifyUser) {
-        boolean silenced = AudioPlayerManager.isDeviceSilenced(this);
-        if (silenced && !videoMutedByDeviceSilence) {
-            videoMutedByDeviceSilence = true;
-            applyCurrentVideoVolume();
-            if (notifyUser && isVideoMode) {
-                Toast.makeText(this, "המכשיר מושתק — הסרטון הושתק אוטומטית", Toast.LENGTH_SHORT).show();
-            }
-        } else if (!silenced && videoMutedByDeviceSilence) {
+        if (videoMutedByDeviceSilence) {
             videoMutedByDeviceSilence = false;
             applyCurrentVideoVolume();
-            if (notifyUser && isVideoMode && !videoMuted) {
-                Toast.makeText(this, "השתקת המכשיר בוטלה — שמע הסרטון חזר", Toast.LENGTH_SHORT).show();
-            }
         }
     }
 

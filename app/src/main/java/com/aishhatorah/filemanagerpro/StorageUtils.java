@@ -635,31 +635,112 @@ public class StorageUtils {
         }
     }
 
-    // השוואת שמות כך שתיקיות ושמות בעברית יופיעו תמיד לפני שמות באנגלית
+    // השוואת שמות כך שמספרים יופיעו ראשונים, אחריהם עברית, ואז אנגלית/אחר — עם השוואה טבעית של מספרים (2 לפני 10)
     public static int compareHebrewFirst(String a, String b) {
         if (a == null) a = "";
         if (b == null) b = "";
-        boolean aHeb = startsWithHebrew(a);
-        boolean bHeb = startsWithHebrew(b);
-        if (aHeb != bHeb) {
-            return aHeb ? -1 : 1;
+        int rankA = nameLeadingScriptRank(a);
+        int rankB = nameLeadingScriptRank(b);
+        if (rankA != rankB) {
+            return Integer.compare(rankA, rankB);
         }
-        if (aHeb) {
-            Collator heCollator = HE_COLLATOR.get();
-            return heCollator != null ? heCollator.compare(a, b) : a.compareToIgnoreCase(b);
+        return compareNaturalText(a, b);
+    }
+
+    private static int nameLeadingScriptRank(String s) {
+        if (s == null) return 2;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '0' && c <= '9') {
+                return 0;
+            }
+            if (Character.isLetter(c)) {
+                return (c >= '\u0590' && c <= '\u05FF') ? 1 : 2;
+            }
         }
-        return a.compareToIgnoreCase(b);
+        return 2;
+    }
+
+    public static boolean startsWithDigit(String s) {
+        return nameLeadingScriptRank(s) == 0;
     }
 
     public static boolean startsWithHebrew(String s) {
-        if (s == null) return false;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (Character.isLetterOrDigit(c)) {
-                return c >= '\u0590' && c <= '\u05FF';
+        return nameLeadingScriptRank(s) == 1;
+    }
+
+    private static int compareNaturalText(String a, String b) {
+        int ia = 0;
+        int ib = 0;
+        int na = a.length();
+        int nb = b.length();
+        Collator heCollator = HE_COLLATOR.get();
+        while (ia < na && ib < nb) {
+            char ca = a.charAt(ia);
+            char cb = b.charAt(ib);
+            boolean da = isAsciiDigit(ca);
+            boolean db = isAsciiDigit(cb);
+            if (da && db) {
+                int ea = ia;
+                while (ea < na && isAsciiDigit(a.charAt(ea))) ea++;
+                int eb = ib;
+                while (eb < nb && isAsciiDigit(b.charAt(eb))) eb++;
+                int numCmp = compareDigitRuns(a, ia, ea, b, ib, eb);
+                if (numCmp != 0) return numCmp;
+                ia = ea;
+                ib = eb;
+                continue;
+            }
+            if (da != db) {
+                return da ? -1 : 1;
+            }
+            int ea = ia;
+            while (ea < na && !isAsciiDigit(a.charAt(ea))) ea++;
+            int eb = ib;
+            while (eb < nb && !isAsciiDigit(b.charAt(eb))) eb++;
+            String sa = a.substring(ia, ea);
+            String sb = b.substring(ib, eb);
+            int saRank = nameLeadingScriptRank(sa);
+            int sbRank = nameLeadingScriptRank(sb);
+            if (saRank != sbRank) {
+                return Integer.compare(saRank, sbRank);
+            }
+            int textCmp = (heCollator != null)
+                    ? heCollator.compare(sa, sb)
+                    : sa.compareToIgnoreCase(sb);
+            if (textCmp == 0) {
+                textCmp = sa.compareToIgnoreCase(sb);
+            }
+            if (textCmp != 0) return textCmp;
+            ia = ea;
+            ib = eb;
+        }
+        return Integer.compare(na - ia, nb - ib);
+    }
+
+    private static boolean isAsciiDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    private static int compareDigitRuns(String a, int sa, int ea, String b, int sb, int eb) {
+        int za = sa;
+        while (za < ea && a.charAt(za) == '0') za++;
+        int zb = sb;
+        while (zb < eb && b.charAt(zb) == '0') zb++;
+        int lenA = ea - za;
+        int lenB = eb - zb;
+        if (lenA != lenB) {
+            return Integer.compare(lenA, lenB);
+        }
+        for (int i = 0; i < lenA; i++) {
+            char ca = a.charAt(za + i);
+            char cb = b.charAt(zb + i);
+            if (ca != cb) {
+                return Character.compare(ca, cb);
             }
         }
-        return false;
+        // בשוויון ערך מספרי (למשל 01 לעומת 1), קצר יותר מופיע קודם
+        return Integer.compare(ea - sa, eb - sb);
     }
 
     public static StorageStat getInternalStorageStat() {

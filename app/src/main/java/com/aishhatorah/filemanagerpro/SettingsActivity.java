@@ -1020,14 +1020,14 @@ public class SettingsActivity extends AppCompatActivity {
     private void showSortModeDialog(View anchor) {
         int curMode = PrefsManager.getSortMode(this);
         final String[] modes = {
-                "לפי שם (עברית תחילה)" + (curMode == PrefsManager.SORT_NAME ? "  (פעיל)" : ""),
+                "לפי שם (מספרים ועברית תחילה)" + (curMode == PrefsManager.SORT_NAME ? "  (פעיל)" : ""),
                 "לפי משקל קובץ" + (curMode == PrefsManager.SORT_SIZE ? "  (פעיל)" : ""),
                 "לפי תאריך שינוי" + (curMode == PrefsManager.SORT_DATE ? "  (פעיל)" : ""),
                 "לפי סוג קובץ" + (curMode == PrefsManager.SORT_TYPE ? "  (פעיל)" : ""),
                 "לפי תאריך יצירה" + (curMode == PrefsManager.SORT_CREATED ? "  (פעיל)" : ""),
                 PrefsManager.isSortAscending(this)
                         ? "החלף לסדר יורד (מהגדול/חדש)"
-                        : "החלף לסדר עולה (א-ת / מהקטן)"
+                        : "החלף לסדר עולה (ראשון-לאחרון)"
         };
         final int[] modeValues = {
                 PrefsManager.SORT_NAME,

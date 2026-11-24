@@ -345,7 +345,7 @@
                     android:text="החלק מלמעלה למטה לרענון"
                     android:textSize="11.5sp" />
             </LinearLayout>
-        </ScrollView>
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+            </ScrollView>
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
     </FrameLayout>
 </LinearLayout>

@@ -18,6 +18,18 @@ public class StorageAndVersionTest {
     }
 
     @Test
+    public void digitsFirstNaturalSortOrdersNumbersAndHebrewCorrectly() {
+        assertTrue(StorageUtils.startsWithDigit("01_פרק"));
+        assertFalse(StorageUtils.startsWithDigit("אגרת"));
+        assertTrue(StorageUtils.compareHebrewFirst("1", "אגרת") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("9_שיר", "א_בראשית") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("2", "10") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("02_הלכות", "10_הלכות") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("10_הלכות", "אגרת") < 0);
+        assertTrue(StorageUtils.compareHebrewFirst("אגרת", "notes") < 0);
+    }
+
+    @Test
     public void videoFormatsRecognizedConsistently() {
         String[] videoExts = {"clip.mp4", "movie.mkv", "legacy.avi", "stream.ts", "camcorder.mts", "bluray.m2ts", "flash.flv", "win.wmv", "apple.mov", "web.webm", "mobile.3gp"};
         for (String name : videoExts) {

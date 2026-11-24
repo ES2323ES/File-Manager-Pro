@@ -19,6 +19,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextUtils;
@@ -138,10 +140,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     private File rootBoundary = null;
     private File selectedCategoryFolder = null;
     private final Map<String, Integer> categoryFolderCounts = new ConcurrentHashMap<>();
+    private final Map<String, File> categoryFolderFirstFile = new ConcurrentHashMap<>();
     private final Map<String, Integer> dirItemCountCache = new ConcurrentHashMap<>();
     private final Set<String> pendingDirCountPaths = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> cachedSizesByPath = new ConcurrentHashMap<>();
     private final Map<String, Long> cachedModifiedByPath = new ConcurrentHashMap<>();
+    private String lastLoadedScopeKey = null;
     private Boolean appliedGridLayout = null;
     private int appliedSpanCount = -1;
 
@@ -182,6 +186,12 @@ public class FileBrowserActivity extends AppCompatActivity {
     private FrameLayout rightFastScrollContainer;
     private View rightFastScrollThumb;
     private boolean isDraggingFastScroll = false;
+    private final Handler fastScrollHideHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideFastScrollRunnable = () -> {
+        if (rightFastScrollContainer != null && !isDraggingFastScroll) {
+            rightFastScrollContainer.setVisibility(View.GONE);
+        }
+    };
 
     private int theme;
     private int bgColor;
@@ -1167,16 +1177,10 @@ public class FileBrowserActivity extends AppCompatActivity {
                             back.setDuration(260L);
                             back.setStartDelay(90L);
                             back.setInterpolator(new DecelerateInterpolator());
-                            back.addUpdateListener(a -> {
-                                if (multiSelectScroll != null) {
-                                    multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue());
-                                }
-                            });
-                            multiSheetPeekAnimator = back;
+                            back.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
                             back.start();
                         }
                     });
-                    multiSheetPeekAnimator = down;
                     down.start();
                 })
                 .start();
@@ -1251,7 +1255,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         int curSort = PrefsManager.getSortMode(this);
         boolean curAsc = PrefsManager.isSortAscending(this);
         List<GlassSideDrawerHelper.SubOption> sortSubs = Arrays.asList(
-                new GlassSideDrawerHelper.SubOption("לפי שם (עברית תחילה)", curSort == PrefsManager.SORT_NAME, () -> {
+                new GlassSideDrawerHelper.SubOption("לפי שם (מספרים ועברית תחילה)", curSort == PrefsManager.SORT_NAME, () -> {
                     PrefsManager.setSortMode(this, PrefsManager.SORT_NAME);
                     loadFilesForCurrentMode(false);
                 }),
@@ -1391,6 +1395,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
                 isDraggingFastScroll = true;
+                fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+                rightFastScrollContainer.setVisibility(View.VISIBLE);
                 if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
                 rightFastScrollThumb.setScaleX(1.25f);
                 int topPad = rightFastScrollContainer.getPaddingTop();
@@ -1412,7 +1418,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 isDraggingFastScroll = false;
                 rightFastScrollThumb.setScaleX(1.0f);
-                syncRightFastScrollerFromRecycler();
+                updateRightFastScrollerThumbOnly();
+                scheduleHideRightFastScroller();
                 return true;
             }
             return false;
@@ -1420,27 +1427,63 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
+            public void onScrollStateChanged(@NonNull RecyclerView rv, int newState) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    if (!isDraggingFastScroll && rightFastScrollContainer.getVisibility() == View.VISIBLE) {
+                        scheduleHideRightFastScroller();
+                    }
+                } else {
+                    if (canShowRightFastScroller()) {
+                        showRightFastScrollerDuringScroll();
+                    }
+                }
+            }
+
+            @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (!isDraggingFastScroll) syncRightFastScrollerFromRecycler();
+                if (!isDraggingFastScroll && (dy != 0 || dx != 0) && canShowRightFastScroller()) {
+                    showRightFastScrollerDuringScroll();
+                    if (rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) {
+                        scheduleHideRightFastScroller();
+                    }
+                }
             }
         });
     }
 
-    private void syncRightFastScrollerFromRecycler() {
-        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+    private boolean canShowRightFastScroller() {
+        if (recyclerView == null) return false;
         int count = showingInstalledAppsTab ? displayedInstalledApps.size() : displayedFiles.size();
-        if (count == 0) {
+        if (count == 0) return false;
+        int range = recyclerView.computeVerticalScrollRange();
+        int extent = recyclerView.computeVerticalScrollExtent();
+        return !(range <= extent + dp(10) && count <= 6);
+    }
+
+    private void showRightFastScrollerDuringScroll() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+        if (rightFastScrollContainer.getVisibility() != View.VISIBLE) {
+            rightFastScrollContainer.setVisibility(View.VISIBLE);
+        }
+        updateRightFastScrollerThumbOnly();
+    }
+
+    private void scheduleHideRightFastScroller() {
+        fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+        fastScrollHideHandler.postDelayed(hideFastScrollRunnable, 1500L);
+    }
+
+    private void updateRightFastScrollerThumbOnly() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        if (!canShowRightFastScroller()) {
+            fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
             rightFastScrollContainer.setVisibility(View.GONE);
             return;
         }
         int range = recyclerView.computeVerticalScrollRange();
         int extent = recyclerView.computeVerticalScrollExtent();
         int offset = recyclerView.computeVerticalScrollOffset();
-        if (range <= extent + dp(10) && count <= 6) {
-            rightFastScrollContainer.setVisibility(View.GONE);
-            return;
-        }
-        rightFastScrollContainer.setVisibility(View.VISIBLE);
         int topPad = rightFastScrollContainer.getPaddingTop();
         int botPad = rightFastScrollContainer.getPaddingBottom();
         int thumbH = rightFastScrollThumb.getHeight() > 0 ? rightFastScrollThumb.getHeight() : dp(48);
@@ -1448,6 +1491,18 @@ public class FileBrowserActivity extends AppCompatActivity {
         int maxScroll = Math.max(1, range - extent);
         float fraction = Math.max(0f, Math.min(1f, (float) offset / (float) maxScroll));
         rightFastScrollThumb.setTranslationY(fraction * trackH);
+    }
+
+    private void syncRightFastScrollerFromRecycler() {
+        if (rightFastScrollContainer == null || rightFastScrollThumb == null || recyclerView == null) return;
+        if (!canShowRightFastScroller()) {
+            fastScrollHideHandler.removeCallbacks(hideFastScrollRunnable);
+            rightFastScrollContainer.setVisibility(View.GONE);
+            return;
+        }
+        if (rightFastScrollContainer.getVisibility() == View.VISIBLE) {
+            updateRightFastScrollerThumbOnly();
+        }
     }
 
     @Override
@@ -1465,6 +1520,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         if (intent != null) {
             setIntent(intent);
+            exitMultiSelectMode();
             String newMode = intent.getStringExtra(EXTRA_MODE);
             if (newMode != null) currentMode = newMode;
             String newTitle = intent.getStringExtra(EXTRA_TITLE);
@@ -1634,6 +1690,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                         rootBoundary = Environment.getExternalStorageDirectory();
                     }
                 }
+                baseCategoryTitle = MODE_SD_CARD.equals(currentMode) ? "כרטיס SD"
+                        : (MODE_USB_OTG.equals(currentMode) ? "כונן USB חיצוני" : "אחסון ראשי");
                 currentDir = target;
                 tvHeaderTitle.setText(target.equals(rootBoundary) ? baseCategoryTitle : target.getName());
                 return;
@@ -1812,17 +1870,21 @@ public class FileBrowserActivity extends AppCompatActivity {
                     cachedModifiedByPath.putAll(snap.modifiedByPath);
                     List<File> allMediaFiles = FileScanCache.extractCategoryFiles(snap, currentMode);
                     Map<String, File> foldersByPath = new LinkedHashMap<>();
+                    Map<String, File> firstFileByPath = new LinkedHashMap<>();
                     Map<String, Integer> countsByPath = new LinkedHashMap<>();
                     for (File mf : allMediaFiles) {
                         File parent = mf.getParentFile();
                         if (parent == null) continue;
                         String key = parent.getAbsolutePath();
                         if (!foldersByPath.containsKey(key)) foldersByPath.put(key, parent);
+                        if (!firstFileByPath.containsKey(key)) firstFileByPath.put(key, mf);
                         Integer prev = countsByPath.get(key);
                         countsByPath.put(key, (prev == null ? 0 : prev) + 1);
                     }
                     categoryFolderCounts.clear();
                     categoryFolderCounts.putAll(countsByPath);
+                    categoryFolderFirstFile.clear();
+                    categoryFolderFirstFile.putAll(firstFileByPath);
                     result.addAll(foldersByPath.values());
                 }
             } else if (isIndexedCat) {
@@ -1849,14 +1911,22 @@ public class FileBrowserActivity extends AppCompatActivity {
 
             sortFileList(result);
 
+            final String scopeKey = currentMode
+                    + "|" + (currentDir != null ? currentDir.getAbsolutePath() : "")
+                    + "|" + (activeMediaFolder != null ? activeMediaFolder.getAbsolutePath() : "");
             final String refreshedMsg = (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode) || activeMediaFolder != null)
                     ? "התיקייה רועננה"
                     : "הקטגוריה רועננה";
             runOnUiThread(() -> {
+                boolean scopeChanged = !scopeKey.equals(lastLoadedScopeKey);
+                lastLoadedScopeKey = scopeKey;
                 loadingSpinner.setVisibility(View.GONE);
                 allLoadedFiles.clear();
                 allLoadedFiles.addAll(result);
                 filterCurrentList(etSearch.getText().toString());
+                if (scopeChanged && recyclerView != null) {
+                    recyclerView.scrollToPosition(0);
+                }
                 updateClipboardBar();
                 if (fromUserPullToRefresh) {
                     swipeRefresh.setRefreshing(false);
@@ -1946,7 +2016,6 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         // חישוב מטא-דאטה פעם אחת (O(N)) לפני המיון במקום אלפי קריאות מערכת בתוך ה-Comparator
         final Map<File, Boolean> isDirMap = new HashMap<>(list.size());
-        final Map<File, Boolean> hebMap = new HashMap<>(list.size());
         final Map<File, Long> metricMap = (sortMode == PrefsManager.SORT_SIZE
                 || sortMode == PrefsManager.SORT_DATE
                 || sortMode == PrefsManager.SORT_CREATED)
@@ -1956,7 +2025,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         for (File f : list) {
             boolean dir = !onlyFileCategories && f.isDirectory();
             isDirMap.put(f, dir);
-            hebMap.put(f, StorageUtils.startsWithHebrew(f.getName()));
             if (metricMap != null) {
                 String p = f.getAbsolutePath();
                 if (sortMode == PrefsManager.SORT_SIZE) {
@@ -1978,11 +2046,6 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (aDir != bDir) {
                 return aDir ? -1 : 1;
             }
-            if (aDir && bDir) {
-                boolean aHeb = Boolean.TRUE.equals(hebMap.get(a));
-                boolean bHeb = Boolean.TRUE.equals(hebMap.get(b));
-                if (aHeb != bHeb) return aHeb ? -1 : 1;
-            }
             int cmp;
             if (metricMap != null) {
                 Long va = metricMap.get(a);
@@ -1991,6 +2054,9 @@ public class FileBrowserActivity extends AppCompatActivity {
             } else if (sortMode == PrefsManager.SORT_TYPE) {
                 cmp = getExtension(a.getName()).compareToIgnoreCase(getExtension(b.getName()));
             } else {
+                cmp = StorageUtils.compareHebrewFirst(a.getName(), b.getName());
+            }
+            if (cmp == 0 && sortMode != PrefsManager.SORT_NAME) {
                 cmp = StorageUtils.compareHebrewFirst(a.getName(), b.getName());
             }
             return asc ? cmp : -cmp;
@@ -3260,12 +3326,36 @@ public class FileBrowserActivity extends AppCompatActivity {
             h.tvName.setTextSize(ThemeHelper.spScaled(FileBrowserActivity.this, isGrid ? 12f : 13.5f));
             h.tvName.setTextColor(textPrimary);
             h.tvHint.setTextColor(accent);
+            if (h.ivFolderPlayBadge != null) {
+                h.ivFolderPlayBadge.setVisibility(View.GONE);
+            }
 
             if (f.isDirectory() && isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
-                h.ivIcon.setTag(null);
-                h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                h.ivIcon.setImageResource(R.drawable.ic_folder);
-                h.ivIcon.setColorFilter(accent);
+                if (isGrid && (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))) {
+                    File firstThumbFile = categoryFolderFirstFile.get(f.getAbsolutePath());
+                    if (firstThumbFile != null) {
+                        FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, firstThumbFile, h.ivIcon);
+                        if (MODE_VIDEOS.equals(currentMode) && h.ivFolderPlayBadge != null) {
+                            GradientDrawable skyBadge = new GradientDrawable();
+                            skyBadge.setShape(GradientDrawable.OVAL);
+                            skyBadge.setColor(Color.parseColor("#38BDF8"));
+                            h.ivFolderPlayBadge.setBackground(skyBadge);
+                            h.ivFolderPlayBadge.setImageResource(R.drawable.ic_play);
+                            h.ivFolderPlayBadge.setColorFilter(Color.WHITE);
+                            h.ivFolderPlayBadge.setVisibility(View.VISIBLE);
+                        }
+                    } else {
+                        h.ivIcon.setTag(null);
+                        h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                        h.ivIcon.clearColorFilter();
+                        h.ivIcon.setImageResource(MODE_VIDEOS.equals(currentMode) ? R.drawable.ic_video : R.drawable.ic_images);
+                    }
+                } else {
+                    h.ivIcon.setTag(null);
+                    h.ivIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    h.ivIcon.setImageResource(R.drawable.ic_folder);
+                    h.ivIcon.setColorFilter(accent);
+                }
             } else {
                 FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, f, h.ivIcon);
             }
@@ -3359,6 +3449,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         class VH extends RecyclerView.ViewHolder {
             final CardView rowCard;
             final ImageView ivIcon;
+            final ImageView ivFolderPlayBadge;
             final TextView tvName;
             final TextView tvMeta;
             final TextView tvHint;
@@ -3367,6 +3458,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 super(itemView);
                 rowCard = itemView.findViewById(R.id.rowCard);
                 ivIcon = itemView.findViewById(R.id.ivFileIcon);
+                ivFolderPlayBadge = itemView.findViewById(R.id.ivFolderPlayBadge);
                 tvName = itemView.findViewById(R.id.tvFileName);
                 tvMeta = itemView.findViewById(R.id.tvFileMeta);
                 tvHint = itemView.findViewById(R.id.tvFileActionHint);
@@ -3424,6 +3516,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        fastScrollHideHandler.removeCallbacksAndMessages(null);
         if (miniAudioListener != null) {
             AudioPlayerManager.getInstance().removeListener(miniAudioListener);
         }
