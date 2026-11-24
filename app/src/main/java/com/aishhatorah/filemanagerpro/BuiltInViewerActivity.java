@@ -56,6 +56,7 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.webkit.MimeTypeMap;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -66,6 +67,7 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -119,6 +121,8 @@ import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 
 import com.aishhatorah.filemanagerpro.AudioPaletteHelper.AudioAdaptivePalette;
@@ -265,6 +269,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private PdfRenderer pdfRenderer;
     private Bitmap activePdfBitmap;
     private int currentPdfPage = 0;
+    private final Object pdfLock = new Object();
+    private final AtomicBoolean pdfCancelled = new AtomicBoolean(false);
+    private final AtomicInteger pdfRenderGen = new AtomicInteger(0);
 
     private String archivePassword = "";
 
@@ -1007,8 +1014,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             vidTopBg.setCornerRadii(new float[]{0f, 0f, 0f, 0f, r, r, r, r});
             vidTopBg.setStroke(Math.max(1, dp(1)), Color.argb(55, 255, 255, 255));
             bar.setBackground(vidTopBg);
+        } else if (!isAudioMode) {
+            ThemeHelper.applyCurvedHeaderStyle(this, bar, theme);
         } else {
-            bar.setBackgroundColor(isAudioMode ? Color.TRANSPARENT : ThemeHelper.getTopBarColor(this, theme));
+            bar.setBackgroundColor(Color.TRANSPARENT);
         }
         int vPad = isLandscape ? dp(6) : dp(8);
         bar.setPadding(dp(12), vPad, dp(12), vPad);
@@ -4930,137 +4939,299 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     // ==================== מציג PDF ====================
 
+    private FrameLayout createDocumentLoadingOverlay(int theme, int accent, int textPrimary, Runnable onCancel) {
+        int bgColor = ThemeHelper.getBgColor(this, theme);
+        int cardColor = ThemeHelper.getCardColor(this, theme);
+        boolean dark = ThemeHelper.isDarkSurface(this, theme);
+
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(ColorUtils.setAlphaComponent(bgColor, 212));
+        overlay.setClickable(true);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.setIndeterminate(true);
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(accent));
+        col.addView(spinner, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        TextView btnCancel = new TextView(this);
+        btnCancel.setText("ביטול");
+        btnCancel.setTextColor(textPrimary);
+        btnCancel.setTextSize(13.5f);
+        btnCancel.setTypeface(Typeface.DEFAULT_BOLD);
+        btnCancel.setGravity(Gravity.CENTER);
+        btnCancel.setPadding(dp(24), dp(9), dp(24), dp(9));
+        GradientDrawable cancelBg = new GradientDrawable();
+        cancelBg.setCornerRadius(dp(999));
+        cancelBg.setColor(ColorUtils.setAlphaComponent(cardColor, dark ? 175 : 205));
+        cancelBg.setStroke(Math.max(1, dp(1)),
+                ColorUtils.setAlphaComponent(dark ? Color.WHITE : accent, dark ? 56 : 86));
+        btnCancel.setBackground(cancelBg);
+        btnCancel.setElevation(dp(4));
+        btnCancel.setOnClickListener(v -> {
+            if (onCancel != null) onCancel.run();
+        });
+        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cLp.topMargin = dp(18);
+        col.addView(btnCancel, cLp);
+
+        overlay.addView(col, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        return overlay;
+    }
+
     private void renderPdfViewer(LinearLayout host, int cardColor, int textSecondary, int theme) {
         int accent = ThemeHelper.getAccentColor(this, theme);
         int textPrimary = ThemeHelper.getPrimaryTextColor(this, theme);
         boolean dark = ThemeHelper.isDarkSurface(this, theme);
+
+        pdfCancelled.set(false);
 
         FrameLayout pdfStage = new FrameLayout(this);
         pdfStage.setBackgroundColor(dark ? Color.parseColor("#0B0F19") : Color.parseColor("#E2E8F0"));
 
         ZoomableImageView pageImage = new ZoomableImageView(this);
         pageImage.setBackgroundColor(Color.WHITE);
+        pageImage.setPinchZoomEnabled(PrefsManager.isGesturePinchZoom(this));
+        pageImage.setHorizontalSwipeEnabled(PrefsManager.isGesturePdfSwipe(this));
+        pageImage.setVerticalSwipeEnabled(PrefsManager.isGesturePdfSwipe(this));
         pdfStage.addView(pageImage, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // סרגל תחתון מעוגל כלפי מעלה (סימטרי לכותרת העליונה)
         LinearLayout navOverlay = new LinearLayout(this);
         navOverlay.setOrientation(LinearLayout.HORIZONTAL);
         navOverlay.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        navOverlay.setGravity(Gravity.CENTER_VERTICAL);
-        navOverlay.setPadding(dp(10), dp(4), dp(10), dp(4));
-        navOverlay.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 999f, true, true));
+        navOverlay.setGravity(Gravity.CENTER);
+        navOverlay.setPadding(dp(16), dp(10), dp(16), dp(12));
+        float r = dp(20);
+        GradientDrawable navBg = new GradientDrawable();
+        navBg.setColor(ColorUtils.setAlphaComponent(ThemeHelper.getTopBarColor(this, theme), 232));
+        navBg.setCornerRadii(new float[]{r, r, r, r, 0f, 0f, 0f, 0f});
+        navBg.setStroke(Math.max(1, dp(1)),
+                ColorUtils.setAlphaComponent(dark ? Color.WHITE : accent, dark ? 44 : 72));
+        navOverlay.setBackground(navBg);
         navOverlay.setElevation(dp(8));
+        navOverlay.setClickable(true);
 
         ImageButton btnPrev = createCleanBorderlessIconButton(R.drawable.ic_chevron_right, dp(42), textPrimary);
         btnPrev.setContentDescription("עמוד קודם");
+        btnPrev.setEnabled(false);
+        btnPrev.setAlpha(0.35f);
 
         TextView tvPageIndicator = new TextView(this);
+        tvPageIndicator.setText("...");
         tvPageIndicator.setTextColor(textPrimary);
-        tvPageIndicator.setTextSize(13.5f);
+        tvPageIndicator.setTextSize(14f);
         tvPageIndicator.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         tvPageIndicator.setTextDirection(View.TEXT_DIRECTION_LTR);
         tvPageIndicator.setGravity(Gravity.CENTER);
-        tvPageIndicator.setPadding(dp(14), dp(4), dp(14), dp(4));
+        tvPageIndicator.setPadding(dp(20), dp(4), dp(20), dp(4));
 
         ImageButton btnNext = createCleanBorderlessIconButton(R.drawable.ic_chevron_left, dp(42), accent);
         btnNext.setContentDescription("עמוד הבא");
+        btnNext.setEnabled(false);
+        btnNext.setAlpha(0.35f);
 
         navOverlay.addView(btnPrev);
         navOverlay.addView(tvPageIndicator);
         navOverlay.addView(btnNext);
 
         FrameLayout.LayoutParams navLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        navLp.bottomMargin = dp(14);
         pdfStage.addView(navOverlay, navLp);
+
+        final FrameLayout pdfLoadingOverlay = createDocumentLoadingOverlay(theme, accent, textPrimary, () -> {
+            pdfCancelled.set(true);
+            proceedCloseOrNavigateBack();
+        });
+        pdfLoadingOverlay.setVisibility(View.VISIBLE);
+        pdfStage.addView(pdfLoadingOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         host.addView(pdfStage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        try {
-            pdfDescriptor = ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY);
-            pdfRenderer = new PdfRenderer(pdfDescriptor);
-            final int totalPages = pdfRenderer.getPageCount();
+        final int[] totalPagesHolder = new int[]{0};
+        final boolean[] isRenderingPage = new boolean[]{false};
 
-            Runnable renderPage = () -> {
-                if (pdfRenderer == null || totalPages == 0) return;
-                try (PdfRenderer.Page page = pdfRenderer.openPage(currentPdfPage)) {
-                    int pw = Math.max(1, page.getWidth());
-                    int ph = Math.max(1, page.getHeight());
-                    float scale = Math.max(2.0f, Math.min(4.0f, 2400f / Math.max(pw, ph)));
-                    final double maxPixels = 8_000_000.0;
-                    double estPixels = (pw * (double) scale) * (ph * (double) scale);
-                    if (estPixels > maxPixels) {
-                        scale *= (float) Math.sqrt(maxPixels / estPixels);
+        final java.util.function.BiConsumer<Integer, Integer> renderPageAsync = (requestedPage, slideDir) -> {
+            final int myGen = pdfRenderGen.incrementAndGet();
+            final boolean isInitialOpen;
+            synchronized (pdfLock) {
+                isInitialOpen = (pdfRenderer == null);
+            }
+            final Runnable delayedShow = () -> {
+                if (!pdfCancelled.get() && pdfRenderGen.get() == myGen && !isFinishing() && !isDestroyed()) {
+                    pdfLoadingOverlay.setVisibility(View.VISIBLE);
+                }
+            };
+            if (isInitialOpen) {
+                pdfLoadingOverlay.setVisibility(View.VISIBLE);
+            } else {
+                uiHandler.postDelayed(delayedShow, 95L);
+            }
+
+            executor.execute(() -> {
+                Bitmap renderedBmp = null;
+                int totalPages = 0;
+                int clampedPage = Math.max(0, requestedPage);
+                String errorMsg = null;
+
+                synchronized (pdfLock) {
+                    if (pdfCancelled.get() || pdfRenderGen.get() != myGen) {
+                        return;
                     }
-                    Bitmap bmp = null;
-                    for (int attempt = 0; attempt < 3 && bmp == null; attempt++) {
-                        int w = Math.max(1, Math.min(2800, Math.round(pw * scale)));
-                        int h = Math.max(1, Math.min(2800, Math.round(ph * scale)));
-                        try {
-                            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                        } catch (OutOfMemoryError oom) {
-                            System.gc();
-                            scale *= 0.65f;
+                    try {
+                        if (pdfRenderer == null) {
+                            pdfDescriptor = ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY);
+                            pdfRenderer = new PdfRenderer(pdfDescriptor);
                         }
+                        if (pdfCancelled.get() || pdfRenderGen.get() != myGen) {
+                            return;
+                        }
+                        totalPages = pdfRenderer.getPageCount();
+                        if (totalPages > 0) {
+                            clampedPage = Math.max(0, Math.min(totalPages - 1, requestedPage));
+                            try (PdfRenderer.Page page = pdfRenderer.openPage(clampedPage)) {
+                                int pw = Math.max(1, page.getWidth());
+                                int ph = Math.max(1, page.getHeight());
+                                float scale = Math.max(1.8f, Math.min(3.5f, 2200f / Math.max(pw, ph)));
+                                final double maxPixels = 6_200_000.0;
+                                double estPixels = (pw * (double) scale) * (ph * (double) scale);
+                                if (estPixels > maxPixels) {
+                                    scale *= (float) Math.sqrt(maxPixels / estPixels);
+                                }
+                                for (int attempt = 0; attempt < 3 && renderedBmp == null; attempt++) {
+                                    int w = Math.max(1, Math.min(2400, Math.round(pw * scale)));
+                                    int h = Math.max(1, Math.min(2400, Math.round(ph * scale)));
+                                    try {
+                                        renderedBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                                    } catch (OutOfMemoryError oom) {
+                                        System.gc();
+                                        scale *= 0.65f;
+                                    }
+                                }
+                                if (renderedBmp != null && !pdfCancelled.get() && pdfRenderGen.get() == myGen) {
+                                    renderedBmp.eraseColor(Color.WHITE);
+                                    page.render(renderedBmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                                }
+                            }
+                        }
+                    } catch (Throwable t) {
+                        AppLogger.error(BuiltInViewerActivity.this, "PdfViewer", "Failed rendering PDF page", t);
+                        errorMsg = t.getMessage() != null ? t.getMessage() : "שגיאה בטעינת ה-PDF";
                     }
-                    if (bmp != null) {
-                        bmp.eraseColor(Color.WHITE);
-                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                }
+
+                final Bitmap finalBmp = renderedBmp;
+                final int finalTotal = totalPages;
+                final int finalPage = clampedPage;
+                final String finalErr = errorMsg;
+
+                uiHandler.post(() -> {
+                    uiHandler.removeCallbacks(delayedShow);
+                    pdfLoadingOverlay.setVisibility(View.GONE);
+                    isRenderingPage[0] = false;
+
+                    if (pdfCancelled.get() || pdfRenderGen.get() != myGen || isFinishing() || isDestroyed()) {
+                        if (finalBmp != null && !finalBmp.isRecycled()) {
+                            finalBmp.recycle();
+                        }
+                        return;
+                    }
+                    if (finalErr != null) {
+                        tvPageIndicator.setText("לא ניתן להציג PDF");
+                        Toast.makeText(BuiltInViewerActivity.this, "לא ניתן להציג PDF: " + finalErr, Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    totalPagesHolder[0] = finalTotal;
+                    currentPdfPage = finalPage;
+
+                    if (finalBmp != null) {
                         Bitmap oldBmp = activePdfBitmap;
-                        activePdfBitmap = bmp;
-                        pageImage.setImageBitmap(bmp);
-                        if (oldBmp != null && oldBmp != bmp && !oldBmp.isRecycled()) {
+                        activePdfBitmap = finalBmp;
+                        pageImage.animate().cancel();
+                        pageImage.setImageBitmap(finalBmp);
+                        if (slideDir != 0 && !PrefsManager.isReduceAnimations(BuiltInViewerActivity.this)) {
+                            pageImage.setAlpha(0.72f);
+                            pageImage.setTranslationY(slideDir * dp(26));
+                            pageImage.animate()
+                                    .translationY(0f)
+                                    .alpha(1f)
+                                    .setDuration(190L)
+                                    .setInterpolator(new DecelerateInterpolator())
+                                    .start();
+                        } else {
+                            pageImage.setAlpha(1f);
+                            pageImage.setTranslationY(0f);
+                        }
+                        if (oldBmp != null && oldBmp != finalBmp && !oldBmp.isRecycled()) {
                             oldBmp.recycle();
                         }
                     }
-                    tvPageIndicator.setText((currentPdfPage + 1) + " / " + totalPages);
+
+                    tvPageIndicator.setText(finalTotal > 0 ? ((currentPdfPage + 1) + " / " + finalTotal) : "0 / 0");
                     boolean hasPrev = currentPdfPage > 0;
-                    boolean hasNext = currentPdfPage < totalPages - 1;
+                    boolean hasNext = currentPdfPage < finalTotal - 1;
                     btnPrev.setEnabled(hasPrev);
                     btnPrev.setAlpha(hasPrev ? 1f : 0.35f);
                     btnNext.setEnabled(hasNext);
                     btnNext.setAlpha(hasNext ? 1f : 0.35f);
-                } catch (Throwable t) {
-                    AppLogger.error(this, "PdfViewer", "Failed rendering PDF page " + currentPdfPage, t);
-                    Toast.makeText(this, "שגיאה בטעינת עמוד ה-PDF", Toast.LENGTH_SHORT).show();
-                }
-            };
-            renderPage.run();
+                });
+            });
+        };
 
-            btnPrev.setOnClickListener(v -> {
-                if (currentPdfPage > 0) {
-                    currentPdfPage--;
-                    renderPage.run();
-                }
-            });
-            btnNext.setOnClickListener(v -> {
-                if (currentPdfPage < totalPages - 1) {
-                    currentPdfPage++;
-                    renderPage.run();
-                }
-            });
-            pageImage.setOnHorizontalSwipeListener(new ZoomableImageView.HorizontalSwipeListener() {
-                @Override
-                public void onSwipeToNext() {
-                    if (currentPdfPage < totalPages - 1) {
-                        currentPdfPage++;
-                        renderPage.run();
-                    }
-                }
+        final java.util.function.IntConsumer goDeltaPage = delta -> {
+            int total = totalPagesHolder[0];
+            if (total <= 0 || isRenderingPage[0]) return;
+            int target = currentPdfPage + delta;
+            if (target < 0 || target >= total) return;
+            isRenderingPage[0] = true;
+            renderPageAsync.accept(target, delta > 0 ? 1 : -1);
+        };
 
-                @Override
-                public void onSwipeToPrevious() {
-                    if (currentPdfPage > 0) {
-                        currentPdfPage--;
-                        renderPage.run();
-                    }
+        btnPrev.setOnClickListener(v -> goDeltaPage.accept(-1));
+        btnNext.setOnClickListener(v -> goDeltaPage.accept(1));
+
+        pageImage.setOnHorizontalSwipeListener(new ZoomableImageView.HorizontalSwipeListener() {
+            @Override
+            public void onSwipeToNext() {
+                if (PrefsManager.isGesturePdfSwipe(BuiltInViewerActivity.this)) {
+                    goDeltaPage.accept(1);
                 }
-            });
-        } catch (Exception e) {
-            tvPageIndicator.setText("לא ניתן להציג PDF: " + e.getMessage());
-        }
+            }
+
+            @Override
+            public void onSwipeToPrevious() {
+                if (PrefsManager.isGesturePdfSwipe(BuiltInViewerActivity.this)) {
+                    goDeltaPage.accept(-1);
+                }
+            }
+        });
+
+        pageImage.setOnVerticalSwipeListener(new ZoomableImageView.VerticalSwipeListener() {
+            @Override
+            public void onSwipeUp() {
+                if (PrefsManager.isGesturePdfSwipe(BuiltInViewerActivity.this)) {
+                    goDeltaPage.accept(1);
+                }
+            }
+
+            @Override
+            public void onSwipeDown() {
+                if (PrefsManager.isGesturePdfSwipe(BuiltInViewerActivity.this)) {
+                    goDeltaPage.accept(-1);
+                }
+            }
+        });
+
+        renderPageAsync.accept(currentPdfPage, 0);
     }
 
     private boolean isEffectiveVideoMuted() {
@@ -5533,6 +5704,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void renderOfficeDocumentViewer(LinearLayout host, int cardColor, int textPrimary, int textSecondary) {
+        int theme = PrefsManager.getThemeMode(this);
+        int accent = ThemeHelper.getAccentColor(this, theme);
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+
+        FrameLayout stage = new FrameLayout(this);
+
         LinearLayout card = createSurfaceCard(cardColor);
 
         TextView tvSub = new TextView(this);
@@ -5544,7 +5721,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
         ScrollView scroll = new ScrollView(this);
         TextView tvDoc = new TextView(this);
-        tvDoc.setText("טוען תוכן מסמך...");
+        tvDoc.setText("");
         tvDoc.setTextColor(textPrimary);
         tvDoc.setTextSize(ThemeHelper.spScaled(this, 14f));
         tvDoc.setTextIsSelectable(true);
@@ -5553,12 +5730,26 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         card.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        host.addView(card, new LinearLayout.LayoutParams(
+        stage.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        FrameLayout loadingOverlay = createDocumentLoadingOverlay(theme, accent, textPrimary, () -> {
+            cancelled.set(true);
+            proceedCloseOrNavigateBack();
+        });
+        stage.addView(loadingOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        host.addView(stage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         executor.execute(() -> {
             String content = ArchiveUtils.extractOfficeDocumentText(targetFile);
-            uiHandler.post(() -> tvDoc.setText(content));
+            uiHandler.post(() -> {
+                if (cancelled.get() || isFinishing() || isDestroyed()) return;
+                loadingOverlay.setVisibility(View.GONE);
+                tvDoc.setText(content);
+            });
         });
     }
 
@@ -5605,6 +5796,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        pdfCancelled.set(true);
         unregisterVideoSilenceMonitor();
         uiHandler.removeCallbacks(mtsBufferingWatchdog);
         detachAudioCallbacksOnly();
@@ -5618,17 +5810,21 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             CacheCleanupManager.cleanupPreviewFileIfManagedCache(this, targetFile);
         }
 
-        if (pdfRenderer != null) {
-            try { pdfRenderer.close(); } catch (Exception ignored) {}
-        }
-        if (pdfDescriptor != null) {
-            try { pdfDescriptor.close(); } catch (Exception ignored) {}
+        executor.shutdownNow();
+        synchronized (pdfLock) {
+            if (pdfRenderer != null) {
+                try { pdfRenderer.close(); } catch (Exception ignored) {}
+                pdfRenderer = null;
+            }
+            if (pdfDescriptor != null) {
+                try { pdfDescriptor.close(); } catch (Exception ignored) {}
+                pdfDescriptor = null;
+            }
         }
         if (activePdfBitmap != null && !activePdfBitmap.isRecycled()) {
             activePdfBitmap.recycle();
         }
         activePdfBitmap = null;
         photoCache.evictAll();
-        executor.shutdownNow();
     }
 }

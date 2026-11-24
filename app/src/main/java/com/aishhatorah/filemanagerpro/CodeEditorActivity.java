@@ -3,6 +3,7 @@ package com.aishhatorah.filemanagerpro;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -10,6 +11,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.Layout;
 import android.text.Spannable;
@@ -34,6 +37,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -41,6 +45,7 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.ColorUtils;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -51,6 +56,10 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * סעיפים 2, 11, 12, 13, 23, 40, 41:
@@ -85,6 +94,14 @@ public class CodeEditorActivity extends AppCompatActivity {
 
     private static final int MAX_UNDO_ENTRIES = 40;
     private static final long MAX_UNDO_TOTAL_CHARS = 2_500_000L;
+    private static final int MAX_SYNC_HIGHLIGHT_CHARS = 160_000;
+    private static final long MAX_LOAD_BYTES = 2_000_000L;
+
+    private final ExecutorService loaderExecutor = Executors.newSingleThreadExecutor();
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final AtomicBoolean loadingCancelled = new AtomicBoolean(false);
+    private final AtomicInteger loadGen = new AtomicInteger(0);
+    private volatile boolean isLoadingContent = false;
 
     private final Deque<String> undoStack = new ArrayDeque<>();
     private final Deque<String> redoStack = new ArrayDeque<>();
@@ -93,6 +110,7 @@ public class CodeEditorActivity extends AppCompatActivity {
     private int activeMatchIndex = -1;
 
     private LinearLayout rootLayout;
+    private FrameLayout loadingOverlay;
     private EditText editorView;
     private LineNumberGutterView gutterView;
     private FrameLayout editorSlot;
@@ -398,10 +416,12 @@ public class CodeEditorActivity extends AppCompatActivity {
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         applyWordWrapLayout();
 
+        FrameLayout contentStage = new FrameLayout(this);
+
         editorVScroll.addView(codeContainer, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        rootLayout.addView(editorVScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        contentStage.addView(editorVScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         markdownWebView = new WebView(this);
         markdownWebView.setVisibility(View.GONE);
@@ -428,30 +448,63 @@ public class CodeEditorActivity extends AppCompatActivity {
                 return true;
             }
         });
-        rootLayout.addView(markdownWebView, new LinearLayout.LayoutParams(
+        contentStage.addView(markdownWebView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // שכבת טעינה אסינכרונית עם כפתור ביטול שקוף וצף מתחת לעיגול המסתובב
+        loadingOverlay = new FrameLayout(this);
+        loadingOverlay.setBackgroundColor(ColorUtils.setAlphaComponent(bg, 218));
+        loadingOverlay.setClickable(true);
+        loadingOverlay.setVisibility(View.GONE);
+
+        LinearLayout loadingCol = new LinearLayout(this);
+        loadingCol.setOrientation(LinearLayout.VERTICAL);
+        loadingCol.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.setIndeterminate(true);
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(accent));
+        loadingCol.addView(spinner, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        TextView btnCancelLoading = new TextView(this);
+        btnCancelLoading.setText("ביטול");
+        btnCancelLoading.setTextColor(textPrimary);
+        btnCancelLoading.setTextSize(13.5f);
+        btnCancelLoading.setTypeface(Typeface.DEFAULT_BOLD);
+        btnCancelLoading.setGravity(Gravity.CENTER);
+        btnCancelLoading.setPadding(dp(24), dp(9), dp(24), dp(9));
+        GradientDrawable cancelBg = new GradientDrawable();
+        cancelBg.setCornerRadius(dp(999));
+        cancelBg.setColor(ColorUtils.setAlphaComponent(cardBg, darkBg ? 175 : 205));
+        cancelBg.setStroke(Math.max(1, dp(1)),
+                ColorUtils.setAlphaComponent(darkBg ? Color.WHITE : accent, darkBg ? 56 : 86));
+        btnCancelLoading.setBackground(cancelBg);
+        btnCancelLoading.setElevation(dp(4));
+        btnCancelLoading.setOnClickListener(v -> {
+            loadingCancelled.set(true);
+            finish();
+        });
+        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cancelLp.topMargin = dp(18);
+        loadingCol.addView(btnCancelLoading, cancelLp);
+
+        loadingOverlay.addView(loadingCol, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        contentStage.addView(loadingOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        rootLayout.addView(contentStage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(rootLayout);
 
-        // טעינת תוכן
-        String initialContent = roContent != null ? roContent : loadInitialText();
-        suppressHistory = true;
-        editorView.setText(initialContent);
-        CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
-        suppressHistory = false;
-        pushUndoSnapshot(initialContent);
-        updateStats();
-        editorView.post(() -> gutterView.syncFromEditor(editorView));
-        if (previewMarkdown) {
-            applyMarkdownPreviewState(darkBg, textPrimary, accent);
-        }
-
-        editorView.addTextChangedListener(new TextWatcher() {
+        loadDocumentAsync(roContent, true, () -> editorView.addTextChangedListener(new TextWatcher() {
             private String before;
 
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                before = !suppressHistory ? s.toString() : null;
+                before = (!suppressHistory && !isLoadingContent) ? s.toString() : null;
             }
 
             @Override
@@ -460,6 +513,7 @@ public class CodeEditorActivity extends AppCompatActivity {
 
             @Override
             public void afterTextChanged(Editable s) {
+                if (isLoadingContent) return;
                 if (!suppressHistory) {
                     if (before != null && !before.contentEquals(s)) {
                         pushUndoSnapshot(before);
@@ -469,14 +523,16 @@ public class CodeEditorActivity extends AppCompatActivity {
                     dirty = true;
                     tvTitle.setText(displayTitle + " *");
                 }
-                CodeSyntaxHighlighter.highlight(s, currentLang, darkBg);
+                if (s.length() <= MAX_SYNC_HIGHLIGHT_CHARS) {
+                    CodeSyntaxHighlighter.highlight(s, currentLang, darkBg);
+                }
                 if (!suppressMatchClear && findReplaceBar.getVisibility() == View.VISIBLE && etFindInput != null) {
                     refreshSearchHighlights(false);
                 }
                 updateStats();
                 editorView.post(() -> gutterView.syncFromEditor(editorView));
             }
-        });
+        }));
     }
 
     private int dp(float value) {
@@ -542,40 +598,172 @@ public class CodeEditorActivity extends AppCompatActivity {
         }
     }
 
-    private String loadInitialText() {
-        try {
-            byte[] raw;
-            if (archiveFile != null && archiveEntry != null) {
-                raw = ArchiveUtils.readEntryBytes(archiveFile, archiveEntry, archivePassword);
-            } else if (targetFile != null && targetFile.exists()) {
-                long cap = Math.min(targetFile.length(), 1_500_000L);
-                raw = new byte[(int) cap];
-                try (FileInputStream fis = new FileInputStream(targetFile)) {
-                    int off = 0;
-                    while (off < raw.length) {
-                        int r = fis.read(raw, off, raw.length - off);
-                        if (r < 0) break;
-                        off += r;
-                    }
-                }
-            } else {
-                return "";
-            }
-            return new String(raw, currentCharset);
-        } catch (OutOfMemoryError oom) {
-            System.gc();
-            AppLogger.error(this, "CodeEditor", "OutOfMemory loading text", oom);
-            Toast.makeText(this, "הקובץ כבד מדי לטעינה מלאה בזיכרון", Toast.LENGTH_LONG).show();
-            return "";
-        } catch (Throwable e) {
-            AppLogger.error(this, "CodeEditor", "Load failed", e);
-            Toast.makeText(this, "שגיאה בקריאת הקובץ: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            return "";
+    private static final class LoadedDocument {
+        final String text;
+        final boolean truncated;
+        final String errorMessage;
+        final CodeSyntaxHighlighter.MarkdownRenderResult markdownResult;
+
+        LoadedDocument(String text, boolean truncated, String errorMessage,
+                       CodeSyntaxHighlighter.MarkdownRenderResult markdownResult) {
+            this.text = text;
+            this.truncated = truncated;
+            this.errorMessage = errorMessage;
+            this.markdownResult = markdownResult;
         }
     }
 
+    private void loadDocumentAsync(String preloadedContent, boolean pushUndoOnDone, Runnable attachWatcherOnce) {
+        final int myGen = loadGen.incrementAndGet();
+        loadingCancelled.set(false);
+        isLoadingContent = true;
+
+        final boolean heavyExpected = preloadedContent == null
+                ? (archiveFile != null || (targetFile != null && targetFile.length() >= 36_000L))
+                : preloadedContent.length() >= 36_000;
+
+        final Runnable revealOverlay = () -> {
+            if (!loadingCancelled.get() && loadGen.get() == myGen && isLoadingContent
+                    && loadingOverlay != null && !isFinishing() && !isDestroyed()) {
+                loadingOverlay.setVisibility(View.VISIBLE);
+            }
+        };
+        if (loadingOverlay != null) {
+            if (heavyExpected) {
+                loadingOverlay.setVisibility(View.VISIBLE);
+            } else {
+                uiHandler.postDelayed(revealOverlay, 90L);
+            }
+        }
+
+        final Charset chosenCharset = currentCharset;
+        final boolean wantMd = previewMarkdown;
+        final boolean darkBgLocal = activeDarkBg;
+        final int textPrimaryLocal = activeTextPrimaryColor;
+        final int accentLocal = activeAccentColor;
+
+        loaderExecutor.execute(() -> {
+            LoadedDocument doc = readAndPrepareDocument(
+                    preloadedContent, myGen, chosenCharset, wantMd, darkBgLocal, textPrimaryLocal, accentLocal);
+            uiHandler.post(() -> {
+                uiHandler.removeCallbacks(revealOverlay);
+                if (loadingOverlay != null) {
+                    loadingOverlay.setVisibility(View.GONE);
+                }
+                isLoadingContent = false;
+                if (loadingCancelled.get() || loadGen.get() != myGen || isFinishing() || isDestroyed()) {
+                    return;
+                }
+                if (doc.errorMessage != null) {
+                    Toast.makeText(this, doc.errorMessage, Toast.LENGTH_LONG).show();
+                } else if (doc.truncated) {
+                    Toast.makeText(this, "הקובץ כבד — נטענה תצוגה מוגבלת (2MB) למניעת קריסה", Toast.LENGTH_LONG).show();
+                }
+                suppressHistory = true;
+                editorView.setText(doc.text);
+                if (doc.text.length() <= MAX_SYNC_HIGHLIGHT_CHARS) {
+                    CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBgLocal);
+                }
+                suppressHistory = false;
+                if (pushUndoOnDone) {
+                    undoStack.clear();
+                    redoStack.clear();
+                    undoTotalChars = 0L;
+                    pushUndoSnapshot(doc.text);
+                }
+                updateStats();
+                editorView.post(() -> gutterView.syncFromEditor(editorView));
+                if (wantMd) {
+                    if (doc.markdownResult != null) {
+                        latestMarkdownCodeBlocks = doc.markdownResult.codeBlocks;
+                        markdownWebView.loadDataWithBaseURL(null, doc.markdownResult.html, "text/html", "utf-8", null);
+                        editorVScroll.setVisibility(View.GONE);
+                        markdownWebView.setVisibility(View.VISIBLE);
+                        if (btnMarkdownEye != null) {
+                            btnMarkdownEye.setImageResource(R.drawable.ic_visibility_off);
+                            btnMarkdownEye.setContentDescription("חזור לעריכת קוד Markdown");
+                        }
+                    } else {
+                        applyMarkdownPreviewState(darkBgLocal, textPrimaryLocal, accentLocal);
+                    }
+                }
+                if (attachWatcherOnce != null) {
+                    attachWatcherOnce.run();
+                }
+            });
+        });
+    }
+
+    private LoadedDocument readAndPrepareDocument(
+            String preloaded, int myGen, Charset cs, boolean prepareMarkdown,
+            boolean darkBg, int textPrimary, int accent) {
+        String text = "";
+        boolean truncated = false;
+        String err = null;
+        try {
+            if (preloaded != null) {
+                text = preloaded;
+            } else if (archiveFile != null && archiveEntry != null) {
+                byte[] raw = ArchiveUtils.readEntryBytes(archiveFile, archiveEntry, archivePassword);
+                if (loadingCancelled.get() || loadGen.get() != myGen) {
+                    return new LoadedDocument("", false, null, null);
+                }
+                if (raw.length > MAX_LOAD_BYTES) {
+                    truncated = true;
+                    text = new String(raw, 0, (int) MAX_LOAD_BYTES, cs);
+                } else {
+                    text = new String(raw, cs);
+                }
+            } else if (targetFile != null && targetFile.exists()) {
+                long fileLen = targetFile.length();
+                if (fileLen > MAX_LOAD_BYTES) {
+                    truncated = true;
+                }
+                int cap = (int) Math.min(Math.max(0L, fileLen), MAX_LOAD_BYTES);
+                byte[] buf = new byte[Math.min(cap, 32768)];
+                ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(1024, cap));
+                try (FileInputStream fis = new FileInputStream(targetFile)) {
+                    int remaining = cap;
+                    while (remaining > 0) {
+                        if (loadingCancelled.get() || loadGen.get() != myGen) {
+                            return new LoadedDocument("", false, null, null);
+                        }
+                        int r = fis.read(buf, 0, Math.min(buf.length, remaining));
+                        if (r < 0) break;
+                        bos.write(buf, 0, r);
+                        remaining -= r;
+                    }
+                }
+                text = new String(bos.toByteArray(), cs);
+            }
+        } catch (OutOfMemoryError oom) {
+            System.gc();
+            AppLogger.error(this, "CodeEditor", "OutOfMemory loading text", oom);
+            err = "הקובץ כבד מדי לטעינה מלאה בזיכרון";
+        } catch (Throwable e) {
+            AppLogger.error(this, "CodeEditor", "Load failed", e);
+            err = "שגיאה בקריאת הקובץ: " + e.getMessage();
+        }
+
+        if (loadingCancelled.get() || loadGen.get() != myGen) {
+            return new LoadedDocument("", false, null, null);
+        }
+
+        CodeSyntaxHighlighter.MarkdownRenderResult mdRes = null;
+        if (prepareMarkdown && err == null && text.length() <= 500_000) {
+            try {
+                String textHex = String.format("#%06X", (0xFFFFFF & textPrimary));
+                String accHex = String.format("#%06X", (0xFFFFFF & accent));
+                mdRes = CodeSyntaxHighlighter.markdownToHtmlWithBlocks(text, darkBg, textHex, accHex);
+            } catch (Throwable t) {
+                AppLogger.error(this, "CodeEditor", "Markdown prep failed", t);
+            }
+        }
+        return new LoadedDocument(text, truncated, err, mdRes);
+    }
+
     private void saveContent() {
-        if (readOnlyMode) return;
+        if (readOnlyMode || isLoadingContent) return;
         String text = editorView.getText().toString();
         byte[] bytes = text.getBytes(currentCharset);
         try {
@@ -953,7 +1141,10 @@ public class CodeEditorActivity extends AppCompatActivity {
                     () -> {
                         currentLang = lang;
                         tvLangChip.setText(currentLang.displayName);
-                        CodeSyntaxHighlighter.highlight(editorView.getText(), currentLang, darkBg);
+                        Editable ed = editorView.getText();
+                        if (ed != null && ed.length() <= MAX_SYNC_HIGHLIGHT_CHARS) {
+                            CodeSyntaxHighlighter.highlight(ed, currentLang, darkBg);
+                        }
                     }
             ));
         }
@@ -976,9 +1167,7 @@ public class CodeEditorActivity extends AppCompatActivity {
                         currentCharset = Charset.forName(cs);
                         tvEncChip.setText(cs);
                         if (!dirty && !readOnlyMode) {
-                            suppressHistory = true;
-                            editorView.setText(loadInitialText());
-                            suppressHistory = false;
+                            loadDocumentAsync(null, false, null);
                         }
                     }
             ));
@@ -987,6 +1176,11 @@ public class CodeEditorActivity extends AppCompatActivity {
     }
 
     private void handleBackAttempt() {
+        if (isLoadingContent) {
+            loadingCancelled.set(true);
+            finish();
+            return;
+        }
         if (!dirty || readOnlyMode) {
             finish();
             return;
@@ -1014,6 +1208,7 @@ public class CodeEditorActivity extends AppCompatActivity {
 
     @Override
     public void finish() {
+        loadingCancelled.set(true);
         super.finish();
         ThemeHelper.overrideCloseTransition(this);
     }
@@ -1021,6 +1216,9 @@ public class CodeEditorActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        loadingCancelled.set(true);
+        uiHandler.removeCallbacksAndMessages(null);
+        loaderExecutor.shutdownNow();
         if (isFinishing() && targetFile != null) {
             CacheCleanupManager.cleanupPreviewFileIfManagedCache(this, targetFile);
         }
