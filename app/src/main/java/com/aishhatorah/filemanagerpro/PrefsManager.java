@@ -107,13 +107,108 @@ public class PrefsManager {
         prefs(context).edit().putBoolean("engine_internal_audio", internal).apply();
     }
 
-    // סעיף 44: מצב מחוות אוטומטי בנגן (כמו סטטוס בוואטסאפ)
+    // סעיף 44: מצב מחוות אוטומטי בנגן (כמו סטטוס בוואטסאפ) והגדרות מחוות מפורטות
+    public static final String KEY_GESTURE_IMAGE_TAP_NAV = "gesture_image_tap_nav";
+    public static final String KEY_GESTURE_IMAGE_SWIPE_NAV = "gesture_image_swipe_nav";
+    public static final String KEY_GESTURE_PINCH_ZOOM = "gesture_pinch_zoom";
+    public static final String KEY_GESTURE_VIDEO_SEEK_SWIPE = "gesture_video_seek_swipe";
+    public static final String KEY_GESTURE_VIDEO_VOL_BRIGHT = "gesture_video_vol_bright";
+    public static final String KEY_GESTURE_VIDEO_HOLD_2X = "gesture_video_hold_2x";
+    public static final String KEY_GESTURE_PDF_SWIPE = "gesture_pdf_swipe";
+
+    private static boolean getGestureFlag(Context context, String key) {
+        SharedPreferences sp = prefs(context);
+        if (sp.contains(key)) {
+            return sp.getBoolean(key, true);
+        }
+        return sp.getBoolean("viewer_auto_gesture_mode", true);
+    }
+
+    public static boolean isGestureImageTapNav(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_IMAGE_TAP_NAV);
+    }
+
+    public static void setGestureImageTapNav(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_IMAGE_TAP_NAV, enabled).apply();
+    }
+
+    public static boolean isGestureImageSwipeNav(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_IMAGE_SWIPE_NAV);
+    }
+
+    public static void setGestureImageSwipeNav(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_IMAGE_SWIPE_NAV, enabled).apply();
+    }
+
+    public static boolean isGesturePinchZoom(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_PINCH_ZOOM);
+    }
+
+    public static void setGesturePinchZoom(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_PINCH_ZOOM, enabled).apply();
+    }
+
+    public static boolean isGestureVideoSeekSwipe(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_VIDEO_SEEK_SWIPE);
+    }
+
+    public static void setGestureVideoSeekSwipe(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_VIDEO_SEEK_SWIPE, enabled).apply();
+    }
+
+    public static boolean isGestureVideoVolumeBrightness(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_VIDEO_VOL_BRIGHT);
+    }
+
+    public static void setGestureVideoVolumeBrightness(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_VIDEO_VOL_BRIGHT, enabled).apply();
+    }
+
+    public static boolean isGestureVideoHold2x(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_VIDEO_HOLD_2X);
+    }
+
+    public static void setGestureVideoHold2x(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_VIDEO_HOLD_2X, enabled).apply();
+    }
+
+    public static boolean isGesturePdfSwipe(Context context) {
+        return getGestureFlag(context, KEY_GESTURE_PDF_SWIPE);
+    }
+
+    public static void setGesturePdfSwipe(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_GESTURE_PDF_SWIPE, enabled).apply();
+    }
+
     public static boolean isAutoGestureMode(Context context) {
-        return prefs(context).getBoolean("viewer_auto_gesture_mode", true);
+        return isGestureImageTapNav(context)
+                || isGestureImageSwipeNav(context)
+                || isGesturePinchZoom(context)
+                || isGestureVideoSeekSwipe(context)
+                || isGestureVideoVolumeBrightness(context)
+                || isGestureVideoHold2x(context)
+                || isGesturePdfSwipe(context);
     }
 
     public static void setAutoGestureMode(Context context, boolean enabled) {
-        prefs(context).edit().putBoolean("viewer_auto_gesture_mode", enabled).apply();
+        prefs(context).edit()
+                .putBoolean("viewer_auto_gesture_mode", enabled)
+                .putBoolean(KEY_GESTURE_IMAGE_TAP_NAV, enabled)
+                .putBoolean(KEY_GESTURE_IMAGE_SWIPE_NAV, enabled)
+                .putBoolean(KEY_GESTURE_PINCH_ZOOM, enabled)
+                .putBoolean(KEY_GESTURE_VIDEO_SEEK_SWIPE, enabled)
+                .putBoolean(KEY_GESTURE_VIDEO_VOL_BRIGHT, enabled)
+                .putBoolean(KEY_GESTURE_VIDEO_HOLD_2X, enabled)
+                .putBoolean(KEY_GESTURE_PDF_SWIPE, enabled)
+                .apply();
+    }
+
+    public static boolean isMiniBarReturnToSongFolder(Context context) {
+        return prefs(context).getBoolean("mini_bar_return_song_folder", true);
+    }
+
+    public static void setMiniBarReturnToSongFolder(Context context, boolean toSongFolder) {
+        prefs(context).edit().putBoolean("mini_bar_return_song_folder", toSongFolder).apply();
     }
 
     // סעיף 40: יצירת קבצי גיבוי .bak אוטומטית לפני שמירת שינויים
@@ -366,6 +461,52 @@ public class PrefsManager {
         prefs(context).edit().putBoolean("sort_asc", asc).apply();
     }
 
+    private static String normalizeFolderSortKey(String scopeKey) {
+        return scopeKey == null ? "" : scopeKey.trim();
+    }
+
+    public static int getEffectiveSortMode(Context context, String scopeKey) {
+        String norm = normalizeFolderSortKey(scopeKey);
+        if (!norm.isEmpty()) {
+            String key = "folder_sort_mode_" + norm;
+            SharedPreferences sp = prefs(context);
+            if (sp.contains(key)) {
+                return sp.getInt(key, getSortMode(context));
+            }
+        }
+        return getSortMode(context);
+    }
+
+    public static void setFolderSortMode(Context context, String scopeKey, int mode) {
+        String norm = normalizeFolderSortKey(scopeKey);
+        if (norm.isEmpty()) {
+            setSortMode(context, mode);
+            return;
+        }
+        prefs(context).edit().putInt("folder_sort_mode_" + norm, mode).apply();
+    }
+
+    public static boolean isEffectiveSortAscending(Context context, String scopeKey) {
+        String norm = normalizeFolderSortKey(scopeKey);
+        if (!norm.isEmpty()) {
+            String key = "folder_sort_asc_" + norm;
+            SharedPreferences sp = prefs(context);
+            if (sp.contains(key)) {
+                return sp.getBoolean(key, isSortAscending(context));
+            }
+        }
+        return isSortAscending(context);
+    }
+
+    public static void setFolderSortAscending(Context context, String scopeKey, boolean asc) {
+        String norm = normalizeFolderSortKey(scopeKey);
+        if (norm.isEmpty()) {
+            setSortAscending(context, asc);
+            return;
+        }
+        prefs(context).edit().putBoolean("folder_sort_asc_" + norm, asc).apply();
+    }
+
     public static boolean isUseRecycleBin(Context context) {
         return prefs(context).getBoolean("use_recycle_bin", true);
     }
@@ -388,6 +529,14 @@ public class PrefsManager {
 
     public static void setShowThumbnails(Context context, boolean show) {
         prefs(context).edit().putBoolean("show_thumbnails", show).apply();
+    }
+
+    public static boolean isShowFolderThumbnails(Context context) {
+        return prefs(context).getBoolean("show_folder_thumbnails", false);
+    }
+
+    public static void setShowFolderThumbnails(Context context, boolean show) {
+        prefs(context).edit().putBoolean("show_folder_thumbnails", show).apply();
     }
 
     public static boolean isShowFolderSizes(Context context) {

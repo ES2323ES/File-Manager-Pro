@@ -17,12 +17,12 @@
         android:gravity="center_vertical"
         android:layoutDirection="ltr"
         android:orientation="horizontal"
-        android:padding="11dp">
+        android:padding="10dp">
 
         <ImageView
             android:id="@+id/ivFileIcon"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:contentDescription="אפשרויות עריכה"

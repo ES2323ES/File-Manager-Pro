@@ -42,6 +42,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Read App Version
+        id: app_ver
+        run: |
+          VER=$(grep -E 'versionName' app/build.gradle | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
       - name: Run Release Unit Tests
         run: gradle testReleaseUnitTest --no-daemon
 
@@ -49,25 +55,28 @@ jobs:
         run: gradle assembleRelease --no-daemon
 
       - name: Prepare APK & Source ZIP Artifacts
+        env:
+          VERSION_NAME: ${{ steps.app_ver.outputs.version }}
         run: |
           mkdir -p dist-artifacts
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           cp "$APK_PATH" dist-artifacts/File-Manager-Pro.apk
-          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.7.1.apk
-          zip -r dist-artifacts/File-Manager-Pro-v0.3.7.1-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
+          cp "$APK_PATH" "dist-artifacts/File-Manager-Pro-v${VERSION_NAME}.apk"
+          zip -r "dist-artifacts/File-Manager-Pro-v${VERSION_NAME}-Source.zip" . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
 
       - name: Determine Release Tag (V1..V13...)
         id: calc_tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MANUAL_TAG: ${{ github.event.inputs.release_slot }}
+          VERSION_NAME: ${{ steps.app_ver.outputs.version }}
         run: |
           if [ -n "$MANUAL_TAG" ]; then
             NEXT_TAG="$MANUAL_TAG"
           else
             LATEST_TITLE=$(gh release list --limit 1 --json name --jq '.[0].name' 2>/dev/null || true)
             LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.7.1"; then
+            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v${VERSION_NAME}"; then
               NEXT_TAG="$LATEST_TAG"
             else
               HIGHEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^V[0-9]+$' | sed 's/V//' | sort -nr | head -n 1 || true)
@@ -85,41 +94,43 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.calc_tag.outputs.tag }}
+          VERSION_NAME: ${{ steps.app_ver.outputs.version }}
         run: |
           cat <<EOF > release-notes.md
-          ### תיקונים ממוקדים בגירסה 0.3.7.1 (${TAG})
-          • **תיקון מלא של השמעת האודיו (והשמע בווידאו):** ביטול חסימת הניגון הכפויה במצבי "נא לא להפריע"/השתקה ב-\`AudioPlayerManager\` וב-\`BuiltInViewerActivity\` ותיקון קריאת \`setPlaybackParams\` לפני תחילת הניגון.
-          • **תיקון תקיעות נגינת וידאו MTS/M2TS:** החזרת דגל \`FLAG_ALLOW_NON_IDR_KEYFRAMES\` ב-\`SeekableTsExtractor\`, תיקון לחיצת הפעלה בזמן הכנת הווידאו והפעלת מנגנון הגיבוי של MTS, ואיזון גודל חוצץ הקריאה וההשמעה לחלקות מיידית.
+          ### חידושים ושדרוגים בגירסה ${VERSION_NAME} (${TAG})
+          • **מסך הגדרות חדש ומקצועי באקורדיונים:** חלוקה לכרטיסיות זכוכית מרווחות עם תיאורים תמציתיים ואייקוני SVG, בחירת רקע וטשטוש מתוך מראה, תת-רשימה מפורטת ל-7 מחוות בנפרד, סידור קטגוריות מסך הבית ומיון ברירת מחדל מוטמעים במקום.
+          • **שיפורי ביצועים, מסמכים ו-PDF:** האצת סריקה ומיון בתיקיות כבדות וכרטיסי SD, חלונית טעינה אסינכרונית עם כפתור 'ביטול' שקוף לפתיחת קבצי טקסט/קוד/PDF/Office גדולים, דפדוף אנכי וחיצי ניווט מונפשים ב-PDF.
+          • **שדרוגי APK, מיון, בחירה מרובה ובועת השמע:** תיבת פרטי APK מסודרת וכפתור "הצג מקור" עם פתיחה ישירה של הקבצים ללא לשוניות, זכירת מיון עצמאית לכל תיקייה, שליטה בתמונות ממוזערות לתיקיות ובחזרה מבועת המוזיקה, ומשיכה רציפה מהבועה אל הנגן המלא.
 
           ### הורדה ישירה
           - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
-          - **קובץ התקנה מתויג גירסה 0.3.7.1:** \`File-Manager-Pro-v0.3.7.1.apk\`
-          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.7.1-Source.zip\`
+          - **קובץ התקנה מתויג גירסה ${VERSION_NAME}:** \`File-Manager-Pro-v${VERSION_NAME}.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v${VERSION_NAME}-Source.zip\`
 
           ### פיתוח והנדסה
           - **פיתוח והנדסה:** @אש התורה — [במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [בעוגן פליי](https://ogenplay.com/users/724ec656-a4a7-4d31-8ece-fa9938851704)
           EOF
 
-          gh repo edit "${GITHUB_REPOSITORY}" --description "File Manager Pro v0.3.7.1 רשמית — מנהל קבצים מתקדם לאנדרואיד" || true
+          gh repo edit "${GITHUB_REPOSITORY}" --description "File Manager Pro v${VERSION_NAME} רשמית — מנהל קבצים מתקדם לאנדרואיד" || true
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
             gh release edit "$TAG" \
-              --title "${TAG} — File Manager Pro v0.3.7.1" \
+              --title "${TAG} — File Manager Pro v${VERSION_NAME}" \
               --notes-file release-notes.md \
               --draft=false \
               --prerelease=false
             gh release upload "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.7.1.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.7.1-Source.zip \
+              "dist-artifacts/File-Manager-Pro-v${VERSION_NAME}.apk" \
+              "dist-artifacts/File-Manager-Pro-v${VERSION_NAME}-Source.zip" \
               --clobber
           else
             gh release create "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.7.1.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.7.1-Source.zip \
+              "dist-artifacts/File-Manager-Pro-v${VERSION_NAME}.apk" \
+              "dist-artifacts/File-Manager-Pro-v${VERSION_NAME}-Source.zip" \
               --target "$GITHUB_SHA" \
-              --title "${TAG} — File Manager Pro v0.3.7.1" \
+              --title "${TAG} — File Manager Pro v${VERSION_NAME}" \
               --notes-file release-notes.md
           fi

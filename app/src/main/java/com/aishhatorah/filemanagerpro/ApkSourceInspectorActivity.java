@@ -39,8 +39,13 @@ import java.util.Map;
 public class ApkSourceInspectorActivity extends AppCompatActivity {
 
     public static final String EXTRA_APK_PATH = "extra_apk_path";
+    private static final int SCREEN_STRUCTURE = 0;
+    private static final int SCREEN_DEX = 1;
+    private static final int SCREEN_ARSC = 2;
+
     private File apkFile;
     private LinearLayout contentList;
+    private TextView tvTitle;
     private int theme;
     private int textPrimary;
     private int textSecondary;
@@ -49,13 +54,11 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
 
     private List<ArchiveUtils.ArchiveEntryInfo> cachedEntries;
     private String currentApkPath = "";
-    private int activeTab = 0; // 0 = מבנה, 1 = מניפסט, 2 = DEX, 3 = Resources
+    private int currentScreenMode = SCREEN_STRUCTURE;
     private String activeDexName = "classes.dex";
     private int dexSubTab = 0; // 0 = חבילות ומחלקות, 1 = מתודות, 2 = שדות, 3 = מחרוזות
     private String dexSearchQuery = "";
     private String arscSearchQuery = "";
-
-    private final Button[] tabButtons = new Button[4];
 
     private ApkSourceParser.DexInspectionResult cachedDexResult;
     private String cachedDexSourceName;
@@ -84,17 +87,7 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (activeTab == 0 && !currentApkPath.isEmpty()) {
-                    navigateApkUp();
-                    return;
-                }
-                if (activeTab != 0) {
-                    activeTab = 0;
-                    updateTabStyles();
-                    loadStructureTab();
-                    return;
-                }
-                finish();
+                handleBackNavigation();
             }
         });
 
@@ -110,20 +103,10 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         ThemeHelper.applyCurvedHeaderStyle(this, topBar, theme);
 
         ImageButton btnBack = ThemeHelper.createBorderlessSvgButton(
-                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> {
-                    if (activeTab == 0 && !currentApkPath.isEmpty()) {
-                        navigateApkUp();
-                    } else if (activeTab != 0) {
-                        activeTab = 0;
-                        updateTabStyles();
-                        loadStructureTab();
-                    } else {
-                        finish();
-                    }
-                });
+                this, R.drawable.ic_arrow_back, accent, "חזרה", 40, 8, v -> handleBackNavigation());
         topBar.addView(btnBack);
 
-        TextView tvTitle = new TextView(this);
+        tvTitle = new TextView(this);
         tvTitle.setText("מקור: " + apkFile.getName());
         tvTitle.setTextColor(textPrimary);
         tvTitle.setTextSize(ThemeHelper.spScaled(this, 15.5f));
@@ -135,49 +118,32 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         topBar.addView(tvTitle, titleLp);
         root.addView(topBar);
 
-        // לשוניות
-        LinearLayout tabsRow = new LinearLayout(this);
-        tabsRow.setOrientation(LinearLayout.HORIZONTAL);
-        tabsRow.setPadding(dp(12), dp(10), dp(12), dp(6));
-
-        tabButtons[0] = makeTab("קבצים ומבנה", () -> {
-            activeTab = 0;
-            updateTabStyles();
-            loadStructureTab();
-        });
-        tabButtons[1] = makeTab("Manifest", () -> {
-            activeTab = 1;
-            updateTabStyles();
-            loadManifestTab();
-        });
-        tabButtons[2] = makeTab("DEX", () -> {
-            activeTab = 2;
-            updateTabStyles();
-            loadDexEntry(activeDexName);
-        });
-        tabButtons[3] = makeTab("Resources", () -> {
-            activeTab = 3;
-            updateTabStyles();
-            loadArscTab();
-        });
-
-        for (int i = 0; i < tabButtons.length; i++) {
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (i < tabButtons.length - 1) lp.setMarginEnd(dp(5));
-            tabsRow.addView(tabButtons[i], lp);
-        }
-        root.addView(tabsRow);
-
         ScrollView scroll = new ScrollView(this);
         contentList = new LinearLayout(this);
         contentList.setOrientation(LinearLayout.VERTICAL);
-        contentList.setPadding(dp(14), dp(8), dp(14), dp(24));
+        contentList.setPadding(dp(14), dp(10), dp(14), dp(24));
         scroll.addView(contentList);
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(root);
-        updateTabStyles();
         loadStructureTab();
+    }
+
+    private void handleBackNavigation() {
+        if (currentScreenMode != SCREEN_STRUCTURE) {
+            currentScreenMode = SCREEN_STRUCTURE;
+            if (tvTitle != null) {
+                tvTitle.setText("מקור: " + apkFile.getName());
+            }
+            loadStructureTab();
+            return;
+        }
+        if (!currentApkPath.isEmpty()) {
+            navigateApkUp();
+            return;
+        }
+        finish();
+        ThemeHelper.overrideCloseTransition(this);
     }
 
     private Button makeTab(String label, Runnable r) {
@@ -195,24 +161,6 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
         b.setPadding(dp(6), dp(9), dp(6), dp(9));
         b.setOnClickListener(v -> r.run());
         return b;
-    }
-
-    private void updateTabStyles() {
-        for (int i = 0; i < tabButtons.length; i++) {
-            Button b = tabButtons[i];
-            if (b == null) continue;
-            boolean active = (i == activeTab);
-            GradientDrawable gd = new GradientDrawable();
-            gd.setCornerRadius(dp(12));
-            gd.setColor(active
-                    ? accent
-                    : ColorUtils.setAlphaComponent(ThemeHelper.getCardColor(this, theme), dark ? 190 : 215));
-            if (!active) {
-                gd.setStroke(Math.max(1, dp(1)), ThemeHelper.getDividerColor(this, theme));
-            }
-            b.setBackground(gd);
-            b.setTextColor(active ? ThemeHelper.getOnAccentTextColor(accent) : textPrimary);
-        }
     }
 
     private void navigateApkUp() {
@@ -308,14 +256,18 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
             }
             if (lower.endsWith(".dex")) {
                 activeDexName = node.fullPath;
-                activeTab = 2;
-                updateTabStyles();
+                currentScreenMode = SCREEN_DEX;
+                if (tvTitle != null) {
+                    tvTitle.setText("מקור: " + node.displayName);
+                }
                 loadDexEntry(node.fullPath);
                 return;
             }
             if ("resources.arsc".equals(lower)) {
-                activeTab = 3;
-                updateTabStyles();
+                currentScreenMode = SCREEN_ARSC;
+                if (tvTitle != null) {
+                    tvTitle.setText("מקור: resources.arsc");
+                }
                 loadArscTab();
                 return;
             }
@@ -343,40 +295,6 @@ public class ApkSourceInspectorActivity extends AppCompatActivity {
             Toast.makeText(this, "קובץ בינארי (" + StorageUtils.formatSize(node.size) + ")", Toast.LENGTH_SHORT).show();
         } catch (Exception ex) {
             Toast.makeText(this, "לא ניתן לפתוח קובץ זה: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void loadManifestTab() {
-        contentList.removeAllViews();
-        try {
-            byte[] raw = ArchiveUtils.readEntryBytes(apkFile, "AndroidManifest.xml", null);
-            String decoded = ApkSourceParser.decodeBinaryXml(raw);
-            Button btnFull = ThemedDialogHelper.createThemedButton(this, "פתח בעורך קוד מלא", theme, true, false);
-            btnFull.setOnClickListener(v -> openReadOnlyViewer("AndroidManifest.xml", decoded));
-            contentList.addView(btnFull);
-
-            LinearLayout codeCard = new LinearLayout(this);
-            codeCard.setOrientation(LinearLayout.VERTICAL);
-            codeCard.setPadding(dp(12), dp(10), dp(12), dp(10));
-            codeCard.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 16f, true, false));
-            LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            cardLp.topMargin = dp(10);
-
-            TextView tv = new TextView(this);
-            tv.setText(decoded);
-            tv.setTextColor(textPrimary);
-            tv.setTypeface(Typeface.MONOSPACE);
-            tv.setTextSize(12f);
-            tv.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-            tv.setTextIsSelectable(true);
-            codeCard.addView(tv);
-            contentList.addView(codeCard, cardLp);
-        } catch (Exception e) {
-            TextView err = new TextView(this);
-            err.setText("לא ניתן לפענח AndroidManifest.xml (ייתכן שזהו צרור חבילות XAPK/APKM): " + e.getMessage());
-            err.setTextColor(textSecondary);
-            contentList.addView(err);
         }
     }
 

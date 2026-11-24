@@ -45,4 +45,48 @@ public class AppLoggerTest {
         assertFalse(oldLog.exists());
         assertTrue(freshLog.exists());
     }
+
+    @Test
+    public void formatThrowableCompactIncludesCauseAndRespectsLimit() {
+        IllegalStateException root = new IllegalStateException("root failure reason");
+        RuntimeException outer = new RuntimeException("outer wrapper", root);
+        StackTraceElement[] deepOuter = new StackTraceElement[80];
+        for (int i = 0; i < deepOuter.length; i++) {
+            deepOuter[i] = new StackTraceElement(
+                    "com.aishhatorah.filemanagerpro.DeepRunnerFrame" + i,
+                    "executeStepWithVeryLongDiagnosticMethodName_" + i,
+                    "DeepRunnerFrame.java",
+                    100 + i
+            );
+        }
+        outer.setStackTrace(deepOuter);
+
+        String full = AppLogger.formatThrowableCompact(outer, 4096);
+        assertTrue(full.contains("java.lang.RuntimeException: outer wrapper"));
+        assertTrue(full.contains("Caused by: java.lang.IllegalStateException: root failure reason"));
+
+        StringBuilder longMsg = new StringBuilder("huge header ");
+        for (int i = 0; i < 40; i++) {
+            longMsg.append("segment_").append(i).append("_");
+        }
+        RuntimeException oversized = new RuntimeException(longMsg.toString(), root);
+        String truncated = AppLogger.formatThrowableCompact(oversized, 256);
+        assertTrue(truncated.length() <= 256);
+        assertTrue(truncated.endsWith("..."));
+    }
+
+    @Test
+    public void appendToDirWritesEscapedJsonLineToDisk() throws Exception {
+        File logsDir = tmp.newFolder("crash_logs");
+        long now = 1770000000000L;
+        AppLogger.appendToDir(logsDir, AppLogger.LEVEL_ERROR, "Crash", "Line1\n\"quoted\"\\slash", now);
+
+        File[] files = logsDir.listFiles();
+        assertNotNull(files);
+        assertEquals(1, files.length);
+        String content = new String(java.nio.file.Files.readAllBytes(files[0].toPath()), java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(content.contains("\"level\":\"ERROR\""));
+        assertTrue(content.contains("\"tag\":\"Crash\""));
+        assertTrue(content.contains("Line1\\n\\\"quoted\\\"\\\\slash"));
+    }
 }

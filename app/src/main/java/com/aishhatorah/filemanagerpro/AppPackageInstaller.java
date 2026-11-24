@@ -11,21 +11,28 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
+import androidx.core.graphics.ColorUtils;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -106,6 +113,7 @@ public final class AppPackageInstaller {
             long verCode = 0L;
             String installedText = "לא מותקנת במכשיר";
 
+            Drawable loadedIcon = null;
             PackageInfo info = getArchivePackageInfoCompat(pm, packageFile.getAbsolutePath());
             if (info != null && info.packageName != null) {
                 pkgName = info.packageName;
@@ -118,6 +126,7 @@ public final class AppPackageInstaller {
                         info.applicationInfo.publicSourceDir = packageFile.getAbsolutePath();
                         CharSequence cs = info.applicationInfo.loadLabel(pm);
                         if (cs != null && cs.length() > 0) label = cs.toString();
+                        loadedIcon = info.applicationInfo.loadIcon(pm);
                     }
                 } catch (Exception ignored) {
                 }
@@ -131,29 +140,93 @@ public final class AppPackageInstaller {
             final String fPkg = pkgName;
             final String fVer = verName + (verCode > 0 ? " (" + verCode + ")" : "");
             final String fInstalled = installedText;
+            final Drawable fIcon = loadedIcon;
 
             MAIN.post(() -> {
                 if (activity.isFinishing() || activity.isDestroyed()) return;
-                String msg = "שם אפליקציה: " + fLabel
-                        + "\nשם חבילה: " + fPkg
-                        + "\nגירסה בקובץ: " + fVer
-                        + "\nגירסה מותקנת כעת: " + fInstalled
-                        + "\nנפח קובץ: " + StorageUtils.formatSize(packageFile.length());
-
                 int theme = PrefsManager.getThemeMode(activity);
+                int textPrimary = ThemeHelper.getPrimaryTextColor(activity, theme);
+                int textSecondary = ThemeHelper.getSecondaryTextColor(activity, theme);
+                int accent = ThemeHelper.getAccentColor(activity, theme);
+                int dividerColor = ThemeHelper.getDividerColor(activity, theme);
+                float d = activity.getResources().getDisplayMetrics().density;
+
+                LinearLayout customBody = new LinearLayout(activity);
+                customBody.setOrientation(LinearLayout.VERTICAL);
+                customBody.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
+                // כותרת האפליקציה עם אייקון החבילה ושם החבילה
+                LinearLayout headerRow = new LinearLayout(activity);
+                headerRow.setOrientation(LinearLayout.HORIZONTAL);
+                headerRow.setGravity(Gravity.CENTER_VERTICAL);
+                headerRow.setPadding(Math.round(4 * d), 0, Math.round(4 * d), Math.round(12 * d));
+
+                ImageView ivAppIcon = new ImageView(activity);
+                if (fIcon != null) {
+                    ivAppIcon.setImageDrawable(fIcon);
+                } else {
+                    ivAppIcon.setImageResource(R.drawable.ic_apps);
+                    ivAppIcon.setColorFilter(accent);
+                }
+                LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(Math.round(44 * d), Math.round(44 * d));
+                icLp.setMarginEnd(Math.round(12 * d));
+                headerRow.addView(ivAppIcon, icLp);
+
+                LinearLayout titleCol = new LinearLayout(activity);
+                titleCol.setOrientation(LinearLayout.VERTICAL);
+
+                TextView tvAppName = new TextView(activity);
+                tvAppName.setText(fLabel);
+                tvAppName.setTextColor(textPrimary);
+                tvAppName.setTextSize(ThemeHelper.spScaled(activity, 15.5f));
+                tvAppName.setTypeface(Typeface.DEFAULT_BOLD);
+                tvAppName.setMaxLines(2);
+                tvAppName.setEllipsize(TextUtils.TruncateAt.END);
+                titleCol.addView(tvAppName);
+
+                TextView tvPkg = new TextView(activity);
+                tvPkg.setText(fPkg);
+                tvPkg.setTextColor(textSecondary);
+                tvPkg.setTextSize(ThemeHelper.spScaled(activity, 11.5f));
+                tvPkg.setSingleLine(true);
+                tvPkg.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                tvPkg.setTextDirection(View.TEXT_DIRECTION_LTR);
+                tvPkg.setGravity(Gravity.RIGHT);
+                titleCol.addView(tvPkg);
+
+                headerRow.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                customBody.addView(headerRow);
+
+                // כרטיסיית פרטים מסודרת
+                LinearLayout metaCard = new LinearLayout(activity);
+                metaCard.setOrientation(LinearLayout.VERTICAL);
+                metaCard.setPadding(Math.round(14 * d), Math.round(6 * d), Math.round(14 * d), Math.round(6 * d));
+                metaCard.setBackground(ThemeHelper.createGlassCardBackground(activity, theme, 14f, true, false));
+
+                addApkDetailRow(activity, metaCard, "גירסה בקובץ", fVer, textSecondary, textPrimary, dividerColor, d, true);
+                addApkDetailRow(activity, metaCard, "גירסה מותקנת", fInstalled, textSecondary, textPrimary, dividerColor, d, true);
+                addApkDetailRow(activity, metaCard, "נפח קובץ", StorageUtils.formatSize(packageFile.length()), textSecondary, textPrimary, dividerColor, d, false);
+
+                customBody.addView(metaCard);
+
                 Button btnViewSource = ThemedDialogHelper.createThemedButton(
-                        activity, "הצג מקור ה-APK (Manifest / DEX)", theme, false, false);
+                        activity, "הצג מקור", theme, false, false);
                 btnViewSource.setOnClickListener(v -> {
                     Intent i = new Intent(activity, ApkSourceInspectorActivity.class);
                     i.putExtra(ApkSourceInspectorActivity.EXTRA_APK_PATH, packageFile.getAbsolutePath());
                     activity.startActivity(i);
+                    ThemeHelper.overrideOpenTransition(activity);
                 });
+                LinearLayout.LayoutParams srcLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                srcLp.topMargin = Math.round(12 * d);
+                customBody.addView(btnViewSource, srcLp);
 
                 AlertDialog dlg = ThemedDialogHelper.showCustomDialog(
                         activity,
-                        "מנהל התקנת אפליקציה",
-                        msg,
-                        btnViewSource,
+                        "פרטי חבילת התקנה",
+                        null,
+                        customBody,
                         "התקן",
                         () -> installAnyPackage(activity, packageFile),
                         "סגור",
@@ -161,10 +234,43 @@ public final class AppPackageInstaller {
                         false
                 );
                 if (dlg != null && onClosedWithoutInstall != null) {
-                    dlg.setOnCancelListener(d -> onClosedWithoutInstall.run());
+                    dlg.setOnCancelListener(dlog -> onClosedWithoutInstall.run());
                 }
             });
         });
+    }
+
+    private static void addApkDetailRow(
+            Activity activity, LinearLayout parent, String label, String value,
+            int labelColor, int valueColor, int dividerColor, float d, boolean addDivider) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Math.round(8 * d), 0, Math.round(8 * d));
+
+        TextView tvLbl = new TextView(activity);
+        tvLbl.setText(label);
+        tvLbl.setTextColor(labelColor);
+        tvLbl.setTextSize(ThemeHelper.spScaled(activity, 12.5f));
+        LinearLayout.LayoutParams lLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lLp.setMarginEnd(Math.round(10 * d));
+        row.addView(tvLbl, lLp);
+
+        TextView tvVal = new TextView(activity);
+        tvVal.setText(value);
+        tvVal.setTextColor(valueColor);
+        tvVal.setTextSize(ThemeHelper.spScaled(activity, 12.5f));
+        tvVal.setTypeface(Typeface.DEFAULT_BOLD);
+        tvVal.setGravity(Gravity.LEFT);
+        row.addView(tvVal, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        parent.addView(row);
+        if (addDivider) {
+            View div = new View(activity);
+            div.setBackgroundColor(ColorUtils.setAlphaComponent(dividerColor, 140));
+            parent.addView(div, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        }
     }
 
     public static void installAnyPackage(Activity activity, File packageFile) {

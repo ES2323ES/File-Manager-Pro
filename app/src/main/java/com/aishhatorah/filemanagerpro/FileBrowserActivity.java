@@ -31,6 +31,7 @@ import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
@@ -113,7 +114,10 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService searchExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService dirCountExecutor = Executors.newFixedThreadPool(2);
     private final AtomicInteger searchGeneration = new AtomicInteger(0);
+    private final AtomicInteger loadGeneration = new AtomicInteger(0);
+    private final AtomicInteger dirCountGeneration = new AtomicInteger(0);
     private final List<File> allLoadedFiles = new ArrayList<>();
     private final List<File> displayedFiles = new ArrayList<>();
     private final Set<String> selectedPaths = new HashSet<>();
@@ -172,6 +176,8 @@ public class FileBrowserActivity extends AppCompatActivity {
     private LinearLayout multiSelectBar;
     private ScrollView multiSelectScroll;
     private boolean multiSheetExpanded = false;
+    private ValueAnimator multiSheetAnimator = null;
+    private ValueAnimator multiSheetPeekAnimator = null;
     private SwipeRefreshLayout swipeRefresh;
     private RecyclerView recyclerView;
     private ProgressBar loadingSpinner;
@@ -798,7 +804,152 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private LinearLayout buildMultiSelectBar() {
         boolean isDark = ThemeHelper.isDarkSurface(this, theme);
-        LinearLayout sheet = new LinearLayout(this);
+        final int collapsedHeight = dp(100);
+        final int expandedHeight = dp(178);
+        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+
+        final FrameLayout handleWrap = new FrameLayout(this);
+        handleWrap.setPadding(0, dp(2), 0, dp(8));
+        View dragPill = new View(this);
+        GradientDrawable pillBg = new GradientDrawable();
+        pillBg.setCornerRadius(dp(3));
+        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
+        dragPill.setBackground(pillBg);
+        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
+
+        LinearLayout sheet = new LinearLayout(this) {
+            private float dragStartRawY;
+            private float dragStartX;
+            private int dragStartHeight;
+            private boolean isDraggingSheet = false;
+            private boolean startedOnHandle = false;
+
+            private void initDown(MotionEvent ev) {
+                dragStartRawY = ev.getRawY();
+                dragStartX = ev.getRawX();
+                if (multiSelectScroll != null && multiSelectScroll.getLayoutParams() != null) {
+                    dragStartHeight = multiSelectScroll.getHeight() > 0
+                            ? multiSelectScroll.getHeight()
+                            : multiSelectScroll.getLayoutParams().height;
+                } else {
+                    dragStartHeight = collapsedHeight;
+                }
+                isDraggingSheet = false;
+                startedOnHandle = ev.getY() <= handleWrap.getBottom() + dp(6);
+            }
+
+            private boolean shouldStartSheetDrag(float dx, float dy) {
+                if (Math.abs(dy) <= touchSlop || Math.abs(dy) < Math.abs(dx) * 0.75f) {
+                    return false;
+                }
+                if (startedOnHandle) return true;
+                if (!multiSheetExpanded && dy < 0f) return true;
+                return multiSheetExpanded && dy > 0f
+                        && (multiSelectScroll == null || multiSelectScroll.getScrollY() <= 0);
+            }
+
+            private void beginSheetDrag(MotionEvent ev) {
+                isDraggingSheet = true;
+                cancelMultiSheetAnimators();
+                if (multiSelectScroll != null && multiSelectScroll.getLayoutParams() != null) {
+                    dragStartHeight = multiSelectScroll.getHeight() > 0
+                            ? multiSelectScroll.getHeight()
+                            : multiSelectScroll.getLayoutParams().height;
+                }
+                dragStartRawY = ev.getRawY();
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                }
+            }
+
+            private void updateSheetDrag(float currentRawY) {
+                if (multiSelectScroll == null) return;
+                ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
+                if (lp == null) return;
+                float dy = currentRawY - dragStartRawY;
+                int newH = Math.max(collapsedHeight, Math.min(expandedHeight, Math.round(dragStartHeight - dy)));
+                if (lp.height != newH) {
+                    lp.height = newH;
+                    multiSelectScroll.setLayoutParams(lp);
+                }
+                if (multiSelectScroll.getScrollY() != 0) {
+                    multiSelectScroll.scrollTo(0, 0);
+                }
+            }
+
+            private void finishSheetDrag(float totalDy) {
+                isDraggingSheet = false;
+                if (multiSelectScroll == null || multiSelectScroll.getLayoutParams() == null) return;
+                int curH = multiSelectScroll.getLayoutParams().height;
+                boolean expand;
+                if (totalDy < -dp(20)) {
+                    expand = true;
+                } else if (totalDy > dp(20)) {
+                    expand = false;
+                } else {
+                    expand = curH >= (collapsedHeight + expandedHeight) / 2;
+                }
+                setMultiSheetExpanded(expand);
+            }
+
+            @Override
+            public boolean onInterceptTouchEvent(MotionEvent ev) {
+                int action = ev.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    initDown(ev);
+                    return false;
+                }
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if (!isDraggingSheet) {
+                        float dx = ev.getRawX() - dragStartX;
+                        float dy = ev.getRawY() - dragStartRawY;
+                        if (shouldStartSheetDrag(dx, dy)) {
+                            beginSheetDrag(ev);
+                            return true;
+                        }
+                    }
+                    return isDraggingSheet;
+                }
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    if (isDraggingSheet) {
+                        finishSheetDrag(ev.getRawY() - dragStartRawY);
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            @Override
+            public boolean onTouchEvent(MotionEvent ev) {
+                int action = ev.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    initDown(ev);
+                    return true;
+                }
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if (!isDraggingSheet) {
+                        float dx = ev.getRawX() - dragStartX;
+                        float dy = ev.getRawY() - dragStartRawY;
+                        if (shouldStartSheetDrag(dx, dy)) {
+                            beginSheetDrag(ev);
+                        }
+                    }
+                    if (isDraggingSheet) {
+                        updateSheetDrag(ev.getRawY());
+                    }
+                    return true;
+                }
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    if (isDraggingSheet) {
+                        finishSheetDrag(ev.getRawY() - dragStartRawY);
+                    } else if (action == MotionEvent.ACTION_UP && startedOnHandle) {
+                        toggleMultiSheetExpanded();
+                    }
+                    return true;
+                }
+                return super.onTouchEvent(ev);
+            }
+        };
         sheet.setOrientation(LinearLayout.VERTICAL);
         sheet.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         float topCorner = dp(24);
@@ -811,15 +962,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         sheet.setElevation(dp(12));
         sheet.setPadding(dp(12), dp(8), dp(12), dp(12));
 
-        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה עליה פותחת/מקפלת את שני השורות
-        FrameLayout handleWrap = new FrameLayout(this);
-        handleWrap.setPadding(0, dp(2), 0, dp(8));
-        View dragPill = new View(this);
-        GradientDrawable pillBg = new GradientDrawable();
-        pillBg.setCornerRadius(dp(3));
-        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
-        dragPill.setBackground(pillBg);
-        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
+        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה או החלקה למעלה/למטה מרחיבה ומצמצמת
         handleWrap.setOnClickListener(v -> toggleMultiSheetExpanded());
         sheet.addView(handleWrap, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -861,9 +1004,9 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         multiSelectScroll.addView(rowsHolder, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב מלא
+        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב בהחלקה
         sheet.addView(multiSelectScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(100)));
+                ViewGroup.LayoutParams.MATCH_PARENT, collapsedHeight));
         return sheet;
     }
 
@@ -915,26 +1058,50 @@ public class FileBrowserActivity extends AppCompatActivity {
         return card;
     }
 
+    private void cancelMultiSheetAnimators() {
+        if (multiSheetAnimator != null) {
+            multiSheetAnimator.cancel();
+            multiSheetAnimator = null;
+        }
+        if (multiSheetPeekAnimator != null) {
+            multiSheetPeekAnimator.cancel();
+            multiSheetPeekAnimator = null;
+        }
+    }
+
     private void toggleMultiSheetExpanded() {
+        setMultiSheetExpanded(!multiSheetExpanded);
+    }
+
+    private void setMultiSheetExpanded(boolean expand) {
         if (multiSelectScroll == null) return;
-        multiSheetExpanded = !multiSheetExpanded;
+        cancelMultiSheetAnimators();
+        multiSheetExpanded = expand;
         int targetH = dp(multiSheetExpanded ? 178 : 100);
-        if (PrefsManager.isReduceAnimations(this)) {
-            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-            lp.height = targetH;
-            multiSelectScroll.setLayoutParams(lp);
+        ViewGroup.LayoutParams curLp = multiSelectScroll.getLayoutParams();
+        int startH = multiSelectScroll.getHeight() > 0
+                ? multiSelectScroll.getHeight()
+                : (curLp != null ? curLp.height : targetH);
+        if (PrefsManager.isReduceAnimations(this) || startH == targetH) {
+            if (curLp != null) {
+                curLp.height = targetH;
+                multiSelectScroll.setLayoutParams(curLp);
+            }
             if (!multiSheetExpanded) multiSelectScroll.scrollTo(0, 0);
             return;
         }
-        int startH = multiSelectScroll.getHeight() > 0 ? multiSelectScroll.getHeight() : multiSelectScroll.getLayoutParams().height;
         ValueAnimator va = ValueAnimator.ofInt(startH, targetH);
         va.setDuration(220L);
         va.setInterpolator(new DecelerateInterpolator());
         va.addUpdateListener(anim -> {
+            if (multiSelectScroll == null) return;
             ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-            lp.height = (int) anim.getAnimatedValue();
-            multiSelectScroll.setLayoutParams(lp);
+            if (lp != null) {
+                lp.height = (int) anim.getAnimatedValue();
+                multiSelectScroll.setLayoutParams(lp);
+            }
         });
+        multiSheetAnimator = va;
         va.start();
         if (!multiSheetExpanded) {
             multiSelectScroll.smoothScrollTo(0, 0);
@@ -954,6 +1121,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (!wasActive && tvHeaderTitle != null && tvHeaderTitle.getText() != null) {
             normalTitleSnapshot = tvHeaderTitle.getText().toString();
         }
+        cancelMultiSheetAnimators();
         multiSelectMode = true;
         selectedPaths.clear();
         if (initial != null) selectedPaths.add(initial.getAbsolutePath());
@@ -986,17 +1154,28 @@ public class FileBrowserActivity extends AppCompatActivity {
                 .setDuration(230L)
                 .setInterpolator(new DecelerateInterpolator())
                 .withEndAction(() -> {
-                    if (!multiSelectMode || multiSelectScroll == null) return;
+                    if (!multiSelectMode || multiSelectScroll == null || multiSheetExpanded) return;
                     // קפיצה עדינה כלפי מטה וחזרה למעלה כדי להמחיש שקיימת שורה שנייה מתחת
                     int peekTarget = dp(58);
                     ValueAnimator down = ValueAnimator.ofInt(0, peekTarget);
                     down.setDuration(220L);
                     down.setInterpolator(new DecelerateInterpolator());
-                    down.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
+                    down.addUpdateListener(a -> {
+                        if (multiSelectScroll != null) {
+                            multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue());
+                        }
+                    });
                     down.addListener(new android.animation.AnimatorListenerAdapter() {
+                        private boolean canceled = false;
+
+                        @Override
+                        public void onAnimationCancel(android.animation.Animator animation) {
+                            canceled = true;
+                        }
+
                         @Override
                         public void onAnimationEnd(android.animation.Animator animation) {
-                            if (multiSelectScroll == null) return;
+                            if (canceled || multiSelectScroll == null || !multiSelectMode || multiSheetExpanded) return;
                             ValueAnimator back = ValueAnimator.ofInt(peekTarget, 0);
                             back.setDuration(260L);
                             back.setStartDelay(90L);
@@ -1012,6 +1191,10 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private void exitMultiSelectMode() {
         if (!multiSelectMode) return;
+        cancelMultiSheetAnimators();
+        if (multiSelectBar != null) {
+            multiSelectBar.animate().cancel();
+        }
         multiSelectMode = false;
         selectedPaths.clear();
         multiSelectBar.setVisibility(View.GONE);
@@ -1072,27 +1255,28 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
 
-        int curSort = PrefsManager.getSortMode(this);
-        boolean curAsc = PrefsManager.isSortAscending(this);
+        final String sortScopeKey = getActiveSortScopeKey();
+        int curSort = PrefsManager.getEffectiveSortMode(this, sortScopeKey);
+        boolean curAsc = PrefsManager.isEffectiveSortAscending(this, sortScopeKey);
         List<GlassSideDrawerHelper.SubOption> sortSubs = Arrays.asList(
                 new GlassSideDrawerHelper.SubOption("לפי שם (מספרים ועברית תחילה)", curSort == PrefsManager.SORT_NAME, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_NAME);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_NAME);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי תאריך יצירה", curSort == PrefsManager.SORT_CREATED, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_CREATED);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_CREATED);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי תאריך שינוי", curSort == PrefsManager.SORT_DATE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_DATE);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_DATE);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי גודל", curSort == PrefsManager.SORT_SIZE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_SIZE);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_SIZE);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי סוג קובץ", curSort == PrefsManager.SORT_TYPE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_TYPE);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_TYPE);
                     loadFilesForCurrentMode(false);
                 })
         );
@@ -1103,7 +1287,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 sortSubs,
                 curAsc ? "החלף לסדר יורד" : "החלף לסדר עולה",
                 () -> {
-                    PrefsManager.setSortAscending(this, !curAsc);
+                    PrefsManager.setFolderSortAscending(this, sortScopeKey, !curAsc);
                     loadFilesForCurrentMode(false);
                 }
         ));
@@ -1175,8 +1359,18 @@ public class FileBrowserActivity extends AppCompatActivity {
         GlassSideDrawerHelper.show(this, btnHamburger, subTitle, items, false);
     }
 
+    private String getActiveSortScopeKey() {
+        if ((isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) && currentDir != null) {
+            return currentMode + "|" + currentDir.getAbsolutePath();
+        }
+        if (isGroupedMediaCategoryMode() && selectedCategoryFolder != null) {
+            return currentMode + "|" + selectedCategoryFolder.getAbsolutePath();
+        }
+        return currentMode + "|" + (isEffectiveLinearCategoryView() ? "linear" : "grouped");
+    }
+
     private String currentSortNameHe() {
-        int s = PrefsManager.getSortMode(this);
+        int s = PrefsManager.getEffectiveSortMode(this, getActiveSortScopeKey());
         if (s == PrefsManager.SORT_SIZE) return "גודל";
         if (s == PrefsManager.SORT_DATE) return "שינוי";
         if (s == PrefsManager.SORT_CREATED) return "יצירה";
@@ -1638,9 +1832,12 @@ public class FileBrowserActivity extends AppCompatActivity {
                         ? FileScanCache.peekFreshSnapshot(showHidden)
                         : null;
 
+        final int myLoadGen = loadGeneration.incrementAndGet();
+        dirCountGeneration.incrementAndGet();
         loadingSpinner.setVisibility((allLoadedFiles.isEmpty() && quickSnap == null) ? View.VISIBLE : View.GONE);
 
         executor.execute(() -> {
+            if (loadGeneration.get() != myLoadGen) return;
             List<File> result = new ArrayList<>();
             if (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) {
                 dirItemCountCache.clear();
@@ -1649,6 +1846,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     File[] children = currentDir.listFiles();
                     if (children != null) {
                         for (File f : children) {
+                            if (loadGeneration.get() != myLoadGen) return;
                             if (MODE_RECYCLE_BIN.equals(currentMode)
                                     && ("trash_manifest.json".equals(f.getName()) || ".nomedia".equals(f.getName()))) {
                                 continue;
@@ -1729,7 +1927,9 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             }
 
+            if (loadGeneration.get() != myLoadGen) return;
             sortFileList(result);
+            if (loadGeneration.get() != myLoadGen) return;
 
             final String scopeKey = currentMode
                     + "|" + (currentDir != null ? currentDir.getAbsolutePath() : "")
@@ -1738,6 +1938,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                     ? "התיקייה רועננה"
                     : "הקטגוריה רועננה";
             runOnUiThread(() -> {
+                if (loadGeneration.get() != myLoadGen) return;
                 boolean scopeChanged = !scopeKey.equals(lastLoadedScopeKey);
                 lastLoadedScopeKey = scopeKey;
                 loadingSpinner.setVisibility(View.GONE);
@@ -1831,8 +2032,9 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private void sortFileList(List<File> list) {
         if (list.size() <= 1) return;
-        final int sortMode = PrefsManager.getSortMode(this);
-        final boolean asc = PrefsManager.isSortAscending(this);
+        final String scopeKey = getActiveSortScopeKey();
+        final int sortMode = PrefsManager.getEffectiveSortMode(this, scopeKey);
+        final boolean asc = PrefsManager.isEffectiveSortAscending(this, scopeKey);
 
         // חישוב מטא-דאטה פעם אחת (O(N)) לפני המיון במקום אלפי קריאות מערכת בתוך ה-Comparator
         final Map<File, Boolean> isDirMap = new HashMap<>(list.size());
@@ -1848,9 +2050,12 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (metricMap != null) {
                 String p = f.getAbsolutePath();
                 if (sortMode == PrefsManager.SORT_SIZE) {
-                    long diskLen = (!dir && f.exists()) ? f.length() : -1L;
                     Long cached = cachedSizesByPath.get(p);
-                    metricMap.put(f, diskLen >= 0L ? diskLen : (cached != null ? cached : 0L));
+                    if (cached != null) {
+                        metricMap.put(f, cached);
+                    } else {
+                        metricMap.put(f, !dir ? f.length() : 0L);
+                    }
                 } else if (sortMode == PrefsManager.SORT_DATE) {
                     Long cached = cachedModifiedByPath.get(p);
                     metricMap.put(f, cached != null ? cached : f.lastModified());
@@ -3146,13 +3351,13 @@ public class FileBrowserActivity extends AppCompatActivity {
             h.tvName.setTextSize(ThemeHelper.spScaled(FileBrowserActivity.this, isGrid ? 12f : 13.5f));
             h.tvName.setTextColor(textPrimary);
             h.tvHint.setTextColor(accent);
-
             if (h.ivFolderPlayBadge != null) {
                 h.ivFolderPlayBadge.setVisibility(View.GONE);
             }
 
             if (f.isDirectory() && isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
-                if (isGrid && (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))) {
+                if (isGrid && (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))
+                        && PrefsManager.isShowFolderThumbnails(FileBrowserActivity.this)) {
                     File firstThumbFile = categoryFolderFirstFile.get(f.getAbsolutePath());
                     if (firstThumbFile != null) {
                         FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, firstThumbFile, h.ivIcon);
@@ -3206,9 +3411,8 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             } else {
                 String p = f.getAbsolutePath();
-                long diskLen = f.exists() ? f.length() : -1L;
                 Long sz = cachedSizesByPath.get(p);
-                long fileLen = diskLen >= 0L ? diskLen : (sz != null ? sz : 0L);
+                long fileLen = sz != null ? sz : f.length();
                 Long md = cachedModifiedByPath.get(p);
                 long modMs = md != null ? md : f.lastModified();
                 h.tvMeta.setText(isGrid
@@ -3254,11 +3458,23 @@ public class FileBrowserActivity extends AppCompatActivity {
         private void scheduleDirChildCount(File dir, int adapterPos) {
             final String path = dir.getAbsolutePath();
             if (!pendingDirCountPaths.add(path)) return;
-            executor.execute(() -> {
-                File[] sub = dir.listFiles();
-                int count = sub != null ? sub.length : 0;
+            final int gen = dirCountGeneration.get();
+            dirCountExecutor.execute(() -> {
+                if (dirCountGeneration.get() != gen) return;
+                int count = 0;
+                try (java.nio.file.DirectoryStream<java.nio.file.Path> stream = java.nio.file.Files.newDirectoryStream(dir.toPath())) {
+                    for (java.nio.file.Path ignored : stream) {
+                        count++;
+                        if (dirCountGeneration.get() != gen) return;
+                    }
+                } catch (Throwable ignored) {
+                    File[] sub = dir.listFiles();
+                    count = sub != null ? sub.length : 0;
+                }
+                if (dirCountGeneration.get() != gen) return;
                 dirItemCountCache.put(path, count);
                 runOnUiThread(() -> {
+                    if (dirCountGeneration.get() != gen) return;
                     if (adapterPos >= 0 && adapterPos < displayedFiles.size()
                             && displayedFiles.get(adapterPos).getAbsolutePath().equals(path)) {
                         notifyItemChanged(adapterPos);
@@ -3343,5 +3559,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
         executor.shutdownNow();
         searchExecutor.shutdownNow();
+        dirCountExecutor.shutdownNow();
     }
 }

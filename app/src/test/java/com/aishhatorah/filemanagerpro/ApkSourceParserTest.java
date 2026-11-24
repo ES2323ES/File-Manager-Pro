@@ -52,5 +52,19 @@ public class ApkSourceParserTest {
         Map<String, List<String>> parsed = ApkSourceParser.parseDexPackagesAndClasses(dex);
         assertTrue(parsed.containsKey("com.example.app"));
         assertTrue(parsed.get("com.example.app").contains("DemoClass"));
+
+        ApkSourceParser.DexInspectionResult full = ApkSourceParser.parseDexFull(dex);
+        assertEquals(1, full.classCount);
+        assertEquals("DemoClass", full.packages.get("com.example.app").get(0).className);
+        assertTrue(full.strings.contains("Lcom/example/app/DemoClass;"));
+    }
+
+    @Test
+    public void parseResourcesArscHandlesTruncatedOrEmptyInputGracefully() {
+        ApkSourceParser.ArscInspectionResult res = ApkSourceParser.parseResourcesArsc(new byte[]{0, 2, 12, 0});
+        assertNotNull(res);
+        assertNotNull(res.packageName);
+        assertNotNull(res.byType);
+        assertEquals(0, res.totalEntries);
     }
 }
