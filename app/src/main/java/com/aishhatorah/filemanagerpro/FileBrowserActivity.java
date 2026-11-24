@@ -1255,27 +1255,28 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
 
-        int curSort = PrefsManager.getSortMode(this);
-        boolean curAsc = PrefsManager.isSortAscending(this);
+        final String sortScopeKey = getActiveSortScopeKey();
+        int curSort = PrefsManager.getEffectiveSortMode(this, sortScopeKey);
+        boolean curAsc = PrefsManager.isEffectiveSortAscending(this, sortScopeKey);
         List<GlassSideDrawerHelper.SubOption> sortSubs = Arrays.asList(
                 new GlassSideDrawerHelper.SubOption("לפי שם (מספרים ועברית תחילה)", curSort == PrefsManager.SORT_NAME, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_NAME);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_NAME);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי תאריך יצירה", curSort == PrefsManager.SORT_CREATED, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_CREATED);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_CREATED);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי תאריך שינוי", curSort == PrefsManager.SORT_DATE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_DATE);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_DATE);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי גודל", curSort == PrefsManager.SORT_SIZE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_SIZE);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_SIZE);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי סוג קובץ", curSort == PrefsManager.SORT_TYPE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_TYPE);
+                    PrefsManager.setFolderSortMode(this, sortScopeKey, PrefsManager.SORT_TYPE);
                     loadFilesForCurrentMode(false);
                 })
         );
@@ -1286,7 +1287,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 sortSubs,
                 curAsc ? "החלף לסדר יורד" : "החלף לסדר עולה",
                 () -> {
-                    PrefsManager.setSortAscending(this, !curAsc);
+                    PrefsManager.setFolderSortAscending(this, sortScopeKey, !curAsc);
                     loadFilesForCurrentMode(false);
                 }
         ));
@@ -1358,8 +1359,18 @@ public class FileBrowserActivity extends AppCompatActivity {
         GlassSideDrawerHelper.show(this, btnHamburger, subTitle, items, false);
     }
 
+    private String getActiveSortScopeKey() {
+        if ((isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) && currentDir != null) {
+            return currentMode + "|" + currentDir.getAbsolutePath();
+        }
+        if (isGroupedMediaCategoryMode() && selectedCategoryFolder != null) {
+            return currentMode + "|" + selectedCategoryFolder.getAbsolutePath();
+        }
+        return currentMode + "|" + (isEffectiveLinearCategoryView() ? "linear" : "grouped");
+    }
+
     private String currentSortNameHe() {
-        int s = PrefsManager.getSortMode(this);
+        int s = PrefsManager.getEffectiveSortMode(this, getActiveSortScopeKey());
         if (s == PrefsManager.SORT_SIZE) return "גודל";
         if (s == PrefsManager.SORT_DATE) return "שינוי";
         if (s == PrefsManager.SORT_CREATED) return "יצירה";
@@ -2021,8 +2032,9 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private void sortFileList(List<File> list) {
         if (list.size() <= 1) return;
-        final int sortMode = PrefsManager.getSortMode(this);
-        final boolean asc = PrefsManager.isSortAscending(this);
+        final String scopeKey = getActiveSortScopeKey();
+        final int sortMode = PrefsManager.getEffectiveSortMode(this, scopeKey);
+        final boolean asc = PrefsManager.isEffectiveSortAscending(this, scopeKey);
 
         // חישוב מטא-דאטה פעם אחת (O(N)) לפני המיון במקום אלפי קריאות מערכת בתוך ה-Comparator
         final Map<File, Boolean> isDirMap = new HashMap<>(list.size());
@@ -3344,7 +3356,8 @@ public class FileBrowserActivity extends AppCompatActivity {
             }
 
             if (f.isDirectory() && isGroupedMediaCategoryMode() && selectedCategoryFolder == null) {
-                if (isGrid && (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))) {
+                if (isGrid && (MODE_IMAGES.equals(currentMode) || MODE_VIDEOS.equals(currentMode))
+                        && PrefsManager.isShowFolderThumbnails(FileBrowserActivity.this)) {
                     File firstThumbFile = categoryFolderFirstFile.get(f.getAbsolutePath());
                     if (firstThumbFile != null) {
                         FileThumbnailLoader.bindFileIcon(FileBrowserActivity.this, firstThumbFile, h.ivIcon);

@@ -540,14 +540,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             activeMediaBottomPanel.setVisibility((mediaControlsHidden || isInPipMode) ? View.GONE : View.VISIBLE);
         }
 
-        boolean autoGesture = PrefsManager.isAutoGestureMode(this);
+        boolean imageNavGestures = PrefsManager.isGestureImageTapNav(this) || PrefsManager.isGestureImageSwipeNav(this);
         if (activeImagePrevFloat != null) {
             activeImagePrevFloat.setVisibility(
-                    (!mediaControlsHidden && !autoGesture && imagePlaylist.size() > 1) ? View.VISIBLE : View.GONE);
+                    (!mediaControlsHidden && !imageNavGestures && imagePlaylist.size() > 1) ? View.VISIBLE : View.GONE);
         }
         if (activeImageNextFloat != null) {
             activeImageNextFloat.setVisibility(
-                    (!mediaControlsHidden && !autoGesture && imagePlaylist.size() > 1) ? View.VISIBLE : View.GONE);
+                    (!mediaControlsHidden && !imageNavGestures && imagePlaylist.size() > 1) ? View.VISIBLE : View.GONE);
         }
         if (activeVideoCenterOverlay != null) {
             boolean showCenter = !isInPipMode && !isVideoLocked && (!mediaControlsHidden || awaitingInitialVideoPlay);
@@ -570,6 +570,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         }
 
         if (isImageMode && activeZoomImageView != null) {
+            activeZoomImageView.setPinchZoomEnabled(PrefsManager.isGesturePinchZoom(this));
+            activeZoomImageView.setHorizontalSwipeEnabled(PrefsManager.isGestureImageSwipeNav(this));
             activeZoomImageView.post(activeZoomImageView::fitImageToCenter);
         }
     }
@@ -591,7 +593,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         File activeFileForFolder = (isAudioMode && AudioPlayerManager.getInstance().getCurrentFile() != null)
                 ? AudioPlayerManager.getInstance().getCurrentFile()
                 : targetFile;
-        if ((openedFromNotification || openedFromMiniAudioBar)
+        if ((openedFromNotification || (openedFromMiniAudioBar && PrefsManager.isMiniBarReturnToSongFolder(this)))
                 && activeFileForFolder != null && activeFileForFolder.getParentFile() != null) {
             openedFromNotification = false;
             openedFromMiniAudioBar = false;
@@ -1450,9 +1452,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         btnFloatPrev.setOnClickListener(v -> goPrev.run());
         btnFloatNext.setOnClickListener(v -> goNext.run());
 
-        // סעיף 44: במצב מחוות אוטומטי הקשה בצד ימין עוברת קדימה, בצד שמאל אחורה, ובמרכז מסתירה/מציגה פקדים
+        zoomView.setPinchZoomEnabled(PrefsManager.isGesturePinchZoom(this));
+        zoomView.setHorizontalSwipeEnabled(PrefsManager.isGestureImageSwipeNav(this));
+
+        // סעיף 44: במצב מחוות הקשה בצד ימין עוברת קדימה, בצד שמאל אחורה, ובמרכז מסתירה/מציגה פקדים
         zoomView.setOnTapPositionListener((normX, isZoomed) -> {
-            if (!isZoomed && PrefsManager.isAutoGestureMode(this) && imagePlaylist.size() > 1) {
+            if (!isZoomed && PrefsManager.isGestureImageTapNav(this) && imagePlaylist.size() > 1) {
                 if (normX >= 0.72f) {
                     goNext.run();
                     return;
@@ -1467,12 +1472,16 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         zoomView.setOnHorizontalSwipeListener(new ZoomableImageView.HorizontalSwipeListener() {
             @Override
             public void onSwipeToNext() {
-                goNext.run();
+                if (PrefsManager.isGestureImageSwipeNav(BuiltInViewerActivity.this)) {
+                    goNext.run();
+                }
             }
 
             @Override
             public void onSwipeToPrevious() {
-                goPrev.run();
+                if (PrefsManager.isGestureImageSwipeNav(BuiltInViewerActivity.this)) {
+                    goPrev.run();
+                }
             }
         });
 
@@ -3978,7 +3987,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 new ScaleGestureDetector.SimpleOnScaleGestureListener() {
                     @Override
                     public boolean onScaleBegin(@NonNull ScaleGestureDetector detector) {
-                        if (isVideoLocked) return false;
+                        if (isVideoLocked || !PrefsManager.isGesturePinchZoom(BuiltInViewerActivity.this)) return false;
                         wasScalingSinceDown[0] = true;
                         swipeMode[0] = 0;
                         stopVideoHoldGestures(badge);
@@ -3989,7 +3998,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                     @Override
                     public boolean onScale(@NonNull ScaleGestureDetector detector) {
-                        if (isVideoLocked || videoTextureView == null) return false;
+                        if (isVideoLocked || videoTextureView == null
+                                || !PrefsManager.isGesturePinchZoom(BuiltInViewerActivity.this)) return false;
                         int viewW = videoTextureView.getWidth();
                         int viewH = videoTextureView.getHeight();
                         if (viewW <= 0 || viewH <= 0) return false;
@@ -4040,7 +4050,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                     @Override
                     public boolean onDoubleTap(@NonNull MotionEvent e) {
-                        if (isVideoLocked || wasScalingSinceDown[0] || !PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)) {
+                        if (isVideoLocked || wasScalingSinceDown[0]
+                                || !PrefsManager.isGestureVideoSeekSwipe(BuiltInViewerActivity.this)) {
                             return true;
                         }
                         float w = Math.max(1f, viewport.getWidth());
@@ -4064,7 +4075,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     @Override
                     public void onLongPress(@NonNull MotionEvent e) {
                         if (isVideoLocked || wasScalingSinceDown[0] || gestureMovedBeyondSlop[0]
-                                || swipeMode[0] != 0 || !PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)) {
+                                || swipeMode[0] != 0 || !PrefsManager.isGestureVideoHold2x(BuiltInViewerActivity.this)) {
                             return;
                         }
                         if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
@@ -4153,11 +4164,12 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                 gestureMovedBeyondSlop[0] = true;
                             }
                             if (swipeMode[0] == 0) {
-                                if (videoPrepared && PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)
+                                if (videoPrepared && PrefsManager.isGestureVideoSeekSwipe(BuiltInViewerActivity.this)
                                         && Math.abs(dx) > touchSlopPx * 1.5f
                                         && Math.abs(dx) > Math.abs(dy) * 1.3f) {
                                     swipeMode[0] = 1;
-                                } else if (Math.abs(dy) > touchSlopPx * 1.25f
+                                } else if (PrefsManager.isGestureVideoVolumeBrightness(BuiltInViewerActivity.this)
+                                        && Math.abs(dy) > touchSlopPx * 1.25f
                                         && Math.abs(dy) > Math.abs(dx) * 1.25f) {
                                     boolean rightHalf = swipeDownLocalX[0] >= (Math.max(1f, viewport.getWidth()) * 0.5f);
                                     if (rightHalf && audioMgr != null) {

@@ -22,6 +22,11 @@ public class ZoomableImageView extends AppCompatImageView {
         void onSwipeToPrevious();
     }
 
+    public interface VerticalSwipeListener {
+        void onSwipeUp();
+        void onSwipeDown();
+    }
+
     public interface TapPositionListener {
         void onSingleTapAt(float normalizedX, boolean isZoomedIn);
     }
@@ -39,9 +44,14 @@ public class ZoomableImageView extends AppCompatImageView {
     private final PointF lastTouch = new PointF();
     private boolean isDragging = false;
 
+    private boolean pinchZoomEnabled = true;
+    private boolean horizontalSwipeEnabled = true;
+    private boolean verticalSwipeEnabled = true;
+
     private Runnable singleTapListener = null;
     private TapPositionListener tapPositionListener = null;
     private HorizontalSwipeListener horizontalSwipeListener = null;
+    private VerticalSwipeListener verticalSwipeListener = null;
 
     public ZoomableImageView(Context context) {
         super(context);
@@ -50,6 +60,7 @@ public class ZoomableImageView extends AppCompatImageView {
         scaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
+                if (!pinchZoomEnabled) return false;
                 float factor = detector.getScaleFactor();
                 float targetScale = currentScale * factor;
                 if (targetScale > maxScale) {
@@ -91,7 +102,7 @@ public class ZoomableImageView extends AppCompatImageView {
 
             @Override
             public boolean onDoubleTap(MotionEvent e) {
-                if (minScale <= 0f) return true;
+                if (!pinchZoomEnabled || minScale <= 0f) return false;
                 float ratio = currentScale / minScale;
                 if (ratio < 2.8f) {
                     float target = minScale * 3.5f;
@@ -115,12 +126,15 @@ public class ZoomableImageView extends AppCompatImageView {
 
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                if (horizontalSwipeListener == null || e1 == null || e2 == null) return false;
+                if (e1 == null || e2 == null) return false;
                 if (currentScale > minScale * 1.06f) return false;
                 float dx = e2.getX() - e1.getX();
                 float dy = e2.getY() - e1.getY();
                 float minSwipePx = 70f * getResources().getDisplayMetrics().density;
-                if (Math.abs(dx) > Math.abs(dy) * 1.35f && Math.abs(dx) > minSwipePx && Math.abs(velocityX) > 220f) {
+                if (horizontalSwipeEnabled && horizontalSwipeListener != null
+                        && Math.abs(dx) > Math.abs(dy) * 1.35f
+                        && Math.abs(dx) > minSwipePx
+                        && Math.abs(velocityX) > 220f) {
                     if (dx < 0) {
                         horizontalSwipeListener.onSwipeToNext();
                     } else {
@@ -128,9 +142,32 @@ public class ZoomableImageView extends AppCompatImageView {
                     }
                     return true;
                 }
+                if (verticalSwipeEnabled && verticalSwipeListener != null
+                        && Math.abs(dy) > Math.abs(dx) * 1.35f
+                        && Math.abs(dy) > minSwipePx
+                        && Math.abs(velocityY) > 220f) {
+                    if (dy < 0) {
+                        verticalSwipeListener.onSwipeUp();
+                    } else {
+                        verticalSwipeListener.onSwipeDown();
+                    }
+                    return true;
+                }
                 return false;
             }
         });
+    }
+
+    public void setPinchZoomEnabled(boolean enabled) {
+        this.pinchZoomEnabled = enabled;
+    }
+
+    public void setHorizontalSwipeEnabled(boolean enabled) {
+        this.horizontalSwipeEnabled = enabled;
+    }
+
+    public void setVerticalSwipeEnabled(boolean enabled) {
+        this.verticalSwipeEnabled = enabled;
     }
 
     public void setOnSingleTapListener(Runnable listener) {
@@ -143,6 +180,10 @@ public class ZoomableImageView extends AppCompatImageView {
 
     public void setOnHorizontalSwipeListener(HorizontalSwipeListener listener) {
         this.horizontalSwipeListener = listener;
+    }
+
+    public void setOnVerticalSwipeListener(VerticalSwipeListener listener) {
+        this.verticalSwipeListener = listener;
     }
 
     @Override
@@ -253,7 +294,9 @@ public class ZoomableImageView extends AppCompatImageView {
         if (getParent() != null) {
             getParent().requestDisallowInterceptTouchEvent(true);
         }
-        scaleDetector.onTouchEvent(event);
+        if (pinchZoomEnabled) {
+            scaleDetector.onTouchEvent(event);
+        }
         gestureDetector.onTouchEvent(event);
 
         switch (event.getActionMasked()) {
@@ -262,7 +305,7 @@ public class ZoomableImageView extends AppCompatImageView {
                 isDragging = true;
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (isDragging && !scaleDetector.isInProgress() && currentScale > minScale * 1.02f) {
+                if (isDragging && (!pinchZoomEnabled || !scaleDetector.isInProgress()) && currentScale > minScale * 1.02f) {
                     float dx = event.getX() - lastTouch.x;
                     float dy = event.getY() - lastTouch.y;
                     matrix.postTranslate(dx, dy);
