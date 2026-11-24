@@ -161,10 +161,14 @@ public class MiniAudioBarHelper {
         btnPlayPause.setOnClickListener(v -> AudioPlayerManager.getInstance().togglePlayPause(activity));
 
         final int touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
+        final int pullOpenThresholdPx = dpToPx(activity, 26);
+        final int pullMaxTravelPx = dpToPx(activity, 76);
+        final float baseElevation = dpToPx(activity, 8);
         bar.setOnTouchListener(new View.OnTouchListener() {
             private float downRawX = 0f;
             private float downRawY = 0f;
             private int swipeAxis = 0; // 0=none, 1=horizontal stop, 2=vertical pull-up
+            private boolean hapticTriggered = false;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -174,6 +178,11 @@ public class MiniAudioBarHelper {
                         downRawX = event.getRawX();
                         downRawY = event.getRawY();
                         swipeAxis = 0;
+                        hapticTriggered = false;
+                        v.animate().cancel();
+                        if (!reduce) {
+                            v.animate().scaleX(0.985f).scaleY(0.985f).setDuration(90L).start();
+                        }
                         return true;
 
                     case MotionEvent.ACTION_MOVE: {
@@ -185,7 +194,7 @@ public class MiniAudioBarHelper {
                                 if (v.getParent() != null) {
                                     v.getParent().requestDisallowInterceptTouchEvent(true);
                                 }
-                            } else if (dy < -touchSlop && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                            } else if (dy < -touchSlop && Math.abs(dy) > Math.abs(dx) * 1.15f) {
                                 swipeAxis = 2;
                                 if (v.getParent() != null) {
                                     v.getParent().requestDisallowInterceptTouchEvent(true);
@@ -193,13 +202,33 @@ public class MiniAudioBarHelper {
                             }
                         }
                         if (swipeAxis == 1) {
+                            v.setScaleX(1f);
+                            v.setScaleY(1f);
                             v.setTranslationX(dx);
                             float alpha = Math.max(0.2f, 1f - (Math.abs(dx) / Math.max(1f, v.getWidth())));
                             v.setAlpha(alpha);
                         } else if (swipeAxis == 2) {
-                            float clampedUp = Math.max(-dpToPx(activity, 56), Math.min(0f, dy * 0.55f));
-                            v.setTranslationY(clampedUp);
-                            v.setAlpha(Math.max(0.75f, 1f - Math.abs(clampedUp) / dpToPx(activity, 180)));
+                            float rawUp = Math.max(0f, -dy);
+                            float progress = Math.min(1f, rawUp / Math.max(1f, pullMaxTravelPx));
+                            // תגובה רכה עם התנגדות קלה ככל שמתקרבים לפתיחה
+                            float easedTravel = (float) (pullMaxTravelPx * (1.0 - Math.exp(-rawUp / Math.max(1f, pullMaxTravelPx * 0.72f))));
+                            v.setTranslationY(-easedTravel);
+                            if (!reduce) {
+                                float scale = 1f + (0.03f * progress);
+                                v.setScaleX(scale);
+                                v.setScaleY(scale);
+                                v.setElevation(baseElevation + dpToPx(activity, 8) * progress);
+                            }
+                            v.setAlpha(Math.max(0.86f, 1f - 0.14f * progress));
+                            if (!hapticTriggered && rawUp >= pullOpenThresholdPx) {
+                                hapticTriggered = true;
+                                try {
+                                    v.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                                } catch (Throwable ignored) {
+                                }
+                            } else if (hapticTriggered && rawUp < pullOpenThresholdPx * 0.75f) {
+                                hapticTriggered = false;
+                            }
                         }
                         return true;
                     }
@@ -211,8 +240,7 @@ public class MiniAudioBarHelper {
                         if (swipeAxis == 1) {
                             if (Math.abs(dx) > v.getWidth() * 0.24f) {
                                 if (reduce) {
-                                    v.setTranslationX(0f);
-                                    v.setAlpha(1f);
+                                    resetBarTransform(v, baseElevation);
                                     AudioPlayerManager.getInstance().stopAndDismiss(activity);
                                     Toast.makeText(activity, "ניגון השיר הופסק", Toast.LENGTH_SHORT).show();
                                 } else {
@@ -222,8 +250,7 @@ public class MiniAudioBarHelper {
                                             .alpha(0f)
                                             .setDuration(170)
                                             .withEndAction(() -> {
-                                                v.setTranslationX(0f);
-                                                v.setAlpha(1f);
+                                                resetBarTransform(v, baseElevation);
                                                 AudioPlayerManager.getInstance().stopAndDismiss(activity);
                                                 Toast.makeText(activity, "ניגון השיר הופסק", Toast.LENGTH_SHORT).show();
                                             })
@@ -231,26 +258,64 @@ public class MiniAudioBarHelper {
                                 }
                             } else {
                                 if (reduce) {
-                                    v.setTranslationX(0f);
-                                    v.setAlpha(1f);
+                                    resetBarTransform(v, baseElevation);
                                 } else {
-                                    v.animate().translationX(0f).alpha(1f).setDuration(160).start();
+                                    v.animate()
+                                            .translationX(0f)
+                                            .scaleX(1f)
+                                            .scaleY(1f)
+                                            .alpha(1f)
+                                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.1f))
+                                            .setDuration(190)
+                                            .start();
                                 }
                             }
                         } else if (swipeAxis == 2) {
-                            if (reduce) {
-                                v.setTranslationY(0f);
-                                v.setAlpha(1f);
+                            boolean shouldOpen = event.getActionMasked() == MotionEvent.ACTION_UP && dy < -pullOpenThresholdPx;
+                            if (shouldOpen) {
+                                if (reduce) {
+                                    resetBarTransform(v, baseElevation);
+                                    openFullAudioViewer(activity, true);
+                                } else {
+                                    openFullAudioViewer(activity, false);
+                                    v.animate()
+                                            .translationY(-dpToPx(activity, 72))
+                                            .scaleX(1.03f)
+                                            .scaleY(1.03f)
+                                            .alpha(0f)
+                                            .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                                            .setDuration(160L)
+                                            .withEndAction(() -> v.postDelayed(() -> resetBarTransform(v, baseElevation), 220L))
+                                            .start();
+                                }
                             } else {
-                                v.animate().translationY(0f).alpha(1f).setDuration(150).start();
-                            }
-                            if (event.getActionMasked() == MotionEvent.ACTION_UP && dy < -dpToPx(activity, 24)) {
-                                openFullAudioViewer(activity, reduce);
+                                v.setElevation(baseElevation);
+                                if (reduce) {
+                                    resetBarTransform(v, baseElevation);
+                                } else {
+                                    v.animate()
+                                            .translationY(0f)
+                                            .scaleX(1f)
+                                            .scaleY(1f)
+                                            .alpha(1f)
+                                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.25f))
+                                            .setDuration(210L)
+                                            .start();
+                                }
                             }
                         } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                            v.setElevation(baseElevation);
+                            if (reduce) {
+                                resetBarTransform(v, baseElevation);
+                            } else {
+                                v.animate().scaleX(1f).scaleY(1f).setDuration(110L).start();
+                            }
                             openFullAudioViewer(activity, reduce);
+                        } else {
+                            resetBarTransform(v, baseElevation);
                         }
                         swipeAxis = 0;
+                        hapticTriggered = false;
                         return true;
                     }
                 }
@@ -337,9 +402,7 @@ public class MiniAudioBarHelper {
             barBg.setColor(barBgColor);
             barBg.setStroke(2, activeAccent);
             bar.setBackground(barBg);
-            bar.setTranslationX(0f);
-            bar.setTranslationY(0f);
-            bar.setAlpha(1f);
+            resetBarTransform(bar, baseElevation);
 
             tvTitle.setText(mgr.getCurrentFile().getName());
             tvTitle.setTextColor(activeTextPrimary);
@@ -407,6 +470,16 @@ public class MiniAudioBarHelper {
                 activity.overridePendingTransition(R.anim.slide_in_bottom, R.anim.hold_stay);
             }
         }
+    }
+
+    private static void resetBarTransform(View v, float baseElevation) {
+        if (v == null) return;
+        v.setTranslationX(0f);
+        v.setTranslationY(0f);
+        v.setScaleX(1f);
+        v.setScaleY(1f);
+        v.setAlpha(1f);
+        v.setElevation(baseElevation);
     }
 
     private static String formatClock(int ms) {
