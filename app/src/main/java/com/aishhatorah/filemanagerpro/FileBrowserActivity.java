@@ -1072,38 +1072,39 @@ public class FileBrowserActivity extends AppCompatActivity {
             return;
         }
 
-        int curSort = PrefsManager.getSortMode(this);
-        boolean curAsc = PrefsManager.isSortAscending(this);
+        final String sortScope = getCurrentSortScopeKey();
+        int curSort = PrefsManager.getSortModeForScope(this, sortScope);
+        boolean curAsc = PrefsManager.isSortAscendingForScope(this, sortScope);
         List<GlassSideDrawerHelper.SubOption> sortSubs = Arrays.asList(
                 new GlassSideDrawerHelper.SubOption("לפי שם (מספרים ועברית תחילה)", curSort == PrefsManager.SORT_NAME, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_NAME);
+                    PrefsManager.setSortModeForScope(this, sortScope, PrefsManager.SORT_NAME);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי תאריך יצירה", curSort == PrefsManager.SORT_CREATED, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_CREATED);
+                    PrefsManager.setSortModeForScope(this, sortScope, PrefsManager.SORT_CREATED);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי תאריך שינוי", curSort == PrefsManager.SORT_DATE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_DATE);
+                    PrefsManager.setSortModeForScope(this, sortScope, PrefsManager.SORT_DATE);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי גודל", curSort == PrefsManager.SORT_SIZE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_SIZE);
+                    PrefsManager.setSortModeForScope(this, sortScope, PrefsManager.SORT_SIZE);
                     loadFilesForCurrentMode(false);
                 }),
                 new GlassSideDrawerHelper.SubOption("לפי סוג קובץ", curSort == PrefsManager.SORT_TYPE, () -> {
-                    PrefsManager.setSortMode(this, PrefsManager.SORT_TYPE);
+                    PrefsManager.setSortModeForScope(this, sortScope, PrefsManager.SORT_TYPE);
                     loadFilesForCurrentMode(false);
                 })
         );
         items.add(GlassSideDrawerHelper.DrawerItem.expandable(
                 "מיון לפי",
-                currentSortNameHe() + (curAsc ? " • עולה" : " • יורד"),
+                currentSortNameHe(sortScope) + (curAsc ? " • עולה" : " • יורד"),
                 R.drawable.ic_sort,
                 sortSubs,
                 curAsc ? "החלף לסדר יורד" : "החלף לסדר עולה",
                 () -> {
-                    PrefsManager.setSortAscending(this, !curAsc);
+                    PrefsManager.setSortAscendingForScope(this, sortScope, !curAsc);
                     loadFilesForCurrentMode(false);
                 }
         ));
@@ -1175,8 +1176,21 @@ public class FileBrowserActivity extends AppCompatActivity {
         GlassSideDrawerHelper.show(this, btnHamburger, subTitle, items, false);
     }
 
-    private String currentSortNameHe() {
-        int s = PrefsManager.getSortMode(this);
+    private String getCurrentSortScopeKey() {
+        if (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) {
+            if (currentDir != null) {
+                return "dir:" + currentDir.getAbsolutePath();
+            }
+            return "dirmode:" + (currentMode == null ? MODE_INTERNAL : currentMode);
+        }
+        if (selectedCategoryFolder != null) {
+            return "catdir:" + (currentMode == null ? "" : currentMode) + ":" + selectedCategoryFolder.getAbsolutePath();
+        }
+        return "cat:" + (currentMode == null ? "" : currentMode);
+    }
+
+    private String currentSortNameHe(String sortScope) {
+        int s = PrefsManager.getSortModeForScope(this, sortScope);
         if (s == PrefsManager.SORT_SIZE) return "גודל";
         if (s == PrefsManager.SORT_DATE) return "שינוי";
         if (s == PrefsManager.SORT_CREATED) return "יצירה";
@@ -1632,6 +1646,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         final boolean showHidden = PrefsManager.isShowHidden(this);
         final File activeMediaFolder = selectedCategoryFolder;
+        final String activeSortScope = getCurrentSortScopeKey();
         final boolean isIndexedCat = isIndexedCategoryMode();
         final StorageUtils.CategoryIndexSnapshot quickSnap =
                 (!fromUserPullToRefresh && isIndexedCat)
@@ -1729,7 +1744,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                 }
             }
 
-            sortFileList(result);
+            sortFileList(result, activeSortScope);
 
             final String scopeKey = currentMode
                     + "|" + (currentDir != null ? currentDir.getAbsolutePath() : "")
@@ -1830,9 +1845,13 @@ public class FileBrowserActivity extends AppCompatActivity {
     }
 
     private void sortFileList(List<File> list) {
+        sortFileList(list, getCurrentSortScopeKey());
+    }
+
+    private void sortFileList(List<File> list, String sortScope) {
         if (list.size() <= 1) return;
-        final int sortMode = PrefsManager.getSortMode(this);
-        final boolean asc = PrefsManager.isSortAscending(this);
+        final int sortMode = PrefsManager.getSortModeForScope(this, sortScope);
+        final boolean asc = PrefsManager.isSortAscendingForScope(this, sortScope);
 
         // חישוב מטא-דאטה פעם אחת (O(N)) לפני המיון במקום אלפי קריאות מערכת בתוך ה-Comparator
         final Map<File, Boolean> isDirMap = new HashMap<>(list.size());
@@ -1931,6 +1950,7 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (!nq.isEmpty()) {
                 final File scanRoot = isDirectoryMode() ? (currentDir != null ? currentDir : rootBoundary) : null;
                 final boolean showHidden = PrefsManager.isShowHidden(this);
+                final String searchSortScope = getCurrentSortScopeKey();
                 searchExecutor.execute(() -> {
                     FileIndexDatabase idxDb = FileIndexDatabase.getInstance(this);
                     List<File> indexHits = idxDb.search(nq, scanRoot, showHidden, 2000);
@@ -1947,7 +1967,7 @@ public class FileBrowserActivity extends AppCompatActivity {
                         }
                     }
                     if (gen != searchGeneration.get() || deepMatches.isEmpty()) return;
-                    sortFileList(deepMatches);
+                    sortFileList(deepMatches, searchSortScope);
                     rankSearchResultsByName(deepMatches, nq, qTokens);
                     runOnUiThread(() -> {
                         if (gen != searchGeneration.get()) return;

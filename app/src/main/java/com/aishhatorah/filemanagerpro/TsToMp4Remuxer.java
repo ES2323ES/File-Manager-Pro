@@ -173,8 +173,8 @@ public final class TsToMp4Remuxer {
                 delta90k -= (1L << 33);
             }
 
-            // בקפיצה משמעותית אחורה (> 333ms במצב B-frame או > 250ms רגיל) או קדימה (> 4s) מבצעים איחוד רצף
-            long backJumpThreshold = preserveBFrameOrder ? -30_000L : -22_500L;
+            // בקפיצה משמעותית אחורה (> 500ms במצב B-frame או > 250ms רגיל) או קדימה (> 4s) מבצעים איחוד רצף
+            long backJumpThreshold = preserveBFrameOrder ? -45_000L : -22_500L;
             if (delta90k < backJumpThreshold || delta90k > 360_000L) {
                 long expectedOutUs = Math.max(0L, lastOutUs) + defaultStepUs;
                 long rawUsFromOrigin = ((rawPts90k - originRaw90k) * 100L) / 9L;
@@ -450,7 +450,7 @@ public final class TsToMp4Remuxer {
         for (int i = frames.size() - 1; i >= 0; i--) {
             if (frames.get(i).isKeyFrame) return i;
         }
-        return frames.isEmpty() ? -1 : 0;
+        return -1;
     }
 
     // ==================== מפרק טבלאות PAT / PMT / PES ====================
@@ -1112,12 +1112,6 @@ public final class TsToMp4Remuxer {
             }
             lastVideoDtsUs = dts;
 
-            videoWrittenDtsUs.add(dts);
-            videoWrittenPtsUs.add(sample.ptsUs);
-            if (Math.abs(sample.ptsUs - dts) > 500L) {
-                hasNonZeroCtts = true;
-            }
-
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             info.offset = 0;
             info.size = sample.data.length;
@@ -1125,6 +1119,11 @@ public final class TsToMp4Remuxer {
             info.flags = sample.isKeyFrame ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
             try {
                 muxer.writeSampleData(videoTrackIdx, ByteBuffer.wrap(sample.data), info);
+                videoWrittenDtsUs.add(dts);
+                videoWrittenPtsUs.add(sample.ptsUs);
+                if (Math.abs(sample.ptsUs - dts) > 500L) {
+                    hasNonZeroCtts = true;
+                }
             } catch (Throwable ignored) {
             }
         }
@@ -1625,6 +1624,38 @@ public final class TsToMp4Remuxer {
 
         void flush(MediaMuxer muxer, int trackIdx, PtsAllocator ptsAlloc) {
             try {
+                if (decoder != null) {
+                    int decInIdx = decoder.dequeueInputBuffer(5000);
+                    if (decInIdx >= 0) {
+                        decoder.queueInputBuffer(decInIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                    }
+                    MediaCodec.BufferInfo decInfo = new MediaCodec.BufferInfo();
+                    for (int guard = 0; guard < 64; guard++) {
+                        int outIdx = decoder.dequeueOutputBuffer(decInfo, 2000);
+                        if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            MediaFormat fmt = decoder.getOutputFormat();
+                            if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                                decoderChannels = Math.max(1, fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT));
+                            }
+                            if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                                decoderSampleRate = Math.max(8000, fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE));
+                            }
+                            continue;
+                        }
+                        if (outIdx < 0) break;
+                        ByteBuffer pcmBuf = decoder.getOutputBuffer(outIdx);
+                        if (pcmBuf != null && decInfo.size > 0) {
+                            pcmBuf.position(decInfo.offset);
+                            byte[] pcm = new byte[decInfo.size];
+                            pcmBuf.get(pcm);
+                            byte[] stereoPcm = ensureStereoPcm16(pcm, decoderChannels);
+                            feedEncoder(stereoPcm, stereoPcm.length, decInfo.presentationTimeUs, muxer, trackIdx, ptsAlloc);
+                        }
+                        boolean decEos = (decInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+                        decoder.releaseOutputBuffer(outIdx, false);
+                        if (decEos) break;
+                    }
+                }
                 int inIdx = encoder.dequeueInputBuffer(5000);
                 if (inIdx >= 0) {
                     encoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);

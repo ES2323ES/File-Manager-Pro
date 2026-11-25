@@ -59,7 +59,9 @@ public class UpdateChecker {
 
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final Pattern SEMVER_PATTERN = Pattern.compile("(\\d+\\.\\d+\\.\\d+)");
+    private static final Pattern SEMVER_PATTERN = Pattern.compile("\\bv?(\\d+(?:\\.\\d+)+)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern VERSION_CODE_PATTERN = Pattern.compile("VersionCode:\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TAG_NUM_PATTERN = Pattern.compile("^v(\\d+)$", Pattern.CASE_INSENSITIVE);
 
     public static void checkForUpdates(Activity activity, boolean manualTrigger) {
         final String repoSlug = PrefsManager.getGithubRepo(activity);
@@ -136,9 +138,18 @@ public class UpdateChecker {
                 }
 
                 String remoteVersion = extractRemoteSemver(tagName, releaseTitle, body);
-                boolean isNewer = remoteVersion != null && compareSemver(remoteVersion, BuildConfig.VERSION_NAME) > 0;
+                int remoteVersionCode = extractRemoteVersionCode(body);
+                boolean semverNewer = remoteVersion != null && compareSemver(remoteVersion, BuildConfig.VERSION_NAME) > 0;
+                boolean codeNewer = remoteVersionCode > BuildConfig.VERSION_CODE;
+                boolean tagOnlyNewer = false;
+                if (remoteVersion == null && remoteVersionCode <= 0) {
+                    int tagNum = extractTagSequenceNumber(tagName);
+                    tagOnlyNewer = tagNum > BuildConfig.VERSION_CODE;
+                }
+                boolean isNewer = semverNewer || codeNewer || tagOnlyNewer;
                 final String finalApkUrl = apkUrl;
-                final String finalRemoteVer = remoteVersion != null ? remoteVersion : BuildConfig.VERSION_NAME;
+                final String finalRemoteVer = remoteVersion != null ? remoteVersion
+                        : (tagName != null && !tagName.isEmpty() ? tagName : BuildConfig.VERSION_NAME);
                 final List<String> noteLines = extractUpdateBulletLines(body);
 
                 MAIN.post(() -> {
@@ -174,7 +185,7 @@ public class UpdateChecker {
         return ver == null ? "" : ver;
     }
 
-    private static String extractRemoteSemver(String tag, String title, String body) {
+    static String extractRemoteSemver(String tag, String title, String body) {
         String[] sources = {title, tag, body};
         for (String src : sources) {
             if (src == null) continue;
@@ -182,6 +193,30 @@ public class UpdateChecker {
             if (m.find()) return m.group(1);
         }
         return null;
+    }
+
+    static int extractRemoteVersionCode(String body) {
+        if (body == null) return -1;
+        Matcher m = VERSION_CODE_PATTERN.matcher(body);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return -1;
+    }
+
+    private static int extractTagSequenceNumber(String tag) {
+        if (tag == null) return -1;
+        Matcher m = TAG_NUM_PATTERN.matcher(tag.trim());
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return -1;
     }
 
     private static List<String> extractUpdateBulletLines(String rawMarkdown) {
@@ -192,7 +227,7 @@ public class UpdateChecker {
                 String line = raw.trim();
                 if (line.isEmpty() || line.startsWith("#")) continue;
                 if (line.contains("SHA-256") || line.contains("File-Manager-Pro") || line.contains("Source.zip")) continue;
-                if (line.contains("הורדה ישירה") || line.contains("פרטים טכניים") || line.contains("פיתוח והנדסה") || line.contains("מפתח:")) continue;
+                if (line.contains("הורדה ישירה") || line.contains("פרטים טכניים") || line.contains("פיתוח והנדסה") || line.contains("מפתח:") || line.contains("VersionCode:")) continue;
                 line = line.replace("**", "").replace("`", "").trim();
                 if (line.startsWith("• ")) line = line.substring(2).trim();
                 else if (line.startsWith("- ")) line = line.substring(2).trim();

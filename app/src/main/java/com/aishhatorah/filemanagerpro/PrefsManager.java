@@ -366,6 +366,52 @@ public class PrefsManager {
         prefs(context).edit().putBoolean("sort_asc", asc).apply();
     }
 
+    private static String normalizeSortScopeKey(String scopeKey) {
+        return scopeKey == null ? "" : scopeKey.trim();
+    }
+
+    public static int getSortModeForScope(Context context, String scopeKey) {
+        String norm = normalizeSortScopeKey(scopeKey);
+        if (!norm.isEmpty()) {
+            SharedPreferences sp = prefs(context);
+            String key = "sort_mode_scope_" + norm;
+            if (sp.contains(key)) {
+                return sp.getInt(key, SORT_NAME);
+            }
+        }
+        return getSortMode(context);
+    }
+
+    public static void setSortModeForScope(Context context, String scopeKey, int mode) {
+        String norm = normalizeSortScopeKey(scopeKey);
+        if (norm.isEmpty()) {
+            setSortMode(context, mode);
+            return;
+        }
+        prefs(context).edit().putInt("sort_mode_scope_" + norm, mode).apply();
+    }
+
+    public static boolean isSortAscendingForScope(Context context, String scopeKey) {
+        String norm = normalizeSortScopeKey(scopeKey);
+        if (!norm.isEmpty()) {
+            SharedPreferences sp = prefs(context);
+            String key = "sort_asc_scope_" + norm;
+            if (sp.contains(key)) {
+                return sp.getBoolean(key, true);
+            }
+        }
+        return isSortAscending(context);
+    }
+
+    public static void setSortAscendingForScope(Context context, String scopeKey, boolean asc) {
+        String norm = normalizeSortScopeKey(scopeKey);
+        if (norm.isEmpty()) {
+            setSortAscending(context, asc);
+            return;
+        }
+        prefs(context).edit().putBoolean("sort_asc_scope_" + norm, asc).apply();
+    }
+
     public static boolean isUseRecycleBin(Context context) {
         return prefs(context).getBoolean("use_recycle_bin", true);
     }

@@ -2,6 +2,7 @@ package com.aishhatorah.filemanagerpro;
 
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
 import android.media.MediaCodec;
@@ -57,6 +58,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     private int trimStartMs = 0;
     private int trimEndMs = 1000;
     private int rotationDegrees = 0;
+    private int previewVideoWidth = 0;
+    private int previewVideoHeight = 0;
     private boolean muteAudio = false;
     private float previewSpeed = 1.0f;
     private VideoCompressor.QualityPreset selectedPreset = VideoCompressor.QualityPreset.ORIGINAL;
@@ -128,6 +131,11 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         FrameLayout previewBox = new FrameLayout(this);
         previewBox.setBackgroundColor(Color.BLACK);
         textureView = new TextureView(this);
+        textureView.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if ((right - left) != (oldRight - oldLeft) || (bottom - top) != (oldBottom - oldTop)) {
+                updatePreviewTransform();
+            }
+        });
         previewBox.addView(textureView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
         root.addView(previewBox, new LinearLayout.LayoutParams(
@@ -217,7 +225,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
 
         addChip(chipsRow, "סובב כיוון 90°", theme, () -> {
             rotationDegrees = (rotationDegrees + 90) % 360;
-            textureView.setRotation(rotationDegrees);
+            updatePreviewTransform();
             updateSummaryLabel();
         });
 
@@ -331,7 +339,17 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                     previewPlayer.setDataSource(sourceVideo.getAbsolutePath());
                     previewPlayer.setSurface(new Surface(surface));
                     previewPlayer.setLooping(true);
+                    previewPlayer.setOnVideoSizeChangedListener((mp, w, h) -> {
+                        if (w > 0 && h > 0) {
+                            previewVideoWidth = w;
+                            previewVideoHeight = h;
+                            updatePreviewTransform();
+                        }
+                    });
                     previewPlayer.prepare();
+                    previewVideoWidth = previewPlayer.getVideoWidth();
+                    previewVideoHeight = previewPlayer.getVideoHeight();
+                    updatePreviewTransform();
                     durationMs = Math.max(1000, previewPlayer.getDuration());
                     trimStartMs = 0;
                     trimEndMs = durationMs;
@@ -342,13 +360,38 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                     Toast.makeText(ProVideoEditorActivity.this, "שגיאה בטעינת תצוגה מקדימה: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 }
             }
-            @Override public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {}
+            @Override public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                updatePreviewTransform();
+            }
             @Override public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
                 releasePreview();
                 return true;
             }
             @Override public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {}
         });
+    }
+
+    private void updatePreviewTransform() {
+        if (textureView == null) return;
+        int vw = textureView.getWidth();
+        int vh = textureView.getHeight();
+        if (vw <= 0 || vh <= 0 || previewVideoWidth <= 0 || previewVideoHeight <= 0) return;
+
+        float cx = vw * 0.5f;
+        float cy = vh * 0.5f;
+        int rot = ((rotationDegrees % 360) + 360) % 360;
+        float effW = (rot == 90 || rot == 270) ? (float) previewVideoHeight : (float) previewVideoWidth;
+        float effH = (rot == 90 || rot == 270) ? (float) previewVideoWidth : (float) previewVideoHeight;
+        float fitScale = Math.min((float) vw / effW, (float) vh / effH);
+
+        Matrix m = new Matrix();
+        m.setScale((float) previewVideoWidth / (float) vw, (float) previewVideoHeight / (float) vh, cx, cy);
+        if (rot != 0) {
+            m.postRotate(rot, cx, cy);
+        }
+        m.postScale(fitScale, fitScale, cx, cy);
+        textureView.setRotation(0f);
+        textureView.setTransform(m);
     }
 
     private void updateSummaryLabel() {

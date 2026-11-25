@@ -66,6 +66,7 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -218,6 +219,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean exoForcedTsRetry = false;
     private boolean exoRemuxFallbackAttempted = false;
     private boolean isRemuxingMtsPlayback = false;
+    private int mtsRemuxGeneration = 0;
+    private int currentVideoRotationDegrees = 0;
     private int lastObservedVideoPosMs = 0;
     private int unexpectedPosResetCount = 0;
     private long firstPosResetObservedMs = 0L;
@@ -227,6 +230,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean videoUsedFdFallback = false;
     private boolean speedModifiedFromDefault = false;
     private LinearLayout videoFallbackBar = null;
+    private LinearLayout videoRemuxOverlay = null;
     private float videoSpeed = 1.0f;
     private int videoRepeatMode = AudioPlayerManager.REPEAT_OFF;
     private boolean videoShuffleMode = false;
@@ -248,7 +252,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private final Runnable mtsBufferingWatchdog = () -> {
         if (isFinishing() || isDestroyed() || !isVideoMode || exoPlayer == null) return;
         if (!exoRemuxFallbackAttempted && !isRemuxingMtsPlayback && !awaitingInitialVideoPlay
-                && targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                && targetFile != null
+                && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0)
                 && exoPlayer.getPlaybackState() == Player.STATE_BUFFERING
                 && exoPlayer.getPlayWhenReady()) {
             startRemuxedMtsPlayback(targetFile, activeVideoSyncRunnable);
@@ -2675,9 +2681,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
 
         ivVideoPreviewThumb = new ImageView(this);
-        ivVideoPreviewThumb.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        ivVideoPreviewThumb.setScaleType(ImageView.ScaleType.MATRIX);
         ivVideoPreviewThumb.setBackgroundColor(Color.BLACK);
         ivVideoPreviewThumb.setVisibility(View.VISIBLE);
+        ivVideoPreviewThumb.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if ((right - left) != (oldRight - oldLeft) || (bottom - top) != (oldBottom - oldTop)) {
+                updatePreviewThumbTransform();
+            }
+        });
         videoViewport.addView(ivVideoPreviewThumb, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
 
@@ -2754,6 +2765,41 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         fbLp.setMargins(dp(24), 0, dp(24), 0);
         stageRoot.addView(videoFallbackBar, fbLp);
+
+        // חלונית טעינה גלויה בזמן הכנת זרם MTS חלק (מונע לחיצות כפולות ואיפוסים)
+        videoRemuxOverlay = new LinearLayout(this);
+        videoRemuxOverlay.setOrientation(LinearLayout.VERTICAL);
+        videoRemuxOverlay.setGravity(Gravity.CENTER);
+        videoRemuxOverlay.setClickable(true);
+        videoRemuxOverlay.setPadding(dp(20), dp(16), dp(20), dp(16));
+        GradientDrawable remuxBg = new GradientDrawable();
+        remuxBg.setCornerRadius(dp(18));
+        remuxBg.setColor(Color.argb(215, 15, 23, 42));
+        remuxBg.setStroke(dp(1), Color.argb(80, 255, 255, 255));
+        videoRemuxOverlay.setBackground(remuxBg);
+        videoRemuxOverlay.setVisibility(View.GONE);
+
+        ProgressBar remuxProgress = new ProgressBar(this);
+        remuxProgress.setIndeterminate(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            remuxProgress.setIndeterminateTintList(ColorStateList.valueOf(accent));
+        }
+        LinearLayout.LayoutParams rpLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        rpLp.bottomMargin = dp(10);
+        videoRemuxOverlay.addView(remuxProgress, rpLp);
+
+        TextView tvRemuxMsg = new TextView(this);
+        tvRemuxMsg.setText("מכין זרם MTS לצפייה חלקה...");
+        tvRemuxMsg.setTextColor(Color.WHITE);
+        tvRemuxMsg.setTextSize(14f);
+        tvRemuxMsg.setTypeface(Typeface.DEFAULT_BOLD);
+        tvRemuxMsg.setGravity(Gravity.CENTER);
+        videoRemuxOverlay.addView(tvRemuxMsg);
+
+        FrameLayout.LayoutParams remuxLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        remuxLp.setMargins(dp(24), 0, dp(24), 0);
+        stageRoot.addView(videoRemuxOverlay, remuxLp);
 
         // פאנל תחתון נקי וזכוכיתי מעוגל וחלק
         LinearLayout bottomCard = new LinearLayout(this);
@@ -2904,6 +2950,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         activeVideoSyncRunnable = syncVidButtons;
 
         View.OnClickListener playPauseClick = v -> {
+            if (isRemuxingMtsPlayback) return;
             boolean wasAwaiting = awaitingInitialVideoPlay;
             awaitingInitialVideoPlay = false;
             suppressNextVideoAutoPlay = false;
@@ -2923,7 +2970,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             && !isRemuxingMtsPlayback
                             && exoPlayer.getPlaybackState() == Player.STATE_BUFFERING) {
                         uiHandler.removeCallbacks(mtsBufferingWatchdog);
-                        uiHandler.postDelayed(mtsBufferingWatchdog, 4500L);
+                        uiHandler.postDelayed(mtsBufferingWatchdog, 9500L);
                     }
                 }
                 syncVidButtons.run();
@@ -3021,7 +3068,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 if (videoPrepared) {
                     int target = Math.max(0, sb.getProgress());
                     pendingSeekTargetMs = target;
-                    holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
+                    boolean isTs = targetFile != null && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                            || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0);
+                    holdSeekUiUntilMs = System.currentTimeMillis() + (isTs ? 2000L : 900L);
                     tvVidPos.setText(formatClock(target));
                     seekVideoToMs(target);
                 }
@@ -3079,21 +3128,24 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         int pos = getCurrentVideoPositionMs();
                         long now = System.currentTimeMillis();
 
-                        // זיהוי אוטומטי אם זרם MTS גולמי חוזר להתחלה מעצמו בגלל איפוס PTS
+                        // זיהוי אוטומטי אם זרם MTS גולמי חוזר להתחלה מעצמו בגלל איפוס PTS חוזר
                         if (!isUserSeekingVideo && now >= holdSeekUiUntilMs && isVideoPlayingSafely()) {
                             if (pos + 700 < lastObservedVideoPosMs
-                                    && lastObservedVideoPosMs < (dur > 2500 ? dur - 1000 : Integer.MAX_VALUE)
+                                    && lastObservedVideoPosMs >= 3500
+                                    && lastObservedVideoPosMs < (dur > 4500 ? dur - 1500 : Integer.MAX_VALUE)
                                     && videoRepeatMode == AudioPlayerManager.REPEAT_OFF
                                     && targetFile != null
-                                    && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
-                                    && !exoRemuxFallbackAttempted) {
+                                    && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                                    || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0)
+                                    && !exoRemuxFallbackAttempted
+                                    && !isRemuxingMtsPlayback) {
                                 if (firstPosResetObservedMs == 0L || now - firstPosResetObservedMs > 20_000L) {
                                     unexpectedPosResetCount = 1;
                                     firstPosResetObservedMs = now;
                                 } else {
                                     unexpectedPosResetCount++;
                                 }
-                                if (unexpectedPosResetCount >= 2 || dur <= 0 || lastObservedVideoPosMs < 2500) {
+                                if (unexpectedPosResetCount >= 3) {
                                     startRemuxedMtsPlayback(targetFile, syncVidButtons);
                                     uiHandler.postDelayed(this, 250);
                                     return;
@@ -3220,18 +3272,85 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         videoTransY = Math.max(-maxDy, Math.min(maxDy, videoTransY));
     }
 
+    private void updatePreviewThumbTransform() {
+        if (ivVideoPreviewThumb == null) return;
+        Drawable d = ivVideoPreviewThumb.getDrawable();
+        if (d == null) return;
+        int viewW = ivVideoPreviewThumb.getWidth();
+        int viewH = ivVideoPreviewThumb.getHeight();
+        int bmpW = d.getIntrinsicWidth();
+        int bmpH = d.getIntrinsicHeight();
+        if (viewW <= 0 || viewH <= 0 || bmpW <= 0 || bmpH <= 0) return;
+
+        float sar = currentVideoPixelRatio > 0.1f ? currentVideoPixelRatio : 1.0f;
+        float dispW = bmpW * sar;
+        float dispH = bmpH;
+
+        float scaleX;
+        float scaleY;
+        if (videoScaleMode == 2) {
+            scaleX = (float) viewW / (float) bmpW;
+            scaleY = (float) viewH / (float) bmpH;
+        } else if (videoScaleMode == 1) {
+            float cover = Math.max((float) viewW / dispW, (float) viewH / dispH);
+            scaleX = sar * cover;
+            scaleY = cover;
+        } else {
+            float fit = Math.min((float) viewW / dispW, (float) viewH / dispH);
+            scaleX = sar * fit;
+            scaleY = fit;
+        }
+
+        Matrix m = new Matrix();
+        m.setScale(scaleX, scaleY);
+        float scaledW = bmpW * scaleX;
+        float scaledH = bmpH * scaleY;
+        m.postTranslate((viewW - scaledW) * 0.5f, (viewH - scaledH) * 0.5f);
+        ivVideoPreviewThumb.setScaleType(ImageView.ScaleType.MATRIX);
+        ivVideoPreviewThumb.setImageMatrix(m);
+    }
+
     private void updateVideoAspectRatioMatrix() {
+        updatePreviewThumbTransform();
         if (videoTextureView == null) return;
         int viewW = videoTextureView.getWidth();
         int viewH = videoTextureView.getHeight();
         if (viewW <= 0 || viewH <= 0 || currentVideoWidth <= 0 || currentVideoHeight <= 0) return;
 
-        float[] base = computeBaseVideoScale(viewW, viewH);
-        clampVideoTranslation();
-
         Matrix matrix = new Matrix();
-        matrix.setScale(base[0] * videoScale, base[1] * videoScale, viewW * 0.5f, viewH * 0.5f);
-        matrix.postTranslate(videoTransX, videoTransY);
+        if (currentVideoRotationDegrees == 0) {
+            float[] base = computeBaseVideoScale(viewW, viewH);
+            clampVideoTranslation();
+            matrix.setScale(base[0] * videoScale, base[1] * videoScale, viewW * 0.5f, viewH * 0.5f);
+            matrix.postTranslate(videoTransX, videoTransY);
+        } else {
+            float cx = viewW * 0.5f;
+            float cy = viewH * 0.5f;
+            boolean swap = currentVideoRotationDegrees == 90 || currentVideoRotationDegrees == 270;
+            float rawW = (swap ? currentVideoHeight : currentVideoWidth) * Math.max(0.1f, currentVideoPixelRatio);
+            float rawH = swap ? currentVideoWidth : currentVideoHeight;
+            float dispW = swap ? rawH : rawW;
+            float dispH = swap ? rawW : rawH;
+            matrix.setScale(rawW / (float) viewW, rawH / (float) viewH, cx, cy);
+            matrix.postRotate(currentVideoRotationDegrees, cx, cy);
+            float sx;
+            float sy;
+            if (videoScaleMode == 2) {
+                sx = (float) viewW / dispW;
+                sy = (float) viewH / dispH;
+            } else if (videoScaleMode == 1) {
+                float cover = Math.max((float) viewW / dispW, (float) viewH / dispH);
+                sx = cover;
+                sy = cover;
+            } else {
+                float fit = Math.min((float) viewW / dispW, (float) viewH / dispH);
+                sx = fit;
+                sy = fit;
+            }
+            clampVideoTranslation();
+            matrix.postScale(sx * videoScale, sy * videoScale, cx, cy);
+            matrix.postTranslate(videoTransX, videoTransY);
+        }
 
         float[] nextValues = new float[9];
         matrix.getValues(nextValues);
@@ -3342,9 +3461,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         exoForcedTsRetry = false;
         exoRemuxFallbackAttempted = false;
         isRemuxingMtsPlayback = false;
+        mtsRemuxGeneration++;
         speedModifiedFromDefault = false;
         videoUsedFdFallback = false;
         if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.GONE);
+        if (videoRemuxOverlay != null) videoRemuxOverlay.setVisibility(View.GONE);
         if (videoTextureView != null) {
             videoTextureView.setAlpha(0f);
             videoTextureView.setKeepScreenOn(true);
@@ -3429,9 +3550,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     updateVideoAspectRatioMatrix();
                 }
                 if (finalFrame != null && ivVideoPreviewThumb != null && awaitingInitialVideoPlay && !isVideoPlayingSafely()) {
-                    ivVideoPreviewThumb.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    ivVideoPreviewThumb.setScaleType(ImageView.ScaleType.MATRIX);
                     ivVideoPreviewThumb.setImageBitmap(finalFrame);
                     ivVideoPreviewThumb.setVisibility(View.VISIBLE);
+                    updatePreviewThumbTransform();
+                    ivVideoPreviewThumb.post(this::updatePreviewThumbTransform);
                     if (videoTextureView != null) videoTextureView.setAlpha(0f);
                 } else {
                     if (finalFrame != null && !finalFrame.isRecycled()) finalFrame.recycle();
@@ -3515,38 +3638,19 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             evaluateVideoDeviceSilence(false);
             exoPlayer.setVolume(isEffectiveVideoMuted() ? 0f : 1f);
 
-            exoPlayer.addAnalyticsListener(new AnalyticsListener() {
-                @Override
-                public void onDroppedVideoFrames(@NonNull EventTime eventTime, int droppedFrames, long elapsedMs) {
-                    if (!isMpegTs || exoRemuxFallbackAttempted || isRemuxingMtsPlayback) return;
-                    if (isUserSeekingVideo || isHold2xForwardActive || isHold2xRewindActive) return;
-                    long now = System.currentTimeMillis();
-                    if (firstDroppedFrameBurstMs == 0L || now - firstDroppedFrameBurstMs > 3000L) {
-                        firstDroppedFrameBurstMs = now;
-                        droppedVideoFrameBurst = droppedFrames;
-                    } else {
-                        droppedVideoFrameBurst += droppedFrames;
-                    }
-                    if (droppedVideoFrameBurst >= 35) {
-                        droppedVideoFrameBurst = 0;
-                        firstDroppedFrameBurstMs = 0L;
-                        uiHandler.post(() -> {
-                            if (!isFinishing() && !isDestroyed()
-                                    && targetFile != null && targetFile.equals(nextFile)
-                                    && !exoRemuxFallbackAttempted) {
-                                startRemuxedMtsPlayback(nextFile, onReadyUi);
-                            }
-                        });
-                    }
-                }
-            });
-
             exoPlayer.addListener(new Player.Listener() {
                 @Override
                 public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
                     if (videoSize.width > 0 && videoSize.height > 0) {
-                        currentVideoWidth = videoSize.width;
-                        currentVideoHeight = videoSize.height;
+                        int rot = ((videoSize.unappliedRotationDegrees % 360) + 360) % 360;
+                        currentVideoRotationDegrees = rot;
+                        if (rot == 90 || rot == 270) {
+                            currentVideoWidth = videoSize.height;
+                            currentVideoHeight = videoSize.width;
+                        } else {
+                            currentVideoWidth = videoSize.width;
+                            currentVideoHeight = videoSize.height;
+                        }
                         currentVideoPixelRatio = videoSize.pixelWidthHeightRatio > 0f
                                 ? videoSize.pixelWidthHeightRatio : 1.0f;
                         hasAppliedVideoMatrix = false;
@@ -3577,7 +3681,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     if (playbackState == Player.STATE_BUFFERING) {
                         if (isMpegTs && !exoRemuxFallbackAttempted && !isRemuxingMtsPlayback && !awaitingInitialVideoPlay) {
                             uiHandler.removeCallbacks(mtsBufferingWatchdog);
-                            uiHandler.postDelayed(mtsBufferingWatchdog, 4500L);
+                            uiHandler.postDelayed(mtsBufferingWatchdog, 9500L);
                         }
                     } else {
                         uiHandler.removeCallbacks(mtsBufferingWatchdog);
@@ -3657,25 +3761,31 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void startRemuxedMtsPlayback(File originalMtsFile, Runnable onReadyUi) {
+        if (isRemuxingMtsPlayback) return;
         if (exoRemuxFallbackAttempted) {
-            startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
+            if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.VISIBLE);
             return;
         }
         exoRemuxFallbackAttempted = true;
         isRemuxingMtsPlayback = true;
+        final int remuxGen = ++mtsRemuxGeneration;
+        uiHandler.removeCallbacks(mtsBufferingWatchdog);
         releaseVideoPlayer();
-        Toast.makeText(this, "מכין זרם MTS לצפייה חלקה...", Toast.LENGTH_SHORT).show();
+        if (activeVideoCenterOverlay != null) activeVideoCenterOverlay.setVisibility(View.GONE);
+        if (videoRemuxOverlay != null) videoRemuxOverlay.setVisibility(View.VISIBLE);
 
         executor.execute(() -> {
             File cacheMp4 = new File(getCacheDir(), "mts_play_" + System.currentTimeMillis() + ".mp4");
             try {
                 TsToMp4Remuxer.remuxToMp4(originalMtsFile, cacheMp4, 0L, Long.MAX_VALUE, null);
                 uiHandler.post(() -> {
-                    isRemuxingMtsPlayback = false;
-                    if (isFinishing() || isDestroyed() || targetFile == null || !targetFile.equals(originalMtsFile)) {
+                    if (remuxGen != mtsRemuxGeneration || isFinishing() || isDestroyed()
+                            || targetFile == null || !targetFile.equals(originalMtsFile)) {
                         if (cacheMp4.exists()) cacheMp4.delete();
                         return;
                     }
+                    isRemuxingMtsPlayback = false;
+                    if (videoRemuxOverlay != null) videoRemuxOverlay.setVisibility(View.GONE);
                     cleanupActiveRemuxedCache();
                     activeRemuxedCacheFile = cacheMp4;
                     startPlayableMp4InExo(cacheMp4, onReadyUi, originalMtsFile);
@@ -3683,9 +3793,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             } catch (Throwable t) {
                 if (cacheMp4.exists()) cacheMp4.delete();
                 uiHandler.post(() -> {
+                    if (remuxGen != mtsRemuxGeneration) return;
                     isRemuxingMtsPlayback = false;
+                    if (videoRemuxOverlay != null) videoRemuxOverlay.setVisibility(View.GONE);
                     if (!isFinishing() && !isDestroyed() && targetFile != null && targetFile.equals(originalMtsFile)) {
-                        startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
+                        videoPrepared = false;
+                        if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.VISIBLE);
+                        if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
+                        else if (onReadyUi != null) onReadyUi.run();
                     }
                 });
             }
@@ -3718,8 +3833,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 @Override
                 public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
                     if (videoSize.width > 0 && videoSize.height > 0) {
-                        currentVideoWidth = videoSize.width;
-                        currentVideoHeight = videoSize.height;
+                        int rot = ((videoSize.unappliedRotationDegrees % 360) + 360) % 360;
+                        currentVideoRotationDegrees = rot;
+                        if (rot == 90 || rot == 270) {
+                            currentVideoWidth = videoSize.height;
+                            currentVideoHeight = videoSize.width;
+                        } else {
+                            currentVideoWidth = videoSize.width;
+                            currentVideoHeight = videoSize.height;
+                        }
                         currentVideoPixelRatio = videoSize.pixelWidthHeightRatio > 0f ? videoSize.pixelWidthHeightRatio : 1.0f;
                         hasAppliedVideoMatrix = false;
                         updateVideoAspectRatioMatrix();
@@ -3777,7 +3899,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                 @Override
                 public void onPlayerError(@NonNull PlaybackException error) {
-                    startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
+                    videoPrepared = false;
+                    if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.VISIBLE);
+                    if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
+                    else if (onReadyUi != null) onReadyUi.run();
                 }
             });
             exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(mp4File)));
@@ -3788,7 +3913,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 exoPlayer.play();
             }
         } catch (Throwable t) {
-            startLegacyMediaPlayerFallback(originalMtsFile, false, onReadyUi);
+            videoPrepared = false;
+            if (videoFallbackBar != null) videoFallbackBar.setVisibility(View.VISIBLE);
+            if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
+            else if (onReadyUi != null) onReadyUi.run();
         }
     }
 
@@ -4191,14 +4319,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                         ? Math.max(0, Math.min(dur, horizontalSwipeStartPosMs[0] + deltaMs))
                                         : Math.max(0, horizontalSwipeStartPosMs[0] + deltaMs);
                                 horizontalSwipeTargetMs[0] = target;
+                                boolean isTs = targetFile != null && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                                        || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0);
                                 pendingSeekTargetMs = target;
-                                holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
+                                holdSeekUiUntilMs = System.currentTimeMillis() + (isTs ? 2000L : 900L);
                                 if (tvVideoCenterScrubTime != null) {
                                     tvVideoCenterScrubTime.setText(formatClock(target));
                                     tvVideoCenterScrubTime.setVisibility(View.VISIBLE);
                                 }
                                 long now = System.currentTimeMillis();
-                                boolean isTs = targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName());
                                 long minInterval = isTs ? 450L : 220L;
                                 if (now - lastSwipeLiveSeekMs[0] >= minInterval) {
                                     lastSwipeLiveSeekMs[0] = now;
@@ -4281,8 +4410,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                             tvVideoCenterScrubTime.setVisibility(View.GONE);
                         }
                         if (videoPrepared) {
+                            boolean isTs = targetFile != null && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                                    || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0);
                             pendingSeekTargetMs = horizontalSwipeTargetMs[0];
-                            holdSeekUiUntilMs = System.currentTimeMillis() + 900L;
+                            holdSeekUiUntilMs = System.currentTimeMillis() + (isTs ? 2000L : 900L);
                             seekVideoToMs(horizontalSwipeTargetMs[0]);
                         }
                     } else if (swipeMode[0] == 2 || swipeMode[0] == 3) {
@@ -4353,6 +4484,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             videoTextureView.setTranslationX(0f);
             videoTextureView.setTranslationY(0f);
             updateVideoAspectRatioMatrix();
+        } else {
+            updatePreviewThumbTransform();
         }
     }
 
@@ -4824,8 +4957,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                     ? pendingSeekTargetMs
                     : getCurrentVideoPositionMs();
             int next = dur > 0 ? Math.max(0, Math.min(dur, cur + deltaMs)) : Math.max(0, cur + deltaMs);
+            boolean isTs = targetFile != null && (MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName())
+                    || MpegTsNormalizer.detectTsLayoutCached(targetFile).packetStride > 0);
             pendingSeekTargetMs = next;
-            holdSeekUiUntilMs = now + 900L;
+            holdSeekUiUntilMs = now + (isTs ? 2000L : 900L);
             seekVideoToMs(next);
         } catch (Exception ignored) {
         }
@@ -4897,6 +5032,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         currentVideoWidth = 0;
         currentVideoHeight = 0;
         currentVideoPixelRatio = 1.0f;
+        currentVideoRotationDegrees = 0;
         lastObservedVideoPosMs = 0;
         unexpectedPosResetCount = 0;
         if (rewindPulseRunnable != null) uiHandler.removeCallbacks(rewindPulseRunnable);
