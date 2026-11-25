@@ -173,8 +173,8 @@ public final class TsToMp4Remuxer {
                 delta90k -= (1L << 33);
             }
 
-            // בקפיצה משמעותית אחורה (> 500ms במצב B-frame או > 250ms רגיל) או קדימה (> 4s) מבצעים איחוד רצף
-            long backJumpThreshold = preserveBFrameOrder ? -45_000L : -22_500L;
+            // בקפיצה משמעותית אחורה (> 400ms במצב B-frame או > 200ms רגיל) או קדימה (> 4s) מבצעים איחוד רצף
+            long backJumpThreshold = preserveBFrameOrder ? -36_000L : -18_000L;
             if (delta90k < backJumpThreshold || delta90k > 360_000L) {
                 long expectedOutUs = Math.max(0L, lastOutUs) + defaultStepUs;
                 long rawUsFromOrigin = ((rawPts90k - originRaw90k) * 100L) / 9L;
