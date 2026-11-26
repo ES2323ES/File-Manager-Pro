@@ -51,25 +51,25 @@ public final class VlcMtsPlayerHelper {
     private int cachedDurationMs = 0;
     private int lastTimeMs = 0;
 
-    private final IVLCVout.OnNewVideoLayoutListener layoutListener =
-            (vlcVout, width, height, visibleWidth, visibleHeight, sarNum, sarDen) -> {
-                if (released || width <= 0 || height <= 0) return;
-                final int effW = visibleWidth > 0 ? visibleWidth : width;
-                final int effH = visibleHeight > 0 ? visibleHeight : height;
-                final float sar = (sarNum > 0 && sarDen > 0) ? ((float) sarNum / (float) sarDen) : 1.0f;
-                mainHandler.post(() -> {
-                    if (released) return;
-                    if (callback != null) {
-                        callback.onVideoSizeChanged(effW, effH, sar);
-                    }
-                    if (hasVout) {
-                        markFirstFrameRendered();
-                    }
-                });
-            };
+    private final IVLCVout.OnNewVideoLayoutListener layoutListener;
 
     public VlcMtsPlayerHelper(Context context, Callback callback) {
         this.callback = callback;
+        this.layoutListener = (vlcVout, width, height, visibleWidth, visibleHeight, sarNum, sarDen) -> {
+            if (released || width <= 0 || height <= 0) return;
+            final int effW = visibleWidth > 0 ? visibleWidth : width;
+            final int effH = visibleHeight > 0 ? visibleHeight : height;
+            final float sar = (sarNum > 0 && sarDen > 0) ? ((float) sarNum / (float) sarDen) : 1.0f;
+            mainHandler.post(() -> {
+                if (released) return;
+                if (this.callback != null) {
+                    this.callback.onVideoSizeChanged(effW, effH, sar);
+                }
+                if (hasVout) {
+                    markFirstFrameRendered();
+                }
+            });
+        };
         ArrayList<String> options = new ArrayList<>();
         options.add("--file-caching=500");
         options.add("--avcodec-hw=any");
