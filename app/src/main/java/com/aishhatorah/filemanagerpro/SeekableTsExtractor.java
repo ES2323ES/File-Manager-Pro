@@ -52,7 +52,8 @@ public final class SeekableTsExtractor implements Extractor {
     ) {
         DefaultExtractorsFactory baseFactory = new DefaultExtractorsFactory()
                 .setConstantBitrateSeekingEnabled(true)
-                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES)
+                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+                        | DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
                 .setTsExtractorTimestampSearchBytes(TS_SEARCH_BYTES);
 
         if (!prioritizeTs) {

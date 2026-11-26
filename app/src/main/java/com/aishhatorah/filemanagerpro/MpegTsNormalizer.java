@@ -458,6 +458,7 @@ public final class MpegTsNormalizer {
         private long cachedStartPacket = -1L;
         private int cachedPacketCount = 0;
         private long lastRafPhysPos = -1L;
+        private long cumulativeResyncBytes = 0L;
         private boolean closed = false;
 
         public NormalizedTsStreamReader(File file, TsFormatInfo info) throws IOException {
@@ -518,9 +519,13 @@ public final class MpegTsNormalizer {
                 cachedPacketCount = 0;
                 return;
             }
+            // באיפוס לאחור לפני חלון מוסנכרן, מאפסים את היסט התיקון המצטבר כדי שנקרא מחדש בצורה נקייה
+            if (cachedStartPacket >= 0L && startPkt < cachedStartPacket) {
+                cumulativeResyncBytes = 0L;
+            }
             int pktsToRead = (int) Math.min(CACHE_PACKETS, remainingPackets);
             int bytesToRead = (pktsToRead - 1) * info.packetStride + TS_PACKET_SIZE;
-            long physOffset = info.syncOffset + startPkt * (long) info.packetStride;
+            long physOffset = info.syncOffset + cumulativeResyncBytes + startPkt * (long) info.packetStride;
 
             if (lastRafPhysPos != physOffset) {
                 raf.seek(physOffset);
@@ -538,7 +543,7 @@ public final class MpegTsNormalizer {
                 return;
             }
 
-            // התאוששות אוטומטית אם באמצע קובץ מאוחד הוזזו הפאקטים בכמה בתים
+            // התאוששות אוטומטית אם באמצע קובץ מאוחד הוזזו הפאקטים בכמה בתים ושמירת ההיסט להמשך הקריאה
             if (cacheBuf[0] != TS_SYNC_BYTE && readSoFar >= info.packetStride * 3 + TS_PACKET_SIZE) {
                 int resyncShift = -1;
                 int searchMax = Math.min(readSoFar - info.packetStride * 2 - TS_PACKET_SIZE, info.packetStride * 4);
@@ -551,6 +556,7 @@ public final class MpegTsNormalizer {
                     }
                 }
                 if (resyncShift > 0) {
+                    cumulativeResyncBytes += resyncShift;
                     int shiftedLen = readSoFar - resyncShift;
                     System.arraycopy(cacheBuf, resyncShift, cacheBuf, 0, shiftedLen);
                     readSoFar = shiftedLen;
