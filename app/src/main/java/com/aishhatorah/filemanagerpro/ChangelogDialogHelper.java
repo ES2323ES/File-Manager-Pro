@@ -96,6 +96,21 @@ public class ChangelogDialogHelper {
         headerRow.addView(rightTitleGroup, rightLp);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.8 =====================
+        SpannableStringBuilder v38 = new SpannableStringBuilder();
+        appendBullet(v38, "תיקון שורשי לנגינת וידאו MTS/M2TS: ", accent,
+                "מניעת לולאת האיפוסים החוזרת (\"מכין זרם MTS לצפייה חלקה...\"), ייצוב זיהוי Access Units במנוע SeekableTsExtractor, שמירת היסט רציף בקבצים מאוחדים ב-MpegTsNormalizer, והקשחת ממיר ה-MP4 וטבלת ctts ב-TsToMp4Remuxer.", textPrimary);
+        appendBullet(v38, "\n\nתיקון תצוגת מקדימה ומתיחת וידאו: ", accent,
+                "מניעת מריחת הווידאו בתצוגה המקדימה (בנגן ובעורך הווידאו), כיבוד זווית סיבוב (unappliedRotationDegrees) ויחס פיקסלים, והפעלה מיידית של מצבי התאמה/מילוי/מתיחה גם על תצוגת המקדימה.", textPrimary);
+        appendBullet(v38, "\n\nמנגנון עדכונים אוניברסלי: ", accent,
+                "תמיכה מלאה בכל תבנית מספרית של גרסאות (2, 3, 4 חלקים ויותר) כולל זיהוי אוטומטי לפי VersionCode.", textPrimary);
+        appendBullet(v38, "\n\nמיון קבצים עצמאי לכל תיקייה וקטגוריה: ", accent,
+                "שמירת שיטת וכיוון המיון בנפרד לכל תיקייה וקטגוריה מבלי להשפיע על שאר התיקיות והקטגוריות.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.8", "הגירסה הנוכחית • תיקון MTS, תצוגת מקדימה ומיון עצמאי",
+                accent, textPrimary, textSecondary, subtleBg, divider, v38);
+
         // ===================== גירסה 0.3.7.1 =====================
         SpannableStringBuilder v371 = new SpannableStringBuilder();
         appendBullet(v371, "תיקון מלא של נגן האודיו והשמע: ", accent,
@@ -103,8 +118,8 @@ public class ChangelogDialogHelper {
         appendBullet(v371, "\n\nתיקון תקיעות נגינת וידאו MTS/M2TS: ", accent,
                 "החזרת הדגל FLAG_ALLOW_NON_IDR_KEYFRAMES ב-SeekableTsExtractor, תיקון לחיצת הפעלה בזמן הכנת הווידאו והפעלת מנגנון הגיבוי של MTS, ואיזון חוצץ הקריאה וההשמעה לפתיחה ודילוג חלקים.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.3.7.1", "הגירסה הנוכחית • תיקון אודיו ווידאו MTS",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.3.7.1", "תיקון אודיו ווידאו MTS",
                 accent, textPrimary, textSecondary, subtleBg, divider, v371);
 
         // ===================== גירסה 0.3.7 =====================
