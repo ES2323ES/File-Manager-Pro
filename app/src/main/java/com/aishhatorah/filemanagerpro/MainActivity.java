@@ -63,8 +63,6 @@ public class MainActivity extends AppCompatActivity {
     private boolean forceShowAllCategories = false;
     private boolean sdSettingsTabExpanded = false;
     private String expandedUsbPath = null;
-    private String expandedEjectKey = null;
-    private View activeGridEjectRow = null;
 
     private LinearLayout rootContainer;
     private LinearLayout topBar;
@@ -682,22 +680,12 @@ public class MainActivity extends AppCompatActivity {
                 boolean supportsEject = FileBrowserActivity.MODE_USB_OTG.equals(item.id)
                         || FileBrowserActivity.MODE_SD_CARD.equals(item.id);
                 boolean isSdItem = FileBrowserActivity.MODE_SD_CARD.equals(item.id);
-                String ejectKey = supportsEject
-                        ? (item.id + ":" + (item.customDirPath != null ? item.customDirPath : "sd"))
-                        : null;
 
-                LinearLayout cellWrapper = new LinearLayout(this);
-                cellWrapper.setOrientation(LinearLayout.VERTICAL);
-                LinearLayout.LayoutParams cellLp = new LinearLayout.LayoutParams(
-                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                cellLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
-                cellWrapper.setLayoutParams(cellLp);
-
-                CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, cellWrapper, false);
+                CardView tile = (CardView) inflater.inflate(R.layout.item_category_tile, rowLayout, false);
                 ThemeHelper.styleGlassCardView(this, tile, theme, 18f, false);
                 LinearLayout.LayoutParams tileLp = new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, tileHeightPx);
-                tileLp.setMargins(0, 0, 0, 0);
+                        0, tileHeightPx, 1f);
+                tileLp.setMargins(tileMarginPx, tileMarginPx, tileMarginPx, tileMarginPx);
                 tile.setLayoutParams(tileLp);
 
                 ImageView iv = tile.findViewById(R.id.ivTileIcon);
@@ -734,111 +722,29 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 tile.setOnClickListener(v -> onCategoryClicked(item));
-                cellWrapper.addView(tile);
 
                 if (supportsEject) {
-                    String volRootPath = isSdItem
+                    final String volRootPath = isSdItem
                             ? (sd.root != null ? sd.root.getAbsolutePath() : "")
                             : (item.customDirPath != null ? item.customDirPath : "");
-                    CardView ejectCard = new CardView(this);
-                    ThemeHelper.styleGlassCardView(this, ejectCard, theme, 12f, false);
-                    ejectCard.setClickable(true);
-                    ejectCard.setFocusable(true);
-                    LinearLayout.LayoutParams ejLp = new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                    ejLp.topMargin = Math.round(4f * d);
-                    ejectCard.setLayoutParams(ejLp);
-
-                    LinearLayout ejInner = new LinearLayout(this);
-                    ejInner.setOrientation(LinearLayout.HORIZONTAL);
-                    ejInner.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-                    ejInner.setGravity(Gravity.CENTER);
-                    ejInner.setPadding(Math.round(8f * d), Math.round(6f * d), Math.round(8f * d), Math.round(6f * d));
-
-                    ImageView ivEj = new ImageView(this);
-                    ivEj.setImageResource(R.drawable.ic_eject);
-                    ivEj.setColorFilter(0xFFEF4444);
-                    LinearLayout.LayoutParams ivEjLp = new LinearLayout.LayoutParams(
-                            Math.round(15f * d), Math.round(15f * d));
-                    ivEjLp.setMarginEnd(Math.round(5f * d));
-                    ejInner.addView(ivEj, ivEjLp);
-
-                    TextView tvEj = new TextView(this);
-                    tvEj.setText("הוצאה");
-                    tvEj.setTextColor(0xFFEF4444);
-                    tvEj.setTypeface(Typeface.DEFAULT_BOLD);
-                    tvEj.setTextSize(ThemeHelper.spScaled(this, 12f));
-                    ejInner.addView(tvEj);
-
-                    ejectCard.addView(ejInner);
-                    boolean isExpanded = ejectKey != null && ejectKey.equals(expandedEjectKey);
-                    ejectCard.setVisibility(isExpanded ? View.VISIBLE : View.GONE);
-                    if (isExpanded) activeGridEjectRow = ejectCard;
-
-                    ejectCard.setOnClickListener(v -> {
-                        expandedEjectKey = null;
-                        ejectCard.setVisibility(View.GONE);
-                        performSafeEjectAction(volRootPath, isSdItem);
-                    });
-
+                    final String volSub = getCategorySubtitle(item.id, item.customDirPath);
                     tile.setOnLongClickListener(v -> {
                         v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-                        if (activeGridEjectRow != null && activeGridEjectRow != ejectCard) {
-                            activeGridEjectRow.setVisibility(View.GONE);
-                        }
-                        if (ejectCard.getVisibility() == View.VISIBLE) {
-                            ejectCard.setVisibility(View.GONE);
-                            expandedEjectKey = null;
-                            activeGridEjectRow = null;
-                        } else {
-                            ejectCard.setVisibility(View.VISIBLE);
-                            expandedEjectKey = ejectKey;
-                            activeGridEjectRow = ejectCard;
-                        }
+                        List<GlassAnchoredPopoverHelper.OptionItem> opts = new ArrayList<>();
+                        opts.add(GlassAnchoredPopoverHelper.OptionItem.of(
+                                "פתח קבצים", R.drawable.ic_folder, () -> onCategoryClicked(item)));
+                        opts.add(GlassAnchoredPopoverHelper.OptionItem.destructive(
+                                "הוצאה בטוחה", R.drawable.ic_eject, true,
+                                () -> performSafeEjectAction(volRootPath, isSdItem)));
+                        GlassAnchoredPopoverHelper.showMenu(this, tile, item.titleHe, volSub, opts, false);
                         return true;
                     });
-                    cellWrapper.addView(ejectCard);
                 }
 
-                rowLayout.addView(cellWrapper);
+                rowLayout.addView(tile);
             }
             gridRowsContainer.addView(rowLayout);
         }
-    }
-
-    private LinearLayout buildInlineEjectBar(int theme, int accent, String rootPath, boolean isSdCard) {
-        float d = getResources().getDisplayMetrics().density;
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        bar.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        bar.setPadding(Math.round(10f * d), Math.round(7f * d), Math.round(10f * d), Math.round(7f * d));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = Math.round(6f * d);
-        bar.setLayoutParams(lp);
-        bar.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 12f, false, false));
-
-        ImageView iv = new ImageView(this);
-        iv.setImageResource(R.drawable.ic_eject);
-        iv.setColorFilter(0xFFEF4444);
-        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(
-                Math.round(16f * d), Math.round(16f * d));
-        ivLp.setMarginEnd(Math.round(6f * d));
-        bar.addView(iv, ivLp);
-
-        TextView tv = new TextView(this);
-        tv.setText("הוצאה");
-        tv.setTextColor(0xFFEF4444);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setTextSize(ThemeHelper.spScaled(this, 12.5f));
-        bar.addView(tv);
-
-        bar.setOnClickListener(v -> {
-            bar.setVisibility(View.GONE);
-            performSafeEjectAction(rootPath, isSdCard);
-        });
-        return bar;
     }
 
     private void performSafeEjectAction(String rootPath, boolean isSdCard) {

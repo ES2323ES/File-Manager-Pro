@@ -1,11 +1,7 @@
 package com.aishhatorah.filemanagerpro;
 
-import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
@@ -31,12 +27,9 @@ import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.ViewGroup;
-import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -44,9 +37,6 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -62,6 +52,10 @@ import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
+import com.aishhatorah.filemanagerpro.browser.AppBackupHelper;
+import com.aishhatorah.filemanagerpro.browser.FolderSizeHelper;
+import com.aishhatorah.filemanagerpro.browser.MultiSelectSheetHelper;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -85,9 +79,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * סעיפים 2, 3, 4, 5, 7, 14, 15, 16, 18, 26, 28, 31, 32, 34, 38, 40, 43:
  * סייר קבצים מתקדם עם תפריט המבורגר מרכזי, Breadcrumbs אינטראקטיביים, בחירה מרובה,
- * דחיסה רב-פורמטית (+סיסמה), שינוי שם אצווה, שיתוף מרובה, ניהול אפליקציות מותקנות,
+ * דחיסה רב-פורמטית (+סיסמה), שינוי שם אצווה, שיתוף מרובה, גיבוי אפליקציות מפוצלות (.apks),
  * מצב קבצים חדשים עם ניקוי, פתיחה באמצעות, ושחזור גיבויי .bak.
  */
 public class FileBrowserActivity extends AppCompatActivity {
@@ -114,26 +107,15 @@ public class FileBrowserActivity extends AppCompatActivity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService searchExecutor = Executors.newSingleThreadExecutor();
-    private final ExecutorService dirCountExecutor = Executors.newFixedThreadPool(2);
+    private final FolderSizeHelper folderSizeHelper = new FolderSizeHelper();
     private final AtomicInteger searchGeneration = new AtomicInteger(0);
     private final AtomicInteger loadGeneration = new AtomicInteger(0);
-    private final AtomicInteger dirCountGeneration = new AtomicInteger(0);
     private final List<File> allLoadedFiles = new ArrayList<>();
     private final List<File> displayedFiles = new ArrayList<>();
     private final Set<String> selectedPaths = new HashSet<>();
 
-    // סעיף 15: לשונית אפליקציות מותקנות
-    private static class InstalledAppEntry {
-        String appName;
-        String packageName;
-        String versionName;
-        long sizeBytes;
-        File sourceApk;
-        boolean isSystem;
-    }
-
-    private final List<InstalledAppEntry> allInstalledApps = new ArrayList<>();
-    private final List<InstalledAppEntry> displayedInstalledApps = new ArrayList<>();
+    private final List<AppBackupHelper.InstalledAppEntry> allInstalledApps = new ArrayList<>();
+    private final List<AppBackupHelper.InstalledAppEntry> displayedInstalledApps = new ArrayList<>();
     private boolean showingInstalledAppsTab = false;
     private boolean includeSystemApps = false;
 
@@ -144,13 +126,23 @@ public class FileBrowserActivity extends AppCompatActivity {
     private File selectedCategoryFolder = null;
     private final Map<String, Integer> categoryFolderCounts = new ConcurrentHashMap<>();
     private final Map<String, File> categoryFolderFirstFile = new ConcurrentHashMap<>();
-    private final Map<String, Integer> dirItemCountCache = new ConcurrentHashMap<>();
-    private final Set<String> pendingDirCountPaths = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> cachedSizesByPath = new ConcurrentHashMap<>();
     private final Map<String, Long> cachedModifiedByPath = new ConcurrentHashMap<>();
     private String lastLoadedScopeKey = null;
     private Boolean appliedGridLayout = null;
     private int appliedSpanCount = -1;
+
+    private int snapTheme = -1;
+    private int snapCustomAccent = 0;
+    private float snapUiScale = 1.0f;
+    private String snapWallpaper = "";
+    private int snapWallpaperBlur = 0;
+    private boolean snapShowHidden = false;
+    private boolean snapShowThumbnails = true;
+    private boolean snapShowFolderThumbnails = false;
+    private boolean snapShowFolderSizes = false;
+    private int snapGlobalSortMode = PrefsManager.SORT_NAME;
+    private boolean snapGlobalSortAsc = true;
 
     private boolean multiSelectMode = false;
     private boolean searchBarOpen = false;
@@ -174,10 +166,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     private LinearLayout clipboardBar;
     private TextView tvClipboardStatus;
     private LinearLayout multiSelectBar;
-    private ScrollView multiSelectScroll;
-    private boolean multiSheetExpanded = false;
-    private ValueAnimator multiSheetAnimator = null;
-    private ValueAnimator multiSheetPeekAnimator = null;
+    private MultiSelectSheetHelper multiSelectSheetHelper;
     private SwipeRefreshLayout swipeRefresh;
     private RecyclerView recyclerView;
     private ProgressBar loadingSpinner;
@@ -219,6 +208,7 @@ public class FileBrowserActivity extends AppCompatActivity {
         baseCategoryTitle = title;
 
         theme = PrefsManager.getThemeMode(this);
+        captureSettingsSnapshot();
         ThemeHelper.applyWindowStatusBar(this, theme);
         bgColor = ThemeHelper.getBgColor(this, theme);
         cardColor = ThemeHelper.getCardColor(this, theme);
@@ -672,7 +662,17 @@ public class FileBrowserActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // סרגל בחירה מרובה תחתון (סעיף 5, 43)
-        multiSelectBar = buildMultiSelectBar();
+        multiSelectSheetHelper = new MultiSelectSheetHelper(
+                this, theme, cardColor, textPrimary, textSecondary, accent,
+                new MultiSelectSheetHelper.ActionsListener() {
+                    @Override public void onCopy() { multiCopy(false); }
+                    @Override public void onMove() { multiCopy(true); }
+                    @Override public void onShare() { multiShare(); }
+                    @Override public void onCompress() { promptMultiFormatCompress(getSelectedFilesList()); }
+                    @Override public void onBatchRename() { promptBatchRename(getSelectedFilesList()); }
+                    @Override public void onDelete() { multiDelete(); }
+                });
+        multiSelectBar = multiSelectSheetHelper.createSheet();
         multiSelectBar.setVisibility(View.GONE);
         root.addView(multiSelectBar);
 
@@ -802,312 +802,6 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
     }
 
-    private LinearLayout buildMultiSelectBar() {
-        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
-        final int collapsedHeight = dp(100);
-        final int expandedHeight = dp(178);
-        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
-
-        final FrameLayout handleWrap = new FrameLayout(this);
-        handleWrap.setPadding(0, dp(2), 0, dp(8));
-        View dragPill = new View(this);
-        GradientDrawable pillBg = new GradientDrawable();
-        pillBg.setCornerRadius(dp(3));
-        pillBg.setColor(ColorUtils.setAlphaComponent(textSecondary, 110));
-        dragPill.setBackground(pillBg);
-        handleWrap.addView(dragPill, new FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER));
-
-        LinearLayout sheet = new LinearLayout(this) {
-            private float dragStartRawY;
-            private float dragStartX;
-            private int dragStartHeight;
-            private boolean isDraggingSheet = false;
-            private boolean startedOnHandle = false;
-
-            private void initDown(MotionEvent ev) {
-                dragStartRawY = ev.getRawY();
-                dragStartX = ev.getRawX();
-                if (multiSelectScroll != null && multiSelectScroll.getLayoutParams() != null) {
-                    dragStartHeight = multiSelectScroll.getHeight() > 0
-                            ? multiSelectScroll.getHeight()
-                            : multiSelectScroll.getLayoutParams().height;
-                } else {
-                    dragStartHeight = collapsedHeight;
-                }
-                isDraggingSheet = false;
-                startedOnHandle = ev.getY() <= handleWrap.getBottom() + dp(6);
-            }
-
-            private boolean shouldStartSheetDrag(float dx, float dy) {
-                if (Math.abs(dy) <= touchSlop || Math.abs(dy) < Math.abs(dx) * 0.75f) {
-                    return false;
-                }
-                if (startedOnHandle) return true;
-                if (!multiSheetExpanded && dy < 0f) return true;
-                return multiSheetExpanded && dy > 0f
-                        && (multiSelectScroll == null || multiSelectScroll.getScrollY() <= 0);
-            }
-
-            private void beginSheetDrag(MotionEvent ev) {
-                isDraggingSheet = true;
-                cancelMultiSheetAnimators();
-                if (multiSelectScroll != null && multiSelectScroll.getLayoutParams() != null) {
-                    dragStartHeight = multiSelectScroll.getHeight() > 0
-                            ? multiSelectScroll.getHeight()
-                            : multiSelectScroll.getLayoutParams().height;
-                }
-                dragStartRawY = ev.getRawY();
-                if (getParent() != null) {
-                    getParent().requestDisallowInterceptTouchEvent(true);
-                }
-            }
-
-            private void updateSheetDrag(float currentRawY) {
-                if (multiSelectScroll == null) return;
-                ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-                if (lp == null) return;
-                float dy = currentRawY - dragStartRawY;
-                int newH = Math.max(collapsedHeight, Math.min(expandedHeight, Math.round(dragStartHeight - dy)));
-                if (lp.height != newH) {
-                    lp.height = newH;
-                    multiSelectScroll.setLayoutParams(lp);
-                }
-                if (multiSelectScroll.getScrollY() != 0) {
-                    multiSelectScroll.scrollTo(0, 0);
-                }
-            }
-
-            private void finishSheetDrag(float totalDy) {
-                isDraggingSheet = false;
-                if (multiSelectScroll == null || multiSelectScroll.getLayoutParams() == null) return;
-                int curH = multiSelectScroll.getLayoutParams().height;
-                boolean expand;
-                if (totalDy < -dp(20)) {
-                    expand = true;
-                } else if (totalDy > dp(20)) {
-                    expand = false;
-                } else {
-                    expand = curH >= (collapsedHeight + expandedHeight) / 2;
-                }
-                setMultiSheetExpanded(expand);
-            }
-
-            @Override
-            public boolean onInterceptTouchEvent(MotionEvent ev) {
-                int action = ev.getActionMasked();
-                if (action == MotionEvent.ACTION_DOWN) {
-                    initDown(ev);
-                    return false;
-                }
-                if (action == MotionEvent.ACTION_MOVE) {
-                    if (!isDraggingSheet) {
-                        float dx = ev.getRawX() - dragStartX;
-                        float dy = ev.getRawY() - dragStartRawY;
-                        if (shouldStartSheetDrag(dx, dy)) {
-                            beginSheetDrag(ev);
-                            return true;
-                        }
-                    }
-                    return isDraggingSheet;
-                }
-                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    if (isDraggingSheet) {
-                        finishSheetDrag(ev.getRawY() - dragStartRawY);
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            @Override
-            public boolean onTouchEvent(MotionEvent ev) {
-                int action = ev.getActionMasked();
-                if (action == MotionEvent.ACTION_DOWN) {
-                    initDown(ev);
-                    return true;
-                }
-                if (action == MotionEvent.ACTION_MOVE) {
-                    if (!isDraggingSheet) {
-                        float dx = ev.getRawX() - dragStartX;
-                        float dy = ev.getRawY() - dragStartRawY;
-                        if (shouldStartSheetDrag(dx, dy)) {
-                            beginSheetDrag(ev);
-                        }
-                    }
-                    if (isDraggingSheet) {
-                        updateSheetDrag(ev.getRawY());
-                    }
-                    return true;
-                }
-                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    if (isDraggingSheet) {
-                        finishSheetDrag(ev.getRawY() - dragStartRawY);
-                    } else if (action == MotionEvent.ACTION_UP && startedOnHandle) {
-                        toggleMultiSheetExpanded();
-                    }
-                    return true;
-                }
-                return super.onTouchEvent(ev);
-            }
-        };
-        sheet.setOrientation(LinearLayout.VERTICAL);
-        sheet.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        float topCorner = dp(24);
-        GradientDrawable sheetBg = new GradientDrawable();
-        sheetBg.setCornerRadii(new float[]{topCorner, topCorner, topCorner, topCorner, 0f, 0f, 0f, 0f});
-        int surfaceTint = ColorUtils.blendARGB(ThemeHelper.getTopBarColor(this, theme), accent, isDark ? 0.08f : 0.05f);
-        sheetBg.setColor(ColorUtils.setAlphaComponent(surfaceTint, isDark ? 242 : 246));
-        sheetBg.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(accent, 95));
-        sheet.setBackground(sheetBg);
-        sheet.setElevation(dp(12));
-        sheet.setPadding(dp(12), dp(8), dp(12), dp(12));
-
-        // ידית עליונה קטנה כמו בסרגל התחתון של Gemini — לחיצה או החלקה למעלה/למטה מרחיבה ומצמצמת
-        handleWrap.setOnClickListener(v -> toggleMultiSheetExpanded());
-        sheet.addView(handleWrap, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        multiSelectScroll = new ScrollView(this);
-        multiSelectScroll.setVerticalScrollBarEnabled(false);
-        multiSelectScroll.setOverScrollMode(View.OVER_SCROLL_ALWAYS);
-
-        LinearLayout rowsHolder = new LinearLayout(this);
-        rowsHolder.setOrientation(LinearLayout.VERTICAL);
-        rowsHolder.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        // שורה 1: 3 כרטיסיות שוות
-        LinearLayout row1 = new LinearLayout(this);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        row1.setWeightSum(3f);
-        row1.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        row1.addView(createGeminiMultiCard("העתק", R.drawable.ic_copy, accent, v -> multiCopy(false)));
-        row1.addView(createGeminiMultiCard("העבר", R.drawable.ic_cut, accent, v -> multiCopy(true)));
-        row1.addView(createGeminiMultiCard("שתף", R.drawable.ic_share, accent, v -> multiShare()));
-        rowsHolder.addView(row1, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        // שורה 2: 3 כרטיסיות שוות
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.setWeightSum(3f);
-        row2.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        row2.addView(createGeminiMultiCard("דחיסה", R.drawable.ic_compress_chip, accent,
-                v -> promptMultiFormatCompress(getSelectedFilesList())));
-        row2.addView(createGeminiMultiCard("שינוי שם", R.drawable.ic_edit_pencil, accent,
-                v -> promptBatchRename(getSelectedFilesList())));
-        row2.addView(createGeminiMultiCard("מחק", R.drawable.ic_delete, Color.parseColor("#EF4444"),
-                v -> multiDelete()));
-        LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        r2Lp.topMargin = dp(8);
-        rowsHolder.addView(row2, r2Lp);
-
-        multiSelectScroll.addView(rowsHolder, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        // גובה קומפקטי שמציג שורה ראשונה + הצצה רכה של השורה השנייה, ונגלל/מתרחב בהחלקה
-        sheet.addView(multiSelectScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, collapsedHeight));
-        return sheet;
-    }
-
-    private LinearLayout createGeminiMultiCard(String label, int iconRes, int iconTint, View.OnClickListener l) {
-        boolean isDark = ThemeHelper.isDarkSurface(this, theme);
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER);
-        card.setPadding(dp(6), dp(12), dp(6), dp(12));
-
-        GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(16));
-        gd.setColor(ColorUtils.setAlphaComponent(cardColor, isDark ? 210 : 230));
-        gd.setStroke(Math.max(1, dp(1)), ColorUtils.setAlphaComponent(iconTint, 70));
-        card.setBackground(gd);
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(82), 1f);
-        lp.setMarginStart(dp(4));
-        lp.setMarginEnd(dp(4));
-        card.setLayoutParams(lp);
-
-        FrameLayout iconBadge = new FrameLayout(this);
-        GradientDrawable badgeBg = new GradientDrawable();
-        badgeBg.setShape(GradientDrawable.OVAL);
-        badgeBg.setColor(ColorUtils.setAlphaComponent(iconTint, isDark ? 36 : 26));
-        iconBadge.setBackground(badgeBg);
-
-        ImageView iv = new ImageView(this);
-        iv.setImageResource(iconRes);
-        iv.setColorFilter(iconTint);
-        FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER);
-        iconBadge.addView(iv, ivLp);
-        card.addView(iconBadge, new LinearLayout.LayoutParams(dp(36), dp(36)));
-
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextColor(textPrimary);
-        tv.setTextSize(12f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setGravity(Gravity.CENTER);
-        tv.setMaxLines(1);
-        tv.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tvLp.topMargin = dp(6);
-        card.addView(tv, tvLp);
-
-        card.setOnClickListener(l);
-        return card;
-    }
-
-    private void cancelMultiSheetAnimators() {
-        if (multiSheetAnimator != null) {
-            multiSheetAnimator.cancel();
-            multiSheetAnimator = null;
-        }
-        if (multiSheetPeekAnimator != null) {
-            multiSheetPeekAnimator.cancel();
-            multiSheetPeekAnimator = null;
-        }
-    }
-
-    private void toggleMultiSheetExpanded() {
-        setMultiSheetExpanded(!multiSheetExpanded);
-    }
-
-    private void setMultiSheetExpanded(boolean expand) {
-        if (multiSelectScroll == null) return;
-        cancelMultiSheetAnimators();
-        multiSheetExpanded = expand;
-        int targetH = dp(multiSheetExpanded ? 178 : 100);
-        ViewGroup.LayoutParams curLp = multiSelectScroll.getLayoutParams();
-        int startH = multiSelectScroll.getHeight() > 0
-                ? multiSelectScroll.getHeight()
-                : (curLp != null ? curLp.height : targetH);
-        if (PrefsManager.isReduceAnimations(this) || startH == targetH) {
-            if (curLp != null) {
-                curLp.height = targetH;
-                multiSelectScroll.setLayoutParams(curLp);
-            }
-            if (!multiSheetExpanded) multiSelectScroll.scrollTo(0, 0);
-            return;
-        }
-        ValueAnimator va = ValueAnimator.ofInt(startH, targetH);
-        va.setDuration(220L);
-        va.setInterpolator(new DecelerateInterpolator());
-        va.addUpdateListener(anim -> {
-            if (multiSelectScroll == null) return;
-            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-            if (lp != null) {
-                lp.height = (int) anim.getAnimatedValue();
-                multiSelectScroll.setLayoutParams(lp);
-            }
-        });
-        multiSheetAnimator = va;
-        va.start();
-        if (!multiSheetExpanded) {
-            multiSelectScroll.smoothScrollTo(0, 0);
-        }
-    }
-
     private List<File> getSelectedFilesList() {
         List<File> out = new ArrayList<>();
         for (File f : displayedFiles) {
@@ -1121,79 +815,19 @@ public class FileBrowserActivity extends AppCompatActivity {
         if (!wasActive && tvHeaderTitle != null && tvHeaderTitle.getText() != null) {
             normalTitleSnapshot = tvHeaderTitle.getText().toString();
         }
-        cancelMultiSheetAnimators();
         multiSelectMode = true;
         selectedPaths.clear();
         if (initial != null) selectedPaths.add(initial.getAbsolutePath());
-        multiSheetExpanded = false;
-        if (multiSelectScroll != null) {
-            ViewGroup.LayoutParams lp = multiSelectScroll.getLayoutParams();
-            lp.height = dp(100);
-            multiSelectScroll.setLayoutParams(lp);
-            multiSelectScroll.scrollTo(0, 0);
-        }
         updateMultiSelectUi();
-        if (!wasActive) {
-            playMultiSelectSheetEntranceAndPeek();
+        if (!wasActive && multiSelectSheetHelper != null) {
+            multiSelectSheetHelper.resetCollapsedAndAnimateEntrance(() -> multiSelectMode);
         }
-    }
-
-    private void playMultiSelectSheetEntranceAndPeek() {
-        if (multiSelectBar == null || multiSelectScroll == null) return;
-        if (PrefsManager.isReduceAnimations(this)) {
-            multiSelectBar.setTranslationY(0f);
-            multiSelectBar.setAlpha(1f);
-            multiSelectScroll.scrollTo(0, 0);
-            return;
-        }
-        multiSelectBar.setTranslationY(dp(115));
-        multiSelectBar.setAlpha(0f);
-        multiSelectBar.animate()
-                .translationY(0f)
-                .alpha(1f)
-                .setDuration(230L)
-                .setInterpolator(new DecelerateInterpolator())
-                .withEndAction(() -> {
-                    if (!multiSelectMode || multiSelectScroll == null || multiSheetExpanded) return;
-                    // קפיצה עדינה כלפי מטה וחזרה למעלה כדי להמחיש שקיימת שורה שנייה מתחת
-                    int peekTarget = dp(58);
-                    ValueAnimator down = ValueAnimator.ofInt(0, peekTarget);
-                    down.setDuration(220L);
-                    down.setInterpolator(new DecelerateInterpolator());
-                    down.addUpdateListener(a -> {
-                        if (multiSelectScroll != null) {
-                            multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue());
-                        }
-                    });
-                    down.addListener(new android.animation.AnimatorListenerAdapter() {
-                        private boolean canceled = false;
-
-                        @Override
-                        public void onAnimationCancel(android.animation.Animator animation) {
-                            canceled = true;
-                        }
-
-                        @Override
-                        public void onAnimationEnd(android.animation.Animator animation) {
-                            if (canceled || multiSelectScroll == null || !multiSelectMode || multiSheetExpanded) return;
-                            ValueAnimator back = ValueAnimator.ofInt(peekTarget, 0);
-                            back.setDuration(260L);
-                            back.setStartDelay(90L);
-                            back.setInterpolator(new DecelerateInterpolator());
-                            back.addUpdateListener(a -> multiSelectScroll.scrollTo(0, (int) a.getAnimatedValue()));
-                            back.start();
-                        }
-                    });
-                    down.start();
-                })
-                .start();
     }
 
     private void exitMultiSelectMode() {
         if (!multiSelectMode) return;
-        cancelMultiSheetAnimators();
-        if (multiSelectBar != null) {
-            multiSelectBar.animate().cancel();
+        if (multiSelectSheetHelper != null) {
+            multiSelectSheetHelper.cancelAnimators();
         }
         multiSelectMode = false;
         selectedPaths.clear();
@@ -1552,15 +1186,77 @@ public class FileBrowserActivity extends AppCompatActivity {
         }
     }
 
+    private void captureSettingsSnapshot() {
+        snapTheme = PrefsManager.getThemeMode(this);
+        snapCustomAccent = PrefsManager.getCustomAccentColor(this);
+        snapUiScale = PrefsManager.getUiScale(this);
+        snapWallpaper = PrefsManager.getHomeWallpaperPath(this);
+        snapWallpaperBlur = PrefsManager.getWallpaperBlurRadius(this);
+        snapShowHidden = PrefsManager.isShowHidden(this);
+        snapShowThumbnails = PrefsManager.isShowThumbnails(this);
+        snapShowFolderThumbnails = PrefsManager.isShowFolderThumbnails(this);
+        snapShowFolderSizes = PrefsManager.isShowFolderSizes(this);
+        snapGlobalSortMode = PrefsManager.getSortMode(this);
+        snapGlobalSortAsc = PrefsManager.isSortAscending(this);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         if (miniAudioListener != null) miniAudioListener.onPlaybackStateChanged();
+
+        int newTheme = PrefsManager.getThemeMode(this);
+        int newAccent = PrefsManager.getCustomAccentColor(this);
+        float newScale = PrefsManager.getUiScale(this);
+        String newWall = PrefsManager.getHomeWallpaperPath(this);
+        int newBlur = PrefsManager.getWallpaperBlurRadius(this);
+        if (newTheme != snapTheme
+                || newAccent != snapCustomAccent
+                || Math.abs(newScale - snapUiScale) > 0.005f
+                || !TextUtils.equals(newWall, snapWallpaper)
+                || newBlur != snapWallpaperBlur) {
+            ThemeHelper.invalidateSystemPaletteCache();
+            recreate();
+            return;
+        }
+
+        boolean newShowHidden = PrefsManager.isShowHidden(this);
+        boolean newShowThumbnails = PrefsManager.isShowThumbnails(this);
+        boolean newShowFolderThumbs = PrefsManager.isShowFolderThumbnails(this);
+        boolean newShowFolderSizes = PrefsManager.isShowFolderSizes(this);
+        int newSortMode = PrefsManager.getSortMode(this);
+        boolean newSortAsc = PrefsManager.isSortAscending(this);
+
+        boolean hiddenChanged = newShowHidden != snapShowHidden;
+        boolean folderSizeChanged = newShowFolderSizes != snapShowFolderSizes;
+        boolean thumbChanged = newShowThumbnails != snapShowThumbnails
+                || newShowFolderThumbs != snapShowFolderThumbnails;
+        boolean sortChanged = newSortMode != snapGlobalSortMode || newSortAsc != snapGlobalSortAsc;
+
+        captureSettingsSnapshot();
+
         if (recyclerView != null && !showingInstalledAppsTab) {
-            applyFolderLayoutMode();
-            if (allLoadedFiles.isEmpty() || FileScanCache.isDirty()) {
+            boolean layoutChanged = applyFolderLayoutMode();
+            if (hiddenChanged || allLoadedFiles.isEmpty() || FileScanCache.isDirty()) {
+                folderSizeHelper.clear();
                 loadFilesForCurrentMode(false);
+            } else if (sortChanged) {
+                executor.execute(() -> {
+                    List<File> resort = new ArrayList<>(allLoadedFiles);
+                    sortFileList(resort);
+                    runOnUiThread(() -> {
+                        allLoadedFiles.clear();
+                        allLoadedFiles.addAll(resort);
+                        filterCurrentList(etSearch.getText().toString());
+                    });
+                });
+            } else if (layoutChanged || thumbChanged || folderSizeChanged) {
+                if (folderSizeChanged) {
+                    folderSizeHelper.clear();
+                }
+                adapter.notifyDataSetChanged();
             }
+            recyclerView.post(this::syncRightFastScrollerFromRecycler);
         }
     }
 
@@ -1573,13 +1269,14 @@ public class FileBrowserActivity extends AppCompatActivity {
         return 3;
     }
 
-    private void applyFolderLayoutMode() {
+    private boolean applyFolderLayoutMode() {
         boolean wantGrid = PrefsManager.isGridLayoutForMode(this, currentMode);
         int wantSpan = wantGrid ? computeResponsiveGridColumns() : 1;
         if (appliedGridLayout != null && appliedGridLayout == wantGrid && appliedSpanCount == wantSpan
                 && recyclerView.getLayoutManager() != null) {
-            return;
+            return false;
         }
+        boolean viewTypeChanged = appliedGridLayout == null || appliedGridLayout != wantGrid;
         appliedGridLayout = wantGrid;
         appliedSpanCount = wantSpan;
         if (wantGrid) {
@@ -1587,6 +1284,10 @@ public class FileBrowserActivity extends AppCompatActivity {
         } else {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));
         }
+        if (viewTypeChanged && adapter != null && !showingInstalledAppsTab) {
+            recyclerView.setAdapter(adapter);
+        }
+        return true;
     }
 
     private boolean isDirectoryMode() {
@@ -1833,15 +1534,13 @@ public class FileBrowserActivity extends AppCompatActivity {
                         : null;
 
         final int myLoadGen = loadGeneration.incrementAndGet();
-        dirCountGeneration.incrementAndGet();
         loadingSpinner.setVisibility((allLoadedFiles.isEmpty() && quickSnap == null) ? View.VISIBLE : View.GONE);
 
         executor.execute(() -> {
             if (loadGeneration.get() != myLoadGen) return;
             List<File> result = new ArrayList<>();
             if (isDirectoryMode() || MODE_RECYCLE_BIN.equals(currentMode)) {
-                dirItemCountCache.clear();
-                pendingDirCountPaths.clear();
+                folderSizeHelper.clear();
                 if (currentDir != null && currentDir.exists()) {
                     File[] children = currentDir.listFiles();
                     if (children != null) {
@@ -1969,26 +1668,7 @@ public class FileBrowserActivity extends AppCompatActivity {
     private void loadInstalledAppsAsync() {
         loadingSpinner.setVisibility(View.VISIBLE);
         executor.execute(() -> {
-            List<InstalledAppEntry> entries = new ArrayList<>();
-            try {
-                PackageManager pm = getPackageManager();
-                List<PackageInfo> pkgs = pm.getInstalledPackages(0);
-                for (PackageInfo pi : pkgs) {
-                    if (pi == null || pi.applicationInfo == null) continue;
-                    InstalledAppEntry e = new InstalledAppEntry();
-                    e.packageName = pi.packageName;
-                    e.versionName = pi.versionName != null ? pi.versionName : "1.0";
-                    e.isSystem = (pi.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-                    CharSequence lbl = pi.applicationInfo.loadLabel(pm);
-                    e.appName = lbl != null ? lbl.toString() : pi.packageName;
-                    e.sourceApk = pi.applicationInfo.publicSourceDir != null
-                            ? new File(pi.applicationInfo.publicSourceDir) : null;
-                    e.sizeBytes = (e.sourceApk != null && e.sourceApk.exists()) ? e.sourceApk.length() : 0L;
-                    entries.add(e);
-                }
-                Collections.sort(entries, (a, b) -> StorageUtils.compareHebrewFirst(a.appName, b.appName));
-            } catch (Throwable ignored) {
-            }
+            List<AppBackupHelper.InstalledAppEntry> entries = AppBackupHelper.loadInstalledApps(getPackageManager());
             runOnUiThread(() -> {
                 loadingSpinner.setVisibility(View.GONE);
                 allInstalledApps.clear();
@@ -2050,11 +1730,12 @@ public class FileBrowserActivity extends AppCompatActivity {
             if (metricMap != null) {
                 String p = f.getAbsolutePath();
                 if (sortMode == PrefsManager.SORT_SIZE) {
-                    Long cached = cachedSizesByPath.get(p);
-                    if (cached != null) {
-                        metricMap.put(f, cached);
+                    if (dir) {
+                        FolderSizeHelper.FolderStats fStats = folderSizeHelper.getCached(p, true);
+                        metricMap.put(f, fStats != null && fStats.totalBytes >= 0L ? fStats.totalBytes : 0L);
                     } else {
-                        metricMap.put(f, !dir ? f.length() : 0L);
+                        Long cached = cachedSizesByPath.get(p);
+                        metricMap.put(f, cached != null ? cached : f.length());
                     }
                 } else if (sortMode == PrefsManager.SORT_DATE) {
                     Long cached = cachedModifiedByPath.get(p);
@@ -2106,7 +1787,7 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         if (showingInstalledAppsTab) {
             displayedInstalledApps.clear();
-            for (InstalledAppEntry e : allInstalledApps) {
+            for (AppBackupHelper.InstalledAppEntry e : allInstalledApps) {
                 if (!includeSystemApps && e.isSystem) continue;
                 if (nq.isEmpty()
                         || normalizeSearchText(e.appName).contains(nq)
@@ -3145,44 +2826,68 @@ public class FileBrowserActivity extends AppCompatActivity {
         });
     }
 
-    private void showInstalledAppMenu(InstalledAppEntry app, View anchor) {
+    private void showInstalledAppMenu(AppBackupHelper.InstalledAppEntry app, View anchor) {
+        final boolean isSplit = app.isSplitBundle();
+        final boolean hasPkg = app.sourceApk != null && app.sourceApk.exists();
         List<String> opts = new ArrayList<>();
-        if (app.sourceApk != null && app.sourceApk.exists()) {
-            opts.add("גיבוי APK לתיקיית ההורדות");
-            opts.add("שיתוף חבילת APK");
+        if (hasPkg) {
+            opts.add(isSplit ? "גיבוי חבילה מפוצלת (.apks)" : "גיבוי APK לתיקיית ההורדות");
+            opts.add(isSplit ? "שיתוף חבילה (.apks)" : "שיתוף חבילת APK");
             opts.add("הצג מקור");
         }
         opts.add("פרטי אפליקציה בהגדרות");
         opts.add("הסרת התקנה");
 
+        String sub = app.packageName + "  •  " + app.versionName
+                + (isSplit ? "  •  " + (app.splitApks.size() + 1) + " חלקים" : "");
+
         ThemedDialogHelper.showThemedMenu(
                 this,
                 anchor,
                 app.appName,
-                app.packageName + "  •  " + app.versionName,
+                sub,
                 opts,
                 idx -> {
                     String c = opts.get(idx);
-                    if (c.startsWith("גיבוי APK") && app.sourceApk != null) {
+                    if (c.startsWith("גיבוי") && hasPkg) {
                         File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                        File out = StorageUtils.uniqueDestinationFile(dl, app.appName + "_" + app.versionName + ".apk");
+                        final OperationProgressHelper.Handle prog = isSplit
+                                ? OperationProgressHelper.show(this, "גיבוי חבילה (.apks)", app.appName, false)
+                                : null;
                         executor.execute(() -> {
-                            try (FileInputStream fis = new FileInputStream(app.sourceApk);
-                                 FileOutputStream fos = new FileOutputStream(out)) {
-                                byte[] buf = new byte[16 * 1024];
-                                int r;
-                                while ((r = fis.read(buf)) != -1) fos.write(buf, 0, r);
+                            try {
+                                File out = AppBackupHelper.backupAppToDownloads(app, dl);
+                                FileIndexDatabase.getInstance(this).upsertFile(out);
+                                FileScanCache.invalidate();
+                                if (prog != null) prog.finish();
                                 runOnUiThread(() -> Toast.makeText(this, "גובה ל: " + out.getName(), Toast.LENGTH_LONG).show());
                             } catch (Exception e) {
+                                if (prog != null) prog.finish();
                                 runOnUiThread(() -> Toast.makeText(this, "הגיבוי נכשל: " + e.getMessage(), Toast.LENGTH_LONG).show());
                             }
                         });
-                    } else if (c.startsWith("שיתוף") && app.sourceApk != null) {
-                        shareFile(app.sourceApk);
-                    } else if (c.startsWith("הצג מקור") && app.sourceApk != null) {
+                    } else if (c.startsWith("שיתוף") && hasPkg) {
+                        if (!isSplit) {
+                            shareFile(app.sourceApk);
+                        } else {
+                            final OperationProgressHelper.Handle prog = OperationProgressHelper.show(
+                                    this, "אורז חבילה לשיתוף", app.appName, false);
+                            executor.execute(() -> {
+                                try {
+                                    File pkg = AppBackupHelper.prepareShareablePackage(this, app);
+                                    prog.finish();
+                                    runOnUiThread(() -> shareFile(pkg));
+                                } catch (Exception e) {
+                                    prog.finish();
+                                    runOnUiThread(() -> Toast.makeText(this, "שגיאה בשיתוף: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                                }
+                            });
+                        }
+                    } else if (c.startsWith("הצג מקור") && hasPkg) {
                         Intent i = new Intent(this, ApkSourceInspectorActivity.class);
                         i.putExtra(ApkSourceInspectorActivity.EXTRA_APK_PATH, app.sourceApk.getAbsolutePath());
                         startActivity(i);
+                        ThemeHelper.overrideOpenTransition(this);
                     } else if (c.startsWith("פרטי")) {
                         Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                 Uri.parse("package:" + app.packageName));
@@ -3399,14 +3104,24 @@ public class FileBrowserActivity extends AppCompatActivity {
                             ? (count + " " + unit)
                             : (count + " " + unit + " • " + df.format(new Date(f.lastModified()))));
                 } else {
-                    Integer cachedDirCount = dirItemCountCache.get(path);
-                    if (cachedDirCount != null) {
+                    boolean showSizes = PrefsManager.isShowFolderSizes(FileBrowserActivity.this);
+                    FolderSizeHelper.FolderStats stats = folderSizeHelper.getCached(path, showSizes);
+                    if (stats != null) {
+                        String sizeSuffix = (showSizes && stats.totalBytes >= 0L)
+                                ? (" • " + StorageUtils.formatSize(stats.totalBytes)) : "";
                         h.tvMeta.setText(isGrid
-                                ? (cachedDirCount + " פריטים")
-                                : (cachedDirCount + " פריטים • " + df.format(new Date(f.lastModified()))));
+                                ? (stats.itemCount + " פריטים" + sizeSuffix)
+                                : (stats.itemCount + " פריטים" + sizeSuffix + " • " + df.format(new Date(f.lastModified()))));
                     } else {
                         h.tvMeta.setText("תיקייה");
-                        scheduleDirChildCount(f, position);
+                        boolean showHidden = PrefsManager.isShowHidden(FileBrowserActivity.this);
+                        folderSizeHelper.scheduleLoad(f, showHidden, showSizes, () -> {
+                            int curPos = h.getAdapterPosition();
+                            if (curPos >= 0 && curPos < displayedFiles.size()
+                                    && displayedFiles.get(curPos).getAbsolutePath().equals(path)) {
+                                notifyItemChanged(curPos);
+                            }
+                        });
                     }
                 }
             } else {
@@ -3455,34 +3170,6 @@ public class FileBrowserActivity extends AppCompatActivity {
             return displayedFiles.size();
         }
 
-        private void scheduleDirChildCount(File dir, int adapterPos) {
-            final String path = dir.getAbsolutePath();
-            if (!pendingDirCountPaths.add(path)) return;
-            final int gen = dirCountGeneration.get();
-            dirCountExecutor.execute(() -> {
-                if (dirCountGeneration.get() != gen) return;
-                int count = 0;
-                try (java.nio.file.DirectoryStream<java.nio.file.Path> stream = java.nio.file.Files.newDirectoryStream(dir.toPath())) {
-                    for (java.nio.file.Path ignored : stream) {
-                        count++;
-                        if (dirCountGeneration.get() != gen) return;
-                    }
-                } catch (Throwable ignored) {
-                    File[] sub = dir.listFiles();
-                    count = sub != null ? sub.length : 0;
-                }
-                if (dirCountGeneration.get() != gen) return;
-                dirItemCountCache.put(path, count);
-                runOnUiThread(() -> {
-                    if (dirCountGeneration.get() != gen) return;
-                    if (adapterPos >= 0 && adapterPos < displayedFiles.size()
-                            && displayedFiles.get(adapterPos).getAbsolutePath().equals(path)) {
-                        notifyItemChanged(adapterPos);
-                    }
-                });
-            });
-        }
-
         class VH extends RecyclerView.ViewHolder {
             final CardView rowCard;
             final ImageView ivIcon;
@@ -3513,11 +3200,14 @@ public class FileBrowserActivity extends AppCompatActivity {
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
-            InstalledAppEntry app = displayedInstalledApps.get(position);
+            AppBackupHelper.InstalledAppEntry app = displayedInstalledApps.get(position);
             h.rowCard.setCardBackgroundColor(Color.TRANSPARENT);
             h.tvName.setText(app.appName);
             h.tvName.setTextColor(textPrimary);
-            h.tvMeta.setText(app.packageName + " • " + app.versionName + " • " + StorageUtils.formatSize(app.sizeBytes));
+            h.tvMeta.setText(app.packageName
+                    + " • " + app.versionName
+                    + (app.isSplitBundle() ? " • APKS מפוצל" : "")
+                    + " • " + StorageUtils.formatSize(app.sizeBytes));
             h.tvMeta.setTextColor(textSecondary);
             h.ivIcon.clearColorFilter();
             try {
@@ -3554,11 +3244,14 @@ public class FileBrowserActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         fastScrollHideHandler.removeCallbacksAndMessages(null);
+        if (multiSelectSheetHelper != null) {
+            multiSelectSheetHelper.cancelAnimators();
+        }
         if (miniAudioListener != null) {
             AudioPlayerManager.getInstance().removeListener(miniAudioListener);
         }
+        folderSizeHelper.shutdown();
         executor.shutdownNow();
         searchExecutor.shutdownNow();
-        dirCountExecutor.shutdownNow();
     }
 }
