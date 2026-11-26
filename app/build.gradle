@@ -58,6 +58,12 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    packaging {
+        jniLibs {
+            pickFirsts += ['**/libc++_shared.so']
+        }
+    }
 }
 
 dependencies {
@@ -72,7 +78,7 @@ dependencies {
     implementation 'androidx.media3:media3-common:1.4.1'
     implementation 'androidx.media3:media3-extractor:1.4.1'
     implementation 'androidx.media3:media3-datasource:1.4.1'
-    implementation 'org.videolan.android:libvlc-all:3.7.8'
+    implementation 'org.videolan.android:libvlc-all:3.7.2'
 
     implementation 'com.github.omicronapps:7-Zip-JBinding-4Android:Release-16.02-2.03'
     implementation 'com.github.junrar:junrar:7.5.5'
