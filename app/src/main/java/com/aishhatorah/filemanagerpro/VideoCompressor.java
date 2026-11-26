@@ -141,8 +141,35 @@ public final class VideoCompressor {
         DecoderOutputSurface outputSurface = null;
 
         boolean completedCleanly = false;
+        File tempMtsRemux = null;
         try {
-            videoExtractor.setDataSource(sourceFile.getAbsolutePath());
+            File effectiveSource = sourceFile;
+            long effStartUs = startUs;
+            long effEndUs = endUs;
+            boolean isMtsInput = MpegTsNormalizer.isLikelyMpegTsName(sourceFile.getName())
+                    || MpegTsNormalizer.detectTsLayoutCached(sourceFile).packetStride > 0;
+            if (isMtsInput) {
+                File tmpParent = outFile != null ? outFile.getParentFile() : sourceFile.getParentFile();
+                tempMtsRemux = new File(tmpParent != null && tmpParent.canWrite() ? tmpParent : sourceFile.getParentFile(),
+                        ".vc_mts_tmp_" + System.nanoTime() + ".mp4");
+                TsToMp4Remuxer.remuxToMp4(
+                        sourceFile,
+                        tempMtsRemux,
+                        startUs,
+                        endUs,
+                        pct -> {
+                            if (progressCb != null) {
+                                progressCb.onProgress(Math.max(0, Math.min(20, pct / 5)));
+                            }
+                        }
+                );
+                effectiveSource = tempMtsRemux;
+                effStartUs = 0L;
+                effEndUs = Long.MAX_VALUE;
+            }
+            final int basePct = isMtsInput ? 20 : 0;
+
+            videoExtractor.setDataSource(effectiveSource.getAbsolutePath());
             int videoTrack = -1;
             int audioTrack = -1;
             MediaFormat srcVideoFmt = null;
@@ -200,8 +227,8 @@ public final class VideoCompressor {
             muxer = new MediaMuxer(outFile.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             muxer.setOrientationHint(((srcRot + extraRotationDeg) % 360 + 360) % 360);
 
-            if (startUs > 0) {
-                videoExtractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+            if (effStartUs > 0) {
+                videoExtractor.seekTo(effStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
             }
 
             MediaCodec.BufferInfo decInfo = new MediaCodec.BufferInfo();
@@ -213,7 +240,8 @@ public final class VideoCompressor {
             int muxerVideoTrack = -1;
             int muxerAudioTrack = -1;
             int lastReportedPct = -1;
-            long clipSpanUs = Math.max(100_000L, Math.min(totalUs, endUs) - startUs);
+            long boundedEndUs = effEndUs == Long.MAX_VALUE ? totalUs : Math.min(totalUs, effEndUs);
+            long clipSpanUs = Math.max(100_000L, boundedEndUs - effStartUs);
 
             while (!encoderDone) {
                 if (!extractorDone) {
@@ -223,7 +251,7 @@ public final class VideoCompressor {
                         if (inBuf != null) {
                             int sampleSize = videoExtractor.readSampleData(inBuf, 0);
                             long sampleTime = videoExtractor.getSampleTime();
-                            if (sampleSize < 0 || sampleTime > endUs) {
+                            if (sampleSize < 0 || sampleTime > effEndUs) {
                                 decoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                                 extractorDone = true;
                             } else {
@@ -243,17 +271,18 @@ public final class VideoCompressor {
                         // no-op
                     } else if (outIdx >= 0) {
                         boolean isEos = (decInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
-                        boolean inRange = decInfo.size > 0 && decInfo.presentationTimeUs >= startUs && decInfo.presentationTimeUs <= endUs;
+                        boolean inRange = decInfo.size > 0 && decInfo.presentationTimeUs >= effStartUs && decInfo.presentationTimeUs <= effEndUs;
                         decoder.releaseOutputBuffer(outIdx, inRange);
                         if (inRange) {
                             outputSurface.awaitNewImage();
                             outputSurface.drawImage();
-                            long outPtsUs = Math.max(0L, (long) ((decInfo.presentationTimeUs - startUs) / safeSpeed));
+                            long outPtsUs = Math.max(0L, (long) ((decInfo.presentationTimeUs - effStartUs) / safeSpeed));
                             eglSurface.setPresentationTime(outPtsUs * 1000L);
                             eglSurface.swapBuffers();
 
                             if (progressCb != null) {
-                                int pct = (int) Math.min(92L, Math.max(0L, ((decInfo.presentationTimeUs - startUs) * 92L) / clipSpanUs));
+                                int encSpan = 92 - basePct;
+                                int pct = basePct + (int) Math.min(encSpan, Math.max(0L, ((decInfo.presentationTimeUs - effStartUs) * encSpan) / clipSpanUs));
                                 if (pct != lastReportedPct) {
                                     lastReportedPct = pct;
                                     progressCb.onProgress(pct);
@@ -307,10 +336,10 @@ public final class VideoCompressor {
 
             if (muxerStarted && muxerAudioTrack >= 0 && srcAudioFmt != null) {
                 audioExtractor = new MediaExtractor();
-                audioExtractor.setDataSource(sourceFile.getAbsolutePath());
+                audioExtractor.setDataSource(effectiveSource.getAbsolutePath());
                 audioExtractor.selectTrack(audioTrack);
-                if (startUs > 0) {
-                    audioExtractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+                if (effStartUs > 0) {
+                    audioExtractor.seekTo(effStartUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
                 }
                 int bufSize = srcAudioFmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)
                         ? Math.max(256 * 1024, srcAudioFmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
@@ -321,11 +350,11 @@ public final class VideoCompressor {
                     int sz = audioExtractor.readSampleData(audioBuf, 0);
                     if (sz < 0) break;
                     long pts = audioExtractor.getSampleTime();
-                    if (pts > endUs) break;
-                    if (pts >= startUs) {
+                    if (pts > effEndUs) break;
+                    if (pts >= effStartUs) {
                         aInfo.offset = 0;
                         aInfo.size = sz;
-                        aInfo.presentationTimeUs = Math.max(0L, (long) ((pts - startUs) / safeSpeed));
+                        aInfo.presentationTimeUs = Math.max(0L, (long) ((pts - effStartUs) / safeSpeed));
                         int flags = audioExtractor.getSampleFlags();
                         aInfo.flags = (flags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
                                 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
@@ -367,6 +396,9 @@ public final class VideoCompressor {
             }
             if (muxer != null) {
                 try { muxer.release(); } catch (Throwable ignored) {}
+            }
+            if (tempMtsRemux != null && tempMtsRemux.exists()) {
+                try { tempMtsRemux.delete(); } catch (Throwable ignored) {}
             }
             if (!completedCleanly && outFile != null && outFile.exists()) {
                 try { outFile.delete(); } catch (Throwable ignored) {}

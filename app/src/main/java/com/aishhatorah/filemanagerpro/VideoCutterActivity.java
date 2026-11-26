@@ -77,6 +77,7 @@ public class VideoCutterActivity extends AppCompatActivity {
 
     private TextureView previewTextureView;
     private Surface previewSurface;
+    private VlcMtsPlayerHelper vlcPreviewPlayer;
     private ExoPlayer previewPlayer;
     private boolean previewAudioDisabled = false;
     private int previewVideoWidth = 0;
@@ -160,7 +161,10 @@ public class VideoCutterActivity extends AppCompatActivity {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
                 previewSurface = new Surface(surface);
-                if (previewPlayer != null) {
+                if (vlcPreviewPlayer != null) {
+                    vlcPreviewPlayer.attachSurface(previewSurface, width, height);
+                    updatePreviewTransform();
+                } else if (previewPlayer != null) {
                     previewPlayer.setVideoSurface(previewSurface);
                 } else if (selectedVideoUri != null) {
                     startPreviewExoPlayer(false);
@@ -169,11 +173,17 @@ public class VideoCutterActivity extends AppCompatActivity {
 
             @Override
             public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                if (vlcPreviewPlayer != null) {
+                    vlcPreviewPlayer.updateWindowSize(width, height);
+                }
                 updatePreviewTransform();
             }
 
             @Override
             public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                if (vlcPreviewPlayer != null) {
+                    vlcPreviewPlayer.detachSurface();
+                }
                 if (previewPlayer != null) {
                     previewPlayer.setVideoSurface(null);
                 }
@@ -223,12 +233,16 @@ public class VideoCutterActivity extends AppCompatActivity {
         rangeTrimView.setOnRangeChangedListener((s, e, movingStart) -> {
             startMs = s;
             endMs = e;
-            if (movingStart && previewPlayer != null) {
+            if (movingStart && (vlcPreviewPlayer != null || previewPlayer != null)) {
                 long now = System.currentTimeMillis();
                 if (now - lastPreviewSeekMs >= 180L) {
                     lastPreviewSeekMs = now;
                     try {
-                        previewPlayer.seekTo(startMs);
+                        if (vlcPreviewPlayer != null) {
+                            vlcPreviewPlayer.seekTo(startMs);
+                        } else if (previewPlayer != null) {
+                            previewPlayer.seekTo(startMs);
+                        }
                     } catch (Exception ignored) {
                     }
                 }
@@ -544,6 +558,66 @@ public class VideoCutterActivity extends AppCompatActivity {
 
     @OptIn(markerClass = UnstableApi.class)
     private void startPreviewExoPlayer(boolean disableAudioTrack) {
+        if (!disableAudioTrack && isMtsOrTsSource && resolvedSourceFile != null && resolvedSourceFile.exists()) {
+            startPreviewVlcPlayer();
+            return;
+        }
+        startPreviewExoInternal(disableAudioTrack);
+    }
+
+    private void startPreviewVlcPlayer() {
+        releasePreviewPlayer();
+        if (resolvedSourceFile == null || !resolvedSourceFile.exists()) return;
+        try {
+            vlcPreviewPlayer = new VlcMtsPlayerHelper(this, new VlcMtsPlayerHelper.Callback() {
+                @Override
+                public void onPrepared(int durMs) {
+                    if (vlcPreviewPlayer == null || isFinishing() || isDestroyed()) return;
+                    if (durMs > 0 && durationMs <= 0L) {
+                        applyLoadedDuration(durMs);
+                    }
+                }
+
+                @Override
+                public void onVideoSizeChanged(int width, int height, float pixelRatio) {
+                    if (vlcPreviewPlayer == null || width <= 0 || height <= 0) return;
+                    previewVideoWidth = width;
+                    previewVideoHeight = height;
+                    previewPixelRatio = pixelRatio > 0f ? pixelRatio : 1.0f;
+                    updatePreviewTransform();
+                }
+
+                @Override
+                public void onFirstFrameRendered() {
+                }
+
+                @Override
+                public void onPlayingChanged(boolean isPlaying) {
+                }
+
+                @Override
+                public void onEndReached() {
+                }
+
+                @Override
+                public void onError() {
+                    if (vlcPreviewPlayer != null && !isFinishing() && !isDestroyed()) {
+                        startPreviewExoInternal(false);
+                    }
+                }
+            });
+            vlcPreviewPlayer.setLooping(true);
+            if (previewSurface != null && previewTextureView != null) {
+                vlcPreviewPlayer.attachSurface(previewSurface, previewTextureView.getWidth(), previewTextureView.getHeight());
+            }
+            vlcPreviewPlayer.load(resolvedSourceFile, true, false);
+        } catch (Throwable ignored) {
+            startPreviewExoInternal(false);
+        }
+    }
+
+    @OptIn(markerClass = UnstableApi.class)
+    private void startPreviewExoInternal(boolean disableAudioTrack) {
         releasePreviewPlayer();
         if (selectedVideoUri == null) return;
         try {
@@ -602,7 +676,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                 public void onPlayerError(@NonNull PlaybackException error) {
                     if (!previewAudioDisabled && isMtsOrTsSource) {
                         previewAudioDisabled = true;
-                        startPreviewExoPlayer(true);
+                        startPreviewExoInternal(true);
                     }
                 }
             });
@@ -633,6 +707,13 @@ public class VideoCutterActivity extends AppCompatActivity {
     }
 
     private void releasePreviewPlayer() {
+        if (vlcPreviewPlayer != null) {
+            try {
+                vlcPreviewPlayer.release();
+            } catch (Throwable ignored) {
+            }
+            vlcPreviewPlayer = null;
+        }
         if (previewPlayer != null) {
             try {
                 previewPlayer.release();
@@ -820,6 +901,9 @@ public class VideoCutterActivity extends AppCompatActivity {
                     if (mime != null && (mime.startsWith("video/") || mime.startsWith("audio/"))) {
                         try {
                             extractor.selectTrack(i);
+                            if (mime.startsWith("video/") && format.containsKey(MediaFormat.KEY_ROTATION)) {
+                                muxer.setOrientationHint(format.getInteger(MediaFormat.KEY_ROTATION));
+                            }
                             int dstIndex = muxer.addTrack(format);
                             indexMap.put(i, dstIndex);
                             if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
@@ -831,7 +915,7 @@ public class VideoCutterActivity extends AppCompatActivity {
                     }
                 }
 
-                extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+                extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
                 muxer.start();
 
                 ByteBuffer buffer = ByteBuffer.allocate(maxBufferSize);
@@ -925,6 +1009,9 @@ public class VideoCutterActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (vlcPreviewPlayer != null) {
+            try { vlcPreviewPlayer.pause(); } catch (Throwable ignored) {}
+        }
         if (previewPlayer != null) {
             try { previewPlayer.pause(); } catch (Throwable ignored) {}
         }

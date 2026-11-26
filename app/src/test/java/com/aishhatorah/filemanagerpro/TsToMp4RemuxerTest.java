@@ -351,6 +351,109 @@ public class TsToMp4RemuxerTest {
         }
     }
 
+    @Test
+    public void explicitPesDtsParsesAndRemuxesBFrameTimeline() throws Exception {
+        ByteArrayOutputStream bdavStream = new ByteArrayOutputStream();
+        writeBdavPacket(bdavStream, buildPatPacket(0x0100));
+        writeBdavPacket(bdavStream, buildPmtPacket(0x0100, 0x0101, 0x0102));
+
+        // Decode order: I(dts=0,pts=0), P(dts=3000,pts=9000), B1(dts=6000,pts=3000), B2(dts=9000,pts=6000)
+        long[][] timeline = {
+                {0L, 0L, 1L},
+                {9_000L, 3_000L, 0L},
+                {3_000L, 6_000L, 0L},
+                {6_000L, 9_000L, 0L}
+        };
+        for (long[] entry : timeline) {
+            byte[] vPayload = buildH264PesPayload(entry[2] == 1L);
+            writeBdavPacketsForPesPtsDts(bdavStream, 0x0101, 0xE0, entry[0], entry[1], vPayload);
+        }
+        writeBdavPacketsForPes(bdavStream, 0x0102, 0xC0, 0L, buildAdtsAacFrame());
+
+        // Direct unit check on parsePesPts & parsePesDts
+        byte[] samplePes = buildPesBytesPtsDts(0xE0, 90_000L, 84_000L, new byte[]{0x00, 0x00, 0x01, 0x65});
+        assertEquals(90_000L, TsToMp4Remuxer.parsePesPts(samplePes));
+        assertEquals(84_000L, TsToMp4Remuxer.parsePesDts(samplePes));
+
+        File mtsFile = File.createTempFile("test_bdav_dts_", ".mts");
+        mtsFile.deleteOnExit();
+        try (FileOutputStream fos = new FileOutputStream(mtsFile)) {
+            fos.write(bdavStream.toByteArray());
+        }
+
+        List<Long> outPts = new ArrayList<>();
+        List<Long> outDts = new ArrayList<>();
+        List<Boolean> explicitFlags = new ArrayList<>();
+
+        TsToMp4Remuxer.RemuxResult res = TsToMp4Remuxer.demuxAndProcess(
+                mtsFile, 0L, Long.MAX_VALUE,
+                new TsToMp4Remuxer.SampleSink() {
+                    @Override public void onConfigure(TsToMp4Remuxer.StreamMetadata meta) {}
+                    @Override public void onVideoSample(byte[] data, int len, long timeUs, boolean isKeyFrame) {}
+                    @Override
+                    public void onVideoSampleWithDts(byte[] data, int len, long ptsUs, long dtsUs,
+                                                     boolean hasExplicitDts, boolean isKeyFrame) {
+                        outPts.add(ptsUs);
+                        outDts.add(dtsUs);
+                        explicitFlags.add(hasExplicitDts);
+                    }
+                    @Override public void onAudioSample(byte[] data, int len, long timeUs) {}
+                    @Override public void onFinish() {}
+                },
+                null
+        );
+
+        assertTrue(res.success);
+        assertEquals(4, outDts.size());
+        assertTrue(explicitFlags.get(0));
+        for (int i = 1; i < outDts.size(); i++) {
+            assertTrue("DTS must strictly increase at " + i, outDts.get(i) > outDts.get(i - 1));
+        }
+        assertEquals(0L, (long) outPts.get(0));
+        assertTrue("P frame display PTS must exceed B1/B2 display PTS", outPts.get(1) > outPts.get(2));
+        assertTrue("B2 display PTS must follow B1", outPts.get(3) > outPts.get(2));
+    }
+
+    private static byte[] buildPesBytesPtsDts(int streamId, long pts90k, long dts90k, byte[] payload) throws IOException {
+        ByteArrayOutputStream pes = new ByteArrayOutputStream();
+        pes.write(0x00);
+        pes.write(0x00);
+        pes.write(0x01);
+        pes.write(streamId & 0xFF);
+        pes.write(0x00);
+        pes.write(0x00);
+        pes.write(0x80);
+        pes.write(0xC0); // PTS + DTS flags
+        pes.write(0x0A); // PES header data len
+        pes.write((byte) (0x31 | ((pts90k >> 29) & 0x0E)));
+        pes.write((byte) ((pts90k >> 22) & 0xFF));
+        pes.write((byte) (0x01 | ((pts90k >> 14) & 0xFE)));
+        pes.write((byte) ((pts90k >> 7) & 0xFF));
+        pes.write((byte) (0x01 | ((pts90k << 1) & 0xFE)));
+        pes.write((byte) (0x11 | ((dts90k >> 29) & 0x0E)));
+        pes.write((byte) ((dts90k >> 22) & 0xFF));
+        pes.write((byte) (0x01 | ((dts90k >> 14) & 0xFE)));
+        pes.write((byte) ((dts90k >> 7) & 0xFF));
+        pes.write((byte) (0x01 | ((dts90k << 1) & 0xFE)));
+        pes.write(payload);
+        return pes.toByteArray();
+    }
+
+    private static void writeBdavPacketsForPesPtsDts(ByteArrayOutputStream out, int pid, int streamId,
+                                                     long pts90k, long dts90k, byte[] payload) throws IOException {
+        byte[] pesBytes = buildPesBytesPtsDts(streamId, pts90k, dts90k, payload);
+        int offset = 0;
+        boolean first = true;
+        while (offset < pesBytes.length) {
+            byte[] pkt = emptyTsPacket(pid, first);
+            int chunk = Math.min(184, pesBytes.length - offset);
+            System.arraycopy(pesBytes, offset, pkt, 4, chunk);
+            writeBdavPacket(out, pkt);
+            offset += chunk;
+            first = false;
+        }
+    }
+
     private static byte[] emptyTsPacket(int pid, boolean pusi) {
         byte[] pkt = new byte[188];
         for (int i = 4; i < 188; i++) pkt[i] = (byte) 0xFF;

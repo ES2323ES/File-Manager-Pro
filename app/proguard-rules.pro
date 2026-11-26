@@ -12,3 +12,5 @@
 
 -keep class net.sf.sevenzipjbinding.** { *; }
 -keep class com.github.junrar.** { *; }
+-keep class org.videolan.libvlc.** { *; }
+-dontwarn org.videolan.**

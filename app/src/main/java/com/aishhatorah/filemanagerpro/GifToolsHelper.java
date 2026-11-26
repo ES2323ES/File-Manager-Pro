@@ -235,12 +235,42 @@ public final class GifToolsHelper {
     }
 
     public static File videoToGif(Context context, File videoFile, File outGif, int maxWidth, int fps) throws IOException {
+        List<Bitmap> frames = extractFramesForGif(videoFile, maxWidth, fps);
+        boolean isTs = MpegTsNormalizer.isLikelyMpegTsName(videoFile.getName())
+                || MpegTsNormalizer.detectTsLayoutCached(videoFile).packetStride > 0;
+        if (frames.isEmpty() && isTs && context != null) {
+            File tmpMp4 = new File(context.getCacheDir(), "gif_mts_tmp_" + System.currentTimeMillis() + ".mp4");
+            try {
+                TsToMp4Remuxer.remuxToMp4(videoFile, tmpMp4, 0L, 11_000_000L, null);
+                frames = extractFramesForGif(tmpMp4, maxWidth, fps);
+            } catch (Throwable ignored) {
+            } finally {
+                if (tmpMp4.exists()) {
+                    try { tmpMp4.delete(); } catch (Throwable ignored) {}
+                }
+            }
+        }
+        if (frames.isEmpty()) throw new IOException("לא ניתן לחלץ פריימים מהוידאו");
+        try {
+            encodeBitmapsToGif(frames, Math.max(40, 1000 / Math.max(1, fps)), outGif);
+        } finally {
+            for (Bitmap b : frames) b.recycle();
+        }
+        return outGif;
+    }
+
+    private static List<Bitmap> extractFramesForGif(File videoFile, int maxWidth, int fps) {
         MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        java.io.Closeable tsDs = null;
         List<Bitmap> frames = new ArrayList<>();
         try {
-            mmr.setDataSource(videoFile.getAbsolutePath());
+            tsDs = MpegTsNormalizer.setMediaMetadataRetrieverSource(mmr, videoFile);
             String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            long durMs = durStr != null ? Long.parseLong(durStr) : 4000L;
+            long durMs = (durStr != null && !durStr.trim().isEmpty()) ? Long.parseLong(durStr.trim()) : 0L;
+            if (durMs <= 0L && MpegTsNormalizer.isLikelyMpegTsName(videoFile.getName())) {
+                durMs = MpegTsNormalizer.extractTsDurationMs(videoFile);
+            }
+            if (durMs <= 0L) durMs = 4000L;
             long clipMs = Math.min(durMs, 10_000L);
             int totalFrames = Math.max(4, Math.min(60, (int) ((clipMs * fps) / 1000L)));
             long stepUs = (clipMs * 1000L) / totalFrames;
@@ -252,19 +282,20 @@ public final class GifToolsHelper {
                     frames.add(scaled);
                 }
             }
+        } catch (Throwable ignored) {
         } finally {
             try {
                 mmr.release();
             } catch (Throwable ignored) {
             }
+            if (tsDs != null) {
+                try {
+                    tsDs.close();
+                } catch (Throwable ignored) {
+                }
+            }
         }
-        if (frames.isEmpty()) throw new IOException("לא ניתן לחלץ פריימים מהוידאו");
-        try {
-            encodeBitmapsToGif(frames, Math.max(40, 1000 / Math.max(1, fps)), outGif);
-        } finally {
-            for (Bitmap b : frames) b.recycle();
-        }
-        return outGif;
+        return frames;
     }
 
     public static File imagesToGif(List<Bitmap> bitmaps, int delayMs, int maxWidth, File outGif) throws IOException {

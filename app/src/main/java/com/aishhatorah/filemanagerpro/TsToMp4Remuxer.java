@@ -103,6 +103,10 @@ public final class TsToMp4Remuxer {
     public interface SampleSink {
         void onConfigure(StreamMetadata meta) throws IOException;
         void onVideoSample(byte[] data, int len, long timeUs, boolean isKeyFrame) throws IOException;
+        default void onVideoSampleWithDts(byte[] data, int len, long ptsUs, long dtsUs,
+                                          boolean hasExplicitDts, boolean isKeyFrame) throws IOException {
+            onVideoSample(data, len, ptsUs, isKeyFrame);
+        }
         void onAudioSample(byte[] data, int len, long timeUs) throws IOException;
         void onFinish() throws IOException;
     }
@@ -228,6 +232,7 @@ public final class TsToMp4Remuxer {
 
         StreamMetadata meta = new StreamMetadata();
         MonotonicPtsClock videoClock = new MonotonicPtsClock(33333L, true);
+        MonotonicPtsClock videoDtsClock = new MonotonicPtsClock(33333L, false);
         MonotonicPtsClock audioClock = new MonotonicPtsClock(21333L, false);
 
         TsPacketSource pktSource = openPacketSource(inputFile, info);
@@ -240,7 +245,9 @@ public final class TsToMp4Remuxer {
 
         boolean configured = false;
         boolean startedOutput = false;
+        boolean seenExplicitVideoDts = false;
         long baseTimeUs = -1L;
+        long baseDtsUs = -1L;
         int videoFramesWritten = 0;
         int audioFramesWritten = 0;
         long totalPackets = info.packetCount;
@@ -296,7 +303,10 @@ public final class TsToMp4Remuxer {
                     if (pusi && videoPes.size() > 0) {
                         byte[] pesBytes = videoPes.toByteArray();
                         videoPes.reset();
-                        ParsedVideoSample vs = processVideoPes(pesBytes, meta, videoClock);
+                        ParsedVideoSample vs = processVideoPes(pesBytes, meta, videoClock, videoDtsClock);
+                        if (vs != null && vs.hasExplicitDts) {
+                            seenExplicitVideoDts = true;
+                        }
                         if (vs != null && videoClock.hasOrigin() && !audioClock.hasOrigin()) {
                             audioClock.setOriginIfUnset(videoClock.getOriginRaw90k());
                         }
@@ -322,7 +332,7 @@ public final class TsToMp4Remuxer {
                                     preRollVideo.clear();
                                 }
                                 if (preRollVideo.size() < 240) {
-                                    preRollVideo.add(new BufferedFrame(vs.data, vs.timeUs, vs.isKeyFrame));
+                                    preRollVideo.add(new BufferedFrame(vs.data, vs.timeUs, vs.dtsUs, vs.isKeyFrame));
                                 }
                             } else if (!isTrimmed || vs.timeUs >= effectiveStartUs) {
                                 if (!startedOutput) {
@@ -330,10 +340,14 @@ public final class TsToMp4Remuxer {
                                     int kfIdx = findLastKeyframeIndex(preRollVideo);
                                     if (kfIdx >= 0) {
                                         baseTimeUs = preRollVideo.get(kfIdx).timeUs;
+                                        baseDtsUs = preRollVideo.get(kfIdx).dtsUs;
                                         for (int i = kfIdx; i < preRollVideo.size(); i++) {
                                             BufferedFrame bf = preRollVideo.get(i);
-                                            sink.onVideoSample(bf.data, bf.data.length,
-                                                    Math.max(0L, bf.timeUs - baseTimeUs), bf.isKeyFrame);
+                                            sink.onVideoSampleWithDts(bf.data, bf.data.length,
+                                                    Math.max(0L, bf.timeUs - baseTimeUs),
+                                                    Math.max(0L, bf.dtsUs - baseDtsUs),
+                                                    seenExplicitVideoDts,
+                                                    bf.isKeyFrame);
                                             videoFramesWritten++;
                                         }
                                         for (BufferedFrame af : preRollAudio) {
@@ -344,19 +358,22 @@ public final class TsToMp4Remuxer {
                                         }
                                     } else {
                                         baseTimeUs = vs.timeUs;
+                                        baseDtsUs = vs.dtsUs;
                                     }
                                     preRollVideo.clear();
                                     preRollAudio.clear();
                                 }
                                 long outUs = Math.max(0L, vs.timeUs - baseTimeUs);
-                                sink.onVideoSample(vs.data, vs.data.length, outUs, vs.isKeyFrame);
+                                long outDtsUs = Math.max(0L, vs.dtsUs - baseDtsUs);
+                                sink.onVideoSampleWithDts(vs.data, vs.data.length, outUs, outDtsUs,
+                                        seenExplicitVideoDts, vs.isKeyFrame);
                                 videoFramesWritten++;
                             } else {
                                 if (vs.isKeyFrame) {
                                     preRollVideo.clear();
                                 }
                                 if (preRollVideo.size() < 240) {
-                                    preRollVideo.add(new BufferedFrame(vs.data, vs.timeUs, vs.isKeyFrame));
+                                    preRollVideo.add(new BufferedFrame(vs.data, vs.timeUs, vs.dtsUs, vs.isKeyFrame));
                                 }
                             }
                         }
@@ -378,7 +395,7 @@ public final class TsToMp4Remuxer {
                                 audioFramesWritten++;
                             } else if (!configured || (isTrimmed && af.timeUs >= Math.max(0L, effectiveStartUs - 2_000_000L))) {
                                 if (preRollAudio.size() < 240) {
-                                    preRollAudio.add(new BufferedFrame(af.data, af.timeUs, true));
+                                    preRollAudio.add(new BufferedFrame(af.data, af.timeUs, af.timeUs, true));
                                 }
                             }
                         }
@@ -389,7 +406,10 @@ public final class TsToMp4Remuxer {
 
             // שטיפת חבילות סיום
             if (videoPes.size() > 0) {
-                ParsedVideoSample vs = processVideoPes(videoPes.toByteArray(), meta, videoClock);
+                ParsedVideoSample vs = processVideoPes(videoPes.toByteArray(), meta, videoClock, videoDtsClock);
+                if (vs != null && vs.hasExplicitDts) {
+                    seenExplicitVideoDts = true;
+                }
                 if (vs != null && vs.timeUs <= effectiveEndUs) {
                     if (!configured && meta.hasVideoFormat()) {
                         sink.onConfigure(meta);
@@ -400,10 +420,14 @@ public final class TsToMp4Remuxer {
                         int kfIdx = findLastKeyframeIndex(preRollVideo);
                         if (kfIdx >= 0) {
                             baseTimeUs = preRollVideo.get(kfIdx).timeUs;
+                            baseDtsUs = preRollVideo.get(kfIdx).dtsUs;
                             for (int i = kfIdx; i < preRollVideo.size(); i++) {
                                 BufferedFrame bf = preRollVideo.get(i);
-                                sink.onVideoSample(bf.data, bf.data.length,
-                                        Math.max(0L, bf.timeUs - baseTimeUs), bf.isKeyFrame);
+                                sink.onVideoSampleWithDts(bf.data, bf.data.length,
+                                        Math.max(0L, bf.timeUs - baseTimeUs),
+                                        Math.max(0L, bf.dtsUs - baseDtsUs),
+                                        seenExplicitVideoDts,
+                                        bf.isKeyFrame);
                                 videoFramesWritten++;
                             }
                             for (BufferedFrame af : preRollAudio) {
@@ -416,10 +440,15 @@ public final class TsToMp4Remuxer {
                             preRollAudio.clear();
                         } else {
                             baseTimeUs = vs.timeUs;
+                            baseDtsUs = vs.dtsUs;
                         }
                     }
                     if (startedOutput && configured) {
-                        sink.onVideoSample(vs.data, vs.data.length, Math.max(0L, vs.timeUs - baseTimeUs), vs.isKeyFrame);
+                        sink.onVideoSampleWithDts(vs.data, vs.data.length,
+                                Math.max(0L, vs.timeUs - baseTimeUs),
+                                Math.max(0L, vs.dtsUs - baseDtsUs),
+                                seenExplicitVideoDts,
+                                vs.isKeyFrame);
                         videoFramesWritten++;
                     }
                 }
@@ -533,7 +562,7 @@ public final class TsToMp4Remuxer {
         return -1;
     }
 
-    private static long parsePesPts(byte[] pes) {
+    public static long parsePesPts(byte[] pes) {
         if (pes == null || pes.length < 14) return -1L;
         if (pes[0] != 0 || pes[1] != 0 || pes[2] != 1) return -1L;
         int ptsDtsFlags = (pes[7] >> 6) & 0x03;
@@ -552,6 +581,25 @@ public final class TsToMp4Remuxer {
                 | ((p4 & 0xFEL) >> 1);
     }
 
+    public static long parsePesDts(byte[] pes) {
+        if (pes == null || pes.length < 19) return -1L;
+        if (pes[0] != 0 || pes[1] != 0 || pes[2] != 1) return -1L;
+        int ptsDtsFlags = (pes[7] >> 6) & 0x03;
+        if (ptsDtsFlags != 0x03) return -1L;
+        int hdrLen = pes[8] & 0xFF;
+        if (hdrLen < 10 || 14 + 5 > pes.length) return -1L;
+        long d0 = pes[14] & 0xFFL;
+        long d1 = pes[15] & 0xFFL;
+        long d2 = pes[16] & 0xFFL;
+        long d3 = pes[17] & 0xFFL;
+        long d4 = pes[18] & 0xFFL;
+        return ((d0 & 0x0EL) << 29)
+                | ((d1 & 0xFFL) << 22)
+                | ((d2 & 0xFEL) << 14)
+                | ((d3 & 0xFFL) << 7)
+                | ((d4 & 0xFEL) >> 1);
+    }
+
     private static int getPesPayloadOffset(byte[] pes) {
         if (pes == null || pes.length < 9) return -1;
         if (pes[0] != 0 || pes[1] != 0 || pes[2] != 1) return -1;
@@ -562,12 +610,17 @@ public final class TsToMp4Remuxer {
 
     // ==================== עיבוד וידאו (H.264 / HEVC Annex-B) ====================
 
-    private static ParsedVideoSample processVideoPes(byte[] pes, StreamMetadata meta, MonotonicPtsClock clock) {
+    private static ParsedVideoSample processVideoPes(byte[] pes, StreamMetadata meta,
+                                                     MonotonicPtsClock clock, MonotonicPtsClock dtsClock) {
         int payloadOff = getPesPayloadOffset(pes);
         if (payloadOff < 0) return null;
 
         long rawPts = parsePesPts(pes);
+        long rawDts = parsePesDts(pes);
         long timeUs = clock.normalize90k(rawPts);
+        boolean hasExplicitDts = rawDts >= 0L;
+        long rawDtsCandidate = hasExplicitDts ? rawDts : rawPts;
+        long dtsUs = dtsClock != null ? dtsClock.normalize90k(rawDtsCandidate) : timeUs;
 
         List<byte[]> nals = splitAnnexBNalUnits(pes, payloadOff, pes.length);
         if (nals.isEmpty()) return null;
@@ -639,7 +692,7 @@ public final class TsToMp4Remuxer {
         if (isKeyFrame) {
             meta.seenIdrVideo = true;
         }
-        return new ParsedVideoSample(normalizedSample.toByteArray(), timeUs, effectiveKeyFrame);
+        return new ParsedVideoSample(normalizedSample.toByteArray(), timeUs, dtsUs, hasExplicitDts, effectiveKeyFrame);
     }
 
     public static List<byte[]> splitAnnexBNalUnits(byte[] buf, int start, int end) {
@@ -1092,11 +1145,17 @@ public final class TsToMp4Remuxer {
 
         @Override
         public void onVideoSample(byte[] data, int len, long timeUs, boolean isKeyFrame) {
+            onVideoSampleWithDts(data, len, timeUs, timeUs, false, isKeyFrame);
+        }
+
+        @Override
+        public void onVideoSampleWithDts(byte[] data, int len, long ptsUs, long dtsUs,
+                                         boolean hasExplicitDts, boolean isKeyFrame) {
             if (!muxerStarted || videoTrackIdx < 0 || data == null || len <= 0) return;
             int safeLen = Math.min(len, data.length);
             if (safeLen <= 0) return;
-            pendingVideoQueue.add(new PendingVideoSample(Arrays.copyOf(data, safeLen), timeUs, isKeyFrame));
-            videoDtsHeap.add(timeUs);
+            pendingVideoQueue.add(new PendingVideoSample(Arrays.copyOf(data, safeLen), ptsUs, dtsUs, hasExplicitDts, isKeyFrame));
+            videoDtsHeap.add(ptsUs);
             while (pendingVideoQueue.size() > REORDER_WINDOW) {
                 flushOnePendingVideoSample();
             }
@@ -1106,7 +1165,9 @@ public final class TsToMp4Remuxer {
             PendingVideoSample sample = pendingVideoQueue.poll();
             if (sample == null) return;
             Long polledDts = videoDtsHeap.poll();
-            long dts = polledDts != null ? polledDts : sample.ptsUs;
+            long dts = sample.hasExplicitDts
+                    ? sample.dtsUs
+                    : (polledDts != null ? polledDts : sample.ptsUs);
             if (dts <= lastVideoDtsUs) {
                 dts = lastVideoDtsUs + 1000L;
             }
@@ -1678,11 +1739,15 @@ public final class TsToMp4Remuxer {
     private static final class ParsedVideoSample {
         final byte[] data;
         final long timeUs;
+        final long dtsUs;
+        final boolean hasExplicitDts;
         final boolean isKeyFrame;
 
-        ParsedVideoSample(byte[] data, long timeUs, boolean isKeyFrame) {
+        ParsedVideoSample(byte[] data, long timeUs, long dtsUs, boolean hasExplicitDts, boolean isKeyFrame) {
             this.data = data;
             this.timeUs = timeUs;
+            this.dtsUs = dtsUs;
+            this.hasExplicitDts = hasExplicitDts;
             this.isKeyFrame = isKeyFrame;
         }
     }
@@ -1700,11 +1765,13 @@ public final class TsToMp4Remuxer {
     private static final class BufferedFrame {
         final byte[] data;
         final long timeUs;
+        final long dtsUs;
         final boolean isKeyFrame;
 
-        BufferedFrame(byte[] data, long timeUs, boolean isKeyFrame) {
+        BufferedFrame(byte[] data, long timeUs, long dtsUs, boolean isKeyFrame) {
             this.data = data;
             this.timeUs = timeUs;
+            this.dtsUs = dtsUs;
             this.isKeyFrame = isKeyFrame;
         }
     }
@@ -1712,11 +1779,15 @@ public final class TsToMp4Remuxer {
     private static final class PendingVideoSample {
         final byte[] data;
         final long ptsUs;
+        final long dtsUs;
+        final boolean hasExplicitDts;
         final boolean isKeyFrame;
 
-        PendingVideoSample(byte[] data, long ptsUs, boolean isKeyFrame) {
+        PendingVideoSample(byte[] data, long ptsUs, long dtsUs, boolean hasExplicitDts, boolean isKeyFrame) {
             this.data = data;
             this.ptsUs = ptsUs;
+            this.dtsUs = dtsUs;
+            this.hasExplicitDts = hasExplicitDts;
             this.isKeyFrame = isKeyFrame;
         }
     }

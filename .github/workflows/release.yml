@@ -53,10 +53,10 @@ jobs:
           mkdir -p dist-artifacts
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           cp "$APK_PATH" dist-artifacts/File-Manager-Pro.apk
-          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.8.apk
-          zip -r dist-artifacts/File-Manager-Pro-v0.3.8-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
+          cp "$APK_PATH" dist-artifacts/File-Manager-Pro-v0.3.8.1.apk
+          zip -r dist-artifacts/File-Manager-Pro-v0.3.8.1-Source.zip . -x ".git/*" "app/build/*" ".gradle/*" "dist-artifacts/*"
 
-      - name: Determine Release Tag (V1..V13...)
+      - name: Determine Release Tag (V1..V14...)
         id: calc_tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +67,7 @@ jobs:
           else
             LATEST_TITLE=$(gh release list --limit 1 --json name --jq '.[0].name' 2>/dev/null || true)
             LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.8"; then
+            if [ -n "$LATEST_TAG" ] && echo "$LATEST_TITLE" | grep -q "v0.3.8.1"; then
               NEXT_TAG="$LATEST_TAG"
             else
               HIGHEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^V[0-9]+$' | sed 's/V//' | sort -nr | head -n 1 || true)
@@ -87,44 +87,43 @@ jobs:
           TAG: ${{ steps.calc_tag.outputs.tag }}
         run: |
           cat <<EOF > release-notes.md
-          ### שיפורים ותיקונים בגירסה 0.3.8 (${TAG})
-          • **תיקון שורשי לנגינת וידאו MTS/M2TS:** מניעת לולאת האיפוסים החוזרת ("מכין זרם MTS לצפייה חלקה..."), ייצוב זיהוי Access Units במנוע \`SeekableTsExtractor\`, שמירת היסט רציף בקבצים מאוחדים והקשחת ממיר ה-MP4 וטבלת \`ctts\`.
-          • **תיקון תצוגת מקדימה ומתיחת וידאו:** מניעת מריחת הווידאו בתצוגה המקדימה (בנגן ובעורך הווידאו), כיבוד זווית סיבוב (\`unappliedRotationDegrees\`) ויחס פיקסלים, והפעלה מיידית של מצבי התאמה/מילוי/מתיחה גם על תצוגת המקדימה.
-          • **מנגנון עדכונים אוניברסלי:** תמיכה מלאה בכל תבנית מספרית של גרסאות (2, 3, 4 חלקים ויותר) כולל זיהוי לפי \`VersionCode: 39\`.
-          • **מיון קבצים עצמאי לכל תיקייה וקטגוריה:** שמירת שיטת וכיוון המיון בנפרד לכל תיקייה וקטגוריה מבלי להשפיע על שאר התיקיות והקטגוריות.
+          ### שיפורים ותיקונים בגירסה 0.3.8.1 (${TAG})
+          • **מנוע LibVLC מלא לקבצי MTS / M2TS / TS:** ניגון חלק ב-100% עם פענוח חומרה/FFmpeg ו-Yadif Deinterlacing בנגן הווידאו, בחותך הווידאו ובעורך הווידאו Pro (ללא תקיעות, לולאות איפוס או קפיצות פריימים).
+          • **שדרוג מלא של חותך, עורך, דחיסת וידאו ו-GIF לקבצי MTS:** חיתוך מדויק מ-Keyframe קודם (\`SEEK_TO_PREVIOUS_SYNC\`), שמירת זווית סיבוב, המרת מקטע MTS חלקה לפני דחיסה ב-`VideoCompressor`, תמיכה ביצירת GIF מ-MTS ב-`GifToolsHelper`, ופענוח DTS מפורש ב-`TsToMp4Remuxer` + שיפור סנכרון דילוג אחורה ב-`MpegTsNormalizer`.
+          • **שם קובץ מלא במסך האודיו:** הצגת השם המלא של קובץ השמע בכותרת העליונה ללא קיצור או חיתוך, גם על פני כמה שורות לפי הצורך.
 
           ### הורדה ישירה
           - **קובץ התקנה לאנדרואיד (APK חתום במפתח קבוע):** \`File-Manager-Pro.apk\`
-          - **קובץ התקנה מתויג גירסה 0.3.8:** \`File-Manager-Pro-v0.3.8.apk\`
-          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.8-Source.zip\`
+          - **קובץ התקנה מתויג גירסה 0.3.8.1:** \`File-Manager-Pro-v0.3.8.1.apk\`
+          - **קובץ קוד מקור מלא של הפרויקט (ZIP):** \`File-Manager-Pro-v0.3.8.1-Source.zip\`
 
           ### פרטים טכניים
-          - VersionCode: 39
+          - VersionCode: 40
 
           ### פיתוח והנדסה
           - **פיתוח והנדסה:** @אש התורה — [במתמחים טופ](https://mitmachim.top/user/%D7%90%D7%A9-%D7%94%D7%AA%D7%95%D7%A8%D7%94) | [בעוגן פליי](https://ogenplay.com/users/724ec656-a4a7-4d31-8ece-fa9938851704)
           EOF
 
-          gh repo edit "${GITHUB_REPOSITORY}" --description "File Manager Pro v0.3.8 רשמית — מנהל קבצים מתקדם לאנדרואיד" || true
+          gh repo edit "${GITHUB_REPOSITORY}" --description "File Manager Pro v0.3.8.1 רשמית — מנהל קבצים מתקדם לאנדרואיד" || true
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true >/dev/null || true
             gh release edit "$TAG" \
-              --title "${TAG} — File Manager Pro v0.3.8" \
+              --title "${TAG} — File Manager Pro v0.3.8.1" \
               --notes-file release-notes.md \
               --draft=false \
               --prerelease=false
             gh release upload "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.8.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.8-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.3.8.1.apk \
+              dist-artifacts/File-Manager-Pro-v0.3.8.1-Source.zip \
               --clobber
           else
             gh release create "$TAG" \
               dist-artifacts/File-Manager-Pro.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.8.apk \
-              dist-artifacts/File-Manager-Pro-v0.3.8-Source.zip \
+              dist-artifacts/File-Manager-Pro-v0.3.8.1.apk \
+              dist-artifacts/File-Manager-Pro-v0.3.8.1-Source.zip \
               --target "$GITHUB_SHA" \
-              --title "${TAG} — File Manager Pro v0.3.8" \
+              --title "${TAG} — File Manager Pro v0.3.8.1" \
               --notes-file release-notes.md
           fi

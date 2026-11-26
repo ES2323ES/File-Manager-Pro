@@ -96,6 +96,19 @@ public class ChangelogDialogHelper {
         headerRow.addView(rightTitleGroup, rightLp);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.8.1 =====================
+        SpannableStringBuilder v381 = new SpannableStringBuilder();
+        appendBullet(v381, "מנוע LibVLC מלא לנגינת וידאו MTS / M2TS / TS: ", accent,
+                "נגינה חלקה במאה אחוז עם פענוח חומרה/FFmpeg ו-Yadif Deinterlacing בנגן הווידאו, בחותך הווידאו ובעורך הווידאו Pro (ללא תקיעות, לולאות איפוס או קפיצות פריימים).", textPrimary);
+        appendBullet(v381, "\n\nשדרוג מקצה לקצה לחיתוך, עריכה, דחיסה ו-GIF: ", accent,
+                "חיתוך מדויק מ-Keyframe קודם (SEEK_TO_PREVIOUS_SYNC), שמירת זווית סיבוב, קדם-נרמול שקוף של MTS בדחיסת וידאו וביצירת GIF, פענוח DTS מפורש ב-TsToMp4Remuxer ושיפור סנכרון בדילוג אחורה ב-MpegTsNormalizer.", textPrimary);
+        appendBullet(v381, "\n\nשם קובץ מלא במסך האודיו: ", accent,
+                "תצוגת השם המלא של קובץ השמע בכותרת העליונה ללא קיצור או חיתוך, כולל גלישה למספר שורות לפי הצורך.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.8.1", "הגירסה הנוכחית • LibVLC ל-MTS, שדרוג עריכת וידאו ושם קובץ מלא באודיו",
+                accent, textPrimary, textSecondary, subtleBg, divider, v381);
+
         // ===================== גירסה 0.3.8 =====================
         SpannableStringBuilder v38 = new SpannableStringBuilder();
         appendBullet(v38, "תיקון שורשי לנגינת וידאו MTS/M2TS: ", accent,
@@ -107,8 +120,8 @@ public class ChangelogDialogHelper {
         appendBullet(v38, "\n\nמיון קבצים עצמאי לכל תיקייה וקטגוריה: ", accent,
                 "שמירת שיטת וכיוון המיון בנפרד לכל תיקייה וקטגוריה מבלי להשפיע על שאר התיקיות והקטגוריות.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.3.8", "הגירסה הנוכחית • תיקון MTS, תצוגת מקדימה ומיון עצמאי",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.3.8", "תיקון MTS, תצוגת מקדימה ומיון עצמאי",
                 accent, textPrimary, textSecondary, subtleBg, divider, v38);
 
         // ===================== גירסה 0.3.7.1 =====================

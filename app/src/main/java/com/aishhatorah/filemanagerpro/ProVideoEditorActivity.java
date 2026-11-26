@@ -52,7 +52,10 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private File sourceVideo;
+    private boolean isMtsOrTsSource = false;
     private TextureView textureView;
+    private Surface previewSurface;
+    private VlcMtsPlayerHelper vlcPreviewPlayer;
     private MediaPlayer previewPlayer;
     private int durationMs = 1000;
     private int trimStartMs = 0;
@@ -60,6 +63,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
     private int rotationDegrees = 0;
     private int previewVideoWidth = 0;
     private int previewVideoHeight = 0;
+    private float previewPixelRatio = 1.0f;
+    private long lastPreviewSeekMs = 0L;
     private boolean muteAudio = false;
     private float previewSpeed = 1.0f;
     private VideoCompressor.QualityPreset selectedPreset = VideoCompressor.QualityPreset.ORIGINAL;
@@ -87,6 +92,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
             finish();
             return;
         }
+        isMtsOrTsSource = MpegTsNormalizer.isLikelyMpegTsName(sourceVideo.getName())
+                || MpegTsNormalizer.detectTsLayoutCached(sourceVideo).packetStride > 0;
 
         int theme = PrefsManager.getThemeMode(this);
         ThemeHelper.applyWindowStatusBar(this, theme);
@@ -160,8 +167,19 @@ public class ProVideoEditorActivity extends AppCompatActivity {
             trimStartMs = (int) s;
             trimEndMs = (int) e;
             updateSummaryLabel();
-            if (previewPlayer != null && movingStart) {
-                try { previewPlayer.seekTo(trimStartMs); } catch (Exception ignored) {}
+            if (movingStart && (vlcPreviewPlayer != null || previewPlayer != null)) {
+                long now = System.currentTimeMillis();
+                if (now - lastPreviewSeekMs >= 160L) {
+                    lastPreviewSeekMs = now;
+                    try {
+                        if (vlcPreviewPlayer != null) {
+                            vlcPreviewPlayer.seekTo(trimStartMs);
+                        } else if (previewPlayer != null) {
+                            previewPlayer.seekTo(trimStartMs);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
             }
         });
         tools.addView(rangeTrimView);
@@ -213,6 +231,14 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         chipsRow.setPadding(0, 12, 0, 8);
 
         addChip(chipsRow, "נגן / השהה מקטע", theme, () -> {
+            if (vlcPreviewPlayer != null) {
+                if (vlcPreviewPlayer.isPlaying()) vlcPreviewPlayer.pause();
+                else {
+                    vlcPreviewPlayer.seekTo(trimStartMs);
+                    vlcPreviewPlayer.play();
+                }
+                return;
+            }
             if (previewPlayer == null) return;
             try {
                 if (previewPlayer.isPlaying()) previewPlayer.pause();
@@ -235,7 +261,9 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         for (float sp : speeds) {
             addChip(chipsRow, String.format(Locale.US, "מהירות %.1fx", sp), theme, () -> {
                 previewSpeed = sp;
-                if (previewPlayer != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (vlcPreviewPlayer != null) {
+                    vlcPreviewPlayer.setPlaybackSpeed(previewSpeed);
+                } else if (previewPlayer != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
                         PlaybackParams p = previewPlayer.getPlaybackParams();
                         if (p == null) p = new PlaybackParams();
@@ -267,7 +295,9 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         ThemeHelper.applySwitchTint(this, swMute, theme);
         swMute.setOnCheckedChangeListener((btn, checked) -> {
             muteAudio = checked;
-            if (previewPlayer != null) {
+            if (vlcPreviewPlayer != null) {
+                vlcPreviewPlayer.setMuted(checked);
+            } else if (previewPlayer != null) {
                 float vol = checked ? 0f : 1f;
                 previewPlayer.setVolume(vol, vol);
             }
@@ -334,41 +364,139 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-                try {
-                    previewPlayer = new MediaPlayer();
-                    previewPlayer.setDataSource(sourceVideo.getAbsolutePath());
-                    previewPlayer.setSurface(new Surface(surface));
-                    previewPlayer.setLooping(true);
-                    previewPlayer.setOnVideoSizeChangedListener((mp, w, h) -> {
-                        if (w > 0 && h > 0) {
-                            previewVideoWidth = w;
-                            previewVideoHeight = h;
-                            updatePreviewTransform();
-                        }
-                    });
-                    previewPlayer.prepare();
-                    previewVideoWidth = previewPlayer.getVideoWidth();
-                    previewVideoHeight = previewPlayer.getVideoHeight();
-                    updatePreviewTransform();
-                    durationMs = Math.max(1000, previewPlayer.getDuration());
-                    trimStartMs = 0;
-                    trimEndMs = durationMs;
-                    rangeTrimView.setDurationAndRange(durationMs, trimStartMs, trimEndMs);
-                    updateSummaryLabel();
-                    previewPlayer.start();
-                } catch (Exception e) {
-                    Toast.makeText(ProVideoEditorActivity.this, "שגיאה בטעינת תצוגה מקדימה: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                previewSurface = new Surface(surface);
+                if (isMtsOrTsSource) {
+                    startVlcPreview(width, height);
+                    return;
                 }
+                startMediaPlayerPreview();
             }
             @Override public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                if (vlcPreviewPlayer != null) {
+                    vlcPreviewPlayer.updateWindowSize(width, height);
+                }
                 updatePreviewTransform();
             }
             @Override public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                if (vlcPreviewPlayer != null) {
+                    vlcPreviewPlayer.detachSurface();
+                }
                 releasePreview();
+                previewSurface = null;
                 return true;
             }
             @Override public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {}
         });
+    }
+
+    private void startVlcPreview(int width, int height) {
+        releasePreview();
+        try {
+            vlcPreviewPlayer = new VlcMtsPlayerHelper(this, new VlcMtsPlayerHelper.Callback() {
+                @Override
+                public void onPrepared(int durMs) {
+                    if (vlcPreviewPlayer == null || isFinishing() || isDestroyed()) return;
+                    if (durMs > 1000 && (durationMs <= 1000 || Math.abs(durationMs - durMs) > 500)) {
+                        boolean firstInit = durationMs <= 1000;
+                        durationMs = durMs;
+                        if (firstInit) {
+                            trimStartMs = 0;
+                            trimEndMs = durationMs;
+                            rangeTrimView.setDurationAndRange(durationMs, trimStartMs, trimEndMs);
+                        } else {
+                            trimEndMs = Math.min(trimEndMs <= 1000 ? durationMs : trimEndMs, durationMs);
+                            rangeTrimView.setDurationAndRange(durationMs, trimStartMs, trimEndMs);
+                        }
+                        updateSummaryLabel();
+                    }
+                }
+
+                @Override
+                public void onVideoSizeChanged(int w, int h, float sar) {
+                    if (vlcPreviewPlayer == null || w <= 0 || h <= 0) return;
+                    previewVideoWidth = w;
+                    previewVideoHeight = h;
+                    previewPixelRatio = sar > 0f ? sar : 1.0f;
+                    updatePreviewTransform();
+                }
+
+                @Override
+                public void onFirstFrameRendered() {
+                }
+
+                @Override
+                public void onPlayingChanged(boolean isPlaying) {
+                }
+
+                @Override
+                public void onEndReached() {
+                }
+
+                @Override
+                public void onError() {
+                    if (vlcPreviewPlayer != null && !isFinishing() && !isDestroyed()) {
+                        startMediaPlayerPreview();
+                    }
+                }
+            });
+            vlcPreviewPlayer.setLooping(true);
+            if (previewSurface != null) {
+                vlcPreviewPlayer.attachSurface(previewSurface, width, height);
+            }
+            vlcPreviewPlayer.load(sourceVideo, true, muteAudio);
+
+            executor.execute(() -> {
+                long tsDur = MpegTsNormalizer.extractTsDurationMs(sourceVideo);
+                if (tsDur > 1000L) {
+                    final int finalDur = (int) Math.min(Integer.MAX_VALUE, tsDur);
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed() && durationMs <= 1000) {
+                            durationMs = finalDur;
+                            trimStartMs = 0;
+                            trimEndMs = durationMs;
+                            rangeTrimView.setDurationAndRange(durationMs, trimStartMs, trimEndMs);
+                            updateSummaryLabel();
+                        }
+                    });
+                }
+            });
+        } catch (Throwable ignored) {
+            startMediaPlayerPreview();
+        }
+    }
+
+    private void startMediaPlayerPreview() {
+        releasePreview();
+        if (previewSurface == null) return;
+        try {
+            previewPlayer = new MediaPlayer();
+            previewPlayer.setDataSource(sourceVideo.getAbsolutePath());
+            previewPlayer.setSurface(previewSurface);
+            previewPlayer.setLooping(true);
+            float vol = muteAudio ? 0f : 1f;
+            previewPlayer.setVolume(vol, vol);
+            previewPlayer.setOnVideoSizeChangedListener((mp, w, h) -> {
+                if (w > 0 && h > 0) {
+                    previewVideoWidth = w;
+                    previewVideoHeight = h;
+                    previewPixelRatio = 1.0f;
+                    updatePreviewTransform();
+                }
+            });
+            previewPlayer.prepare();
+            previewVideoWidth = previewPlayer.getVideoWidth();
+            previewVideoHeight = previewPlayer.getVideoHeight();
+            previewPixelRatio = 1.0f;
+            updatePreviewTransform();
+            durationMs = Math.max(1000, previewPlayer.getDuration());
+            trimStartMs = 0;
+            trimEndMs = durationMs;
+            rangeTrimView.setDurationAndRange(durationMs, trimStartMs, trimEndMs);
+            updateSummaryLabel();
+            previewPlayer.start();
+        } catch (Exception e) {
+            Toast.makeText(ProVideoEditorActivity.this, "שגיאה בטעינת תצוגה מקדימה: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void updatePreviewTransform() {
@@ -380,12 +508,15 @@ public class ProVideoEditorActivity extends AppCompatActivity {
         float cx = vw * 0.5f;
         float cy = vh * 0.5f;
         int rot = ((rotationDegrees % 360) + 360) % 360;
-        float effW = (rot == 90 || rot == 270) ? (float) previewVideoHeight : (float) previewVideoWidth;
-        float effH = (rot == 90 || rot == 270) ? (float) previewVideoWidth : (float) previewVideoHeight;
+        float sar = previewPixelRatio > 0.1f ? previewPixelRatio : 1.0f;
+        float rawW = (rot == 90 || rot == 270) ? (float) previewVideoHeight : ((float) previewVideoWidth * sar);
+        float rawH = (rot == 90 || rot == 270) ? ((float) previewVideoWidth * sar) : (float) previewVideoHeight;
+        float effW = (rot == 90 || rot == 270) ? rawH : rawW;
+        float effH = (rot == 90 || rot == 270) ? rawW : rawH;
         float fitScale = Math.min((float) vw / effW, (float) vh / effH);
 
         Matrix m = new Matrix();
-        m.setScale((float) previewVideoWidth / (float) vw, (float) previewVideoHeight / (float) vh, cx, cy);
+        m.setScale(rawW / (float) vw, rawH / (float) vh, cx, cy);
         if (rot != 0) {
             m.postRotate(rot, cx, cy);
         }
@@ -457,7 +588,8 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 true);
 
         final long startUs = trimStartMs * 1000L;
-        final long endUs = Math.max(startUs + 500_000L, trimEndMs * 1000L);
+        final long rawEndUs = Math.max(startUs + 500_000L, trimEndMs * 1000L);
+        final long endUs = (durationMs > 0 && trimEndMs >= durationMs - 250) ? Long.MAX_VALUE : rawEndUs;
         final int rot = rotationDegrees;
         final boolean dropAudio = muteAudio;
         final float speedVal = previewSpeed;
@@ -515,16 +647,67 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 return;
             }
 
+            if (isMtsOrTsSource && !dropAudio && rot == 0 && Math.abs(speedVal - 1.0f) < 0.02f) {
+                try {
+                    TsToMp4Remuxer.remuxToMp4(
+                            sourceVideo,
+                            outFile,
+                            startUs,
+                            endUs,
+                            pct -> {
+                                progress.updatePercent(outFile.getName(), pct, "המרת MTS");
+                                runOnUiThread(() -> btnExport.setText("מייצא MTS " + pct + "%"));
+                            }
+                    );
+                    progress.finish();
+                    final File saved = outFile;
+                    runOnUiThread(() -> {
+                        btnExport.setText("ייצא ושמור");
+                        btnExport.setEnabled(true);
+                        lastExportedFile = saved;
+                        btnShareOutput.setVisibility(View.VISIBLE);
+                        Toast.makeText(this, "הסרטון הערוך נשמר: " + saved.getName(), Toast.LENGTH_LONG).show();
+                    });
+                } catch (Exception e) {
+                    progress.finish();
+                    if (outFile.exists()) outFile.delete();
+                    runOnUiThread(() -> {
+                        btnExport.setText("ייצא ושמור");
+                        btnExport.setEnabled(true);
+                        Toast.makeText(this, "שגיאה בייצוא MTS: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    });
+                }
+                return;
+            }
+
             MediaExtractor extractor = new MediaExtractor();
             MediaMuxer muxer = null;
+            File tempMtsRemux = null;
             try {
-                extractor.setDataSource(sourceVideo.getAbsolutePath());
+                File mp4Input = sourceVideo;
+                long extStartUs = startUs;
+                long extEndUs = endUs;
+                if (isMtsOrTsSource) {
+                    tempMtsRemux = new File(getCacheDir(), "pro_edit_mts_" + System.currentTimeMillis() + ".mp4");
+                    TsToMp4Remuxer.remuxToMp4(
+                            sourceVideo,
+                            tempMtsRemux,
+                            startUs,
+                            endUs,
+                            pct -> progress.updatePercent(outFile.getName(), pct / 2, "הכנת MTS")
+                    );
+                    mp4Input = tempMtsRemux;
+                    extStartUs = 0L;
+                    extEndUs = Long.MAX_VALUE;
+                }
+
+                extractor.setDataSource(mp4Input.getAbsolutePath());
                 int trackCount = extractor.getTrackCount();
                 muxer = new MediaMuxer(outFile.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-                muxer.setOrientationHint(rot);
 
                 Map<Integer, Integer> indexMap = new HashMap<>();
                 int maxBufSize = 1024 * 1024;
+                int srcRot = 0;
 
                 for (int i = 0; i < trackCount; i++) {
                     MediaFormat fmt = extractor.getTrackFormat(i);
@@ -532,6 +715,9 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                     if (mime == null) continue;
                     if (mime.startsWith("video/") || (!dropAudio && mime.startsWith("audio/"))) {
                         extractor.selectTrack(i);
+                        if (mime.startsWith("video/") && fmt.containsKey(MediaFormat.KEY_ROTATION)) {
+                            srcRot = fmt.getInteger(MediaFormat.KEY_ROTATION);
+                        }
                         int dstIdx = muxer.addTrack(fmt);
                         indexMap.put(i, dstIdx);
                         if (fmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
@@ -539,30 +725,34 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                         }
                     }
                 }
+                muxer.setOrientationHint(((srcRot + rot) % 360 + 360) % 360);
 
-                extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+                extractor.seekTo(extStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
                 ByteBuffer buf = ByteBuffer.allocate(maxBufSize);
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                 muxer.start();
 
-                long totalSpanUs = Math.max(1L, endUs - startUs);
+                long spanBaseUs = extEndUs == Long.MAX_VALUE
+                        ? Math.max(500_000L, (long) (trimEndMs - trimStartMs) * 1000L)
+                        : Math.max(1L, extEndUs - extStartUs);
                 int lastPct = -1;
                 while (true) {
                     info.offset = 0;
                     info.size = extractor.readSampleData(buf, 0);
                     if (info.size < 0) break;
                     long pts = extractor.getSampleTime();
-                    if (pts > endUs) break;
+                    if (pts > extEndUs) break;
 
                     int srcTrack = extractor.getSampleTrackIndex();
                     Integer dstTrack = indexMap.get(srcTrack);
-                    if (dstTrack != null && pts >= startUs) {
-                        info.presentationTimeUs = Math.max(0L, (long) ((pts - startUs) / previewSpeed));
+                    if (dstTrack != null && pts >= extStartUs) {
+                        info.presentationTimeUs = Math.max(0L, (long) ((pts - extStartUs) / speedVal));
                         int sampleFlags = extractor.getSampleFlags();
                         info.flags = (sampleFlags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
                                 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
                         muxer.writeSampleData(dstTrack, buf, info);
-                        int pct = (int) Math.min(99L, ((pts - startUs) * 100L) / totalSpanUs);
+                        int pct = (int) Math.min(99L, ((pts - extStartUs) * 100L) / spanBaseUs);
+                        if (isMtsOrTsSource) pct = 50 + (pct / 2);
                         if (pct != lastPct) {
                             lastPct = pct;
                             progress.updatePercent(outFile.getName(), pct, "ייצוא מהיר");
@@ -576,6 +766,7 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 progress.finish();
                 final File saved = outFile;
                 runOnUiThread(() -> {
+                    btnExport.setText("ייצא ושמור");
                     btnExport.setEnabled(true);
                     lastExportedFile = saved;
                     btnShareOutput.setVisibility(View.VISIBLE);
@@ -585,21 +776,40 @@ public class ProVideoEditorActivity extends AppCompatActivity {
                 progress.finish();
                 if (outFile.exists()) outFile.delete();
                 runOnUiThread(() -> {
+                    btnExport.setText("ייצא ושמור");
                     btnExport.setEnabled(true);
                     Toast.makeText(this, "שגיאה בייצוא הסרטון: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             } finally {
                 try { extractor.release(); } catch (Exception ignored) {}
                 if (muxer != null) try { muxer.release(); } catch (Exception ignored) {}
+                if (tempMtsRemux != null && tempMtsRemux.exists()) {
+                    try { tempMtsRemux.delete(); } catch (Throwable ignored) {}
+                }
             }
         });
     }
 
     private void releasePreview() {
+        if (vlcPreviewPlayer != null) {
+            try { vlcPreviewPlayer.release(); } catch (Exception ignored) {}
+            vlcPreviewPlayer = null;
+        }
         if (previewPlayer != null) {
             try { previewPlayer.stop(); } catch (Exception ignored) {}
             try { previewPlayer.release(); } catch (Exception ignored) {}
             previewPlayer = null;
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (vlcPreviewPlayer != null) {
+            try { vlcPreviewPlayer.pause(); } catch (Throwable ignored) {}
+        }
+        if (previewPlayer != null) {
+            try { if (previewPlayer.isPlaying()) previewPlayer.pause(); } catch (Throwable ignored) {}
         }
     }
 

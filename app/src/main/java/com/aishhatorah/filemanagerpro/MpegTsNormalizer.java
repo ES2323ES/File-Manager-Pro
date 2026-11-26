@@ -459,6 +459,7 @@ public final class MpegTsNormalizer {
         private int cachedPacketCount = 0;
         private long lastRafPhysPos = -1L;
         private long cumulativeResyncBytes = 0L;
+        private long lastResyncPacket = -1L;
         private boolean closed = false;
 
         public NormalizedTsStreamReader(File file, TsFormatInfo info) throws IOException {
@@ -519,9 +520,11 @@ public final class MpegTsNormalizer {
                 cachedPacketCount = 0;
                 return;
             }
-            // באיפוס לאחור לפני חלון מוסנכרן, מאפסים את היסט התיקון המצטבר כדי שנקרא מחדש בצורה נקייה
-            if (cachedStartPacket >= 0L && startPkt < cachedStartPacket) {
+            // בחזרה לאחור אל לפני נקודת התיקון האחרונה, מאפסים את היסט הסנכרון לקריאה נקייה
+            if (cachedStartPacket >= 0L && startPkt < cachedStartPacket
+                    && (lastResyncPacket < 0L || startPkt < lastResyncPacket)) {
                 cumulativeResyncBytes = 0L;
+                lastResyncPacket = -1L;
             }
             int pktsToRead = (int) Math.min(CACHE_PACKETS, remainingPackets);
             int bytesToRead = (pktsToRead - 1) * info.packetStride + TS_PACKET_SIZE;
@@ -544,9 +547,13 @@ public final class MpegTsNormalizer {
             }
 
             // התאוששות אוטומטית אם באמצע קובץ מאוחד הוזזו הפאקטים בכמה בתים ושמירת ההיסט להמשך הקריאה
-            if (cacheBuf[0] != TS_SYNC_BYTE && readSoFar >= info.packetStride * 3 + TS_PACKET_SIZE) {
+            boolean needsResync = readSoFar >= info.packetStride * 3 + TS_PACKET_SIZE
+                    && (cacheBuf[0] != TS_SYNC_BYTE
+                        || (cacheBuf[info.packetStride] != TS_SYNC_BYTE
+                            && cacheBuf[info.packetStride * 2] != TS_SYNC_BYTE));
+            if (needsResync) {
                 int resyncShift = -1;
-                int searchMax = Math.min(readSoFar - info.packetStride * 2 - TS_PACKET_SIZE, info.packetStride * 4);
+                int searchMax = Math.min(readSoFar - info.packetStride * 2 - TS_PACKET_SIZE, info.packetStride * 6);
                 for (int s = 1; s <= searchMax; s++) {
                     if (cacheBuf[s] == TS_SYNC_BYTE
                             && cacheBuf[s + info.packetStride] == TS_SYNC_BYTE
@@ -557,6 +564,7 @@ public final class MpegTsNormalizer {
                 }
                 if (resyncShift > 0) {
                     cumulativeResyncBytes += resyncShift;
+                    lastResyncPacket = startPkt;
                     int shiftedLen = readSoFar - resyncShift;
                     System.arraycopy(cacheBuf, resyncShift, cacheBuf, 0, shiftedLen);
                     readSoFar = shiftedLen;

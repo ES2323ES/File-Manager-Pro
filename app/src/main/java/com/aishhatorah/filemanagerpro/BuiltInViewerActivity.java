@@ -200,6 +200,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private boolean isInPipMode = false;
     private final List<File> videoPlaylist = new ArrayList<>();
     private int currentVideoIdx = 0;
+    private VlcMtsPlayerHelper vlcPlayer;
     private ExoPlayer exoPlayer;
     private MediaPlayer videoPlayer;
     private Closeable legacyMediaSourceCloser;
@@ -967,7 +968,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         int areaPad = isPdfLayout ? 0 : (isAudioMode ? dp(isLandscape ? 8 : 14) : (isLandscape ? dp(8) : dp(12)));
         contentArea.setPadding(areaPad, areaPad, areaPad, areaPad);
         root.addView(contentArea, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         if (isAudioMode) {
             FrameLayout audioOverlayFrame = new FrameLayout(this);
@@ -1042,8 +1043,13 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             tvMarqueeTitle.setTypeface(Typeface.DEFAULT_BOLD);
             tvMarqueeTitle.setTextColor(isVideoMode ? Color.WHITE : effectiveText);
             tvMarqueeTitle.setSingleLine(false);
-            tvMarqueeTitle.setMaxLines(2);
-            tvMarqueeTitle.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            if (isAudioMode) {
+                tvMarqueeTitle.setMaxLines(Integer.MAX_VALUE);
+                tvMarqueeTitle.setEllipsize(null);
+            } else {
+                tvMarqueeTitle.setMaxLines(2);
+                tvMarqueeTitle.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            }
             tvMarqueeTitle.setTextDirection(View.TEXT_DIRECTION_LOCALE);
             tvMarqueeTitle.setGravity(Gravity.CENTER);
             if (isVideoMode) {
@@ -2954,13 +2960,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             boolean wasAwaiting = awaitingInitialVideoPlay;
             awaitingInitialVideoPlay = false;
             suppressNextVideoAutoPlay = false;
-            if (exoPlayer == null && videoPlayer == null) {
+            if (!hasActiveVideoPlayer()) {
                 loadVideoTrackAtIndex(currentVideoIdx, syncVidButtons);
                 applyMediaImmersiveAndLayoutState();
                 return;
             }
             if (!videoPrepared) {
-                if (exoPlayer != null) {
+                if (vlcPlayer != null) {
+                    vlcPlayer.play();
+                } else if (exoPlayer != null) {
                     exoPlayer.setPlayWhenReady(true);
                     exoPlayer.play();
                     if (targetFile != null
@@ -3082,7 +3090,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
                 activeVideoSurface = new Surface(surface);
                 hasAppliedVideoMatrix = false;
-                if (exoPlayer != null) {
+                if (vlcPlayer != null) {
+                    vlcPlayer.attachSurface(activeVideoSurface, width, height);
+                    updateVideoAspectRatioMatrix();
+                } else if (exoPlayer != null) {
                     exoPlayer.setVideoSurface(activeVideoSurface);
                     updateVideoAspectRatioMatrix();
                 } else if (videoPlayer != null) {
@@ -3094,11 +3105,17 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
             @Override
             public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                if (vlcPlayer != null) {
+                    vlcPlayer.updateWindowSize(width, height);
+                }
                 hasAppliedVideoMatrix = false;
                 updateVideoAspectRatioMatrix();
             }
             @Override
             public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                if (vlcPlayer != null) {
+                    vlcPlayer.detachSurface();
+                }
                 if (exoPlayer != null) {
                     try { exoPlayer.setVideoSurface(null); } catch (Exception ignored) {}
                 }
@@ -3121,7 +3138,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             @Override
             public void run() {
                 if (!videoTickerActive) return;
-                if (videoPrepared && (exoPlayer != null || videoPlayer != null)) {
+                if (videoPrepared && hasActiveVideoPlayer()) {
                     try {
                         videoSeek.setPlaying(isVideoPlayingSafely());
                         int dur = getEffectiveVideoDurationMs();
@@ -3130,7 +3147,8 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
                         // זיהוי אוטומטי אם זרם MTS גולמי חוזר להתחלה מעצמו בגלל איפוס PTS חוזר
                         if (!isUserSeekingVideo && now >= holdSeekUiUntilMs && isVideoPlayingSafely()) {
-                            if (pos + 700 < lastObservedVideoPosMs
+                            if (vlcPlayer == null
+                                    && pos + 700 < lastObservedVideoPosMs
                                     && lastObservedVideoPosMs >= 3500
                                     && lastObservedVideoPosMs < (dur > 4500 ? dur - 1500 : Integer.MAX_VALUE)
                                     && videoRepeatMode == AudioPlayerManager.REPEAT_OFF
@@ -3478,7 +3496,11 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         final boolean isMpegTsFile = MpegTsNormalizer.isLikelyMpegTsName(nextFile.getName())
                 || MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0;
 
-        startVideoExoPlayer(nextFile, onReadyUi, false, false);
+        if (isMpegTsFile) {
+            startVideoVlcPlayer(nextFile, onReadyUi);
+        } else {
+            startVideoExoPlayer(nextFile, onReadyUi, false, false);
+        }
 
         // קריאת משך זמן (ובקבצים רגילים גם מטה-דאטה ותמונת פתיחה) ברקע;
         // עבור MTS/TS מדלגים על MediaMetadataRetriever כדי שלא יתחרה מול ExoPlayer על המפענח החומרתי והדיסק
@@ -3583,6 +3605,94 @@ public class BuiltInViewerActivity extends AppCompatActivity {
             }
         }
         return false;
+    }
+
+    private void startVideoVlcPlayer(File nextFile, Runnable onReadyUi) {
+        releaseVideoPlayer();
+        try {
+            vlcPlayer = new VlcMtsPlayerHelper(this, new VlcMtsPlayerHelper.Callback() {
+                @Override
+                public void onPrepared(int durationMs) {
+                    if (vlcPlayer == null || isFinishing() || isDestroyed()) return;
+                    videoPrepared = true;
+                    if (durationMs > 0) {
+                        knownVideoDurationMs = durationMs;
+                    }
+                    if (Math.abs(videoSpeed - 1.0f) >= 0.02f) {
+                        speedModifiedFromDefault = true;
+                        vlcPlayer.setPlaybackSpeed(videoSpeed);
+                    }
+                    revealVideoSurfaceIfReady();
+                    if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
+                    else if (onReadyUi != null) onReadyUi.run();
+                }
+
+                @Override
+                public void onVideoSizeChanged(int width, int height, float pixelRatio) {
+                    if (vlcPlayer == null || width <= 0 || height <= 0) return;
+                    currentVideoRotationDegrees = 0;
+                    currentVideoWidth = width;
+                    currentVideoHeight = height;
+                    currentVideoPixelRatio = pixelRatio > 0f ? pixelRatio : 1.0f;
+                    hasAppliedVideoMatrix = false;
+                    updateVideoAspectRatioMatrix();
+                }
+
+                @Override
+                public void onFirstFrameRendered() {
+                    if (vlcPlayer == null) return;
+                    videoPrepared = true;
+                    revealVideoSurfaceIfReady();
+                }
+
+                @Override
+                public void onPlayingChanged(boolean isPlaying) {
+                    if (vlcPlayer == null) return;
+                    if (isPlaying) {
+                        revealVideoSurfaceIfReady();
+                    }
+                    if (activeVideoSyncRunnable != null) activeVideoSyncRunnable.run();
+                    else if (onReadyUi != null) onReadyUi.run();
+                }
+
+                @Override
+                public void onEndReached() {
+                    if (vlcPlayer == null || isFinishing() || isDestroyed()) return;
+                    if (videoRepeatMode == AudioPlayerManager.REPEAT_ONE) {
+                        vlcPlayer.restartFromBeginning();
+                    } else if (videoRepeatMode == AudioPlayerManager.REPEAT_FOLDER && !videoPlaylist.isEmpty()) {
+                        advanceVideoPlaylist(1, onReadyUi);
+                    } else if (videoAutoNext && (videoShuffleMode || currentVideoIdx + 1 < videoPlaylist.size())) {
+                        advanceVideoPlaylist(1, onReadyUi);
+                    } else if (activeVideoSyncRunnable != null) {
+                        activeVideoSyncRunnable.run();
+                    } else if (onReadyUi != null) {
+                        onReadyUi.run();
+                    }
+                }
+
+                @Override
+                public void onError() {
+                    if (vlcPlayer == null || isFinishing() || isDestroyed()) return;
+                    if (!exoRemuxFallbackAttempted) {
+                        startRemuxedMtsPlayback(nextFile, onReadyUi);
+                    } else {
+                        startLegacyMediaPlayerFallback(nextFile, false, onReadyUi);
+                    }
+                }
+            });
+
+            if (activeVideoSurface != null) {
+                int w = videoTextureView != null ? videoTextureView.getWidth() : 0;
+                int h = videoTextureView != null ? videoTextureView.getHeight() : 0;
+                vlcPlayer.attachSurface(activeVideoSurface, w, h);
+            }
+            evaluateVideoDeviceSilence(false);
+            boolean autoStart = !suppressNextVideoAutoPlay;
+            vlcPlayer.load(nextFile, autoStart, isEffectiveVideoMuted());
+        } catch (Throwable t) {
+            startRemuxedMtsPlayback(nextFile, onReadyUi);
+        }
     }
 
     @OptIn(markerClass = UnstableApi.class)
@@ -3728,7 +3838,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                 public void onPlayerError(@NonNull PlaybackException error) {
                     if (!exoForcedTsRetry && !isMpegTs && MpegTsNormalizer.detectTsLayoutCached(nextFile).packetStride > 0) {
                         exoForcedTsRetry = true;
-                        startVideoExoPlayer(nextFile, onReadyUi, disableAudioTrack, true);
+                        startVideoVlcPlayer(nextFile, onReadyUi);
                         return;
                     }
                     if (!exoAudioDisabledRetry && isAudioOrCodecError(error)) {
@@ -4174,7 +4284,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                         float w = Math.max(1f, viewport.getWidth());
                         float normX = e.getX() / w;
                         if (normX > 0.34f && normX < 0.66f) {
-                            if (videoPrepared && (exoPlayer != null || videoPlayer != null)) {
+                            if (videoPrepared && hasActiveVideoPlayer()) {
                                 if (isVideoPlayingSafely()) pauseVideoSafely();
                                 else applyVideoSpeedInternal(true);
                                 flashStatusBadge(badge, isVideoPlayingSafely() ? "מנגן" : "מושהה");
@@ -4195,7 +4305,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
                                 || swipeMode[0] != 0 || !PrefsManager.isAutoGestureMode(BuiltInViewerActivity.this)) {
                             return;
                         }
-                        if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
+                        if (!videoPrepared || !hasActiveVideoPlayer()) return;
                         float w = Math.max(1f, viewport.getWidth());
                         float normX = e.getX() / w;
                         if (normX >= 0.62f) {
@@ -4858,8 +4968,15 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         return String.format(Locale.US, "מהירות %.2fx", speed).replaceAll("0x$", "x");
     }
 
+    private boolean hasActiveVideoPlayer() {
+        return vlcPlayer != null || exoPlayer != null || videoPlayer != null;
+    }
+
     private boolean isVideoPlayingSafely() {
         try {
+            if (vlcPlayer != null) {
+                return videoPrepared && vlcPlayer.isPlaying();
+            }
             if (exoPlayer != null) {
                 return videoPrepared && exoPlayer.isPlaying();
             }
@@ -4871,6 +4988,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void pauseVideoSafely() {
         try {
+            if (vlcPlayer != null) {
+                vlcPlayer.pause();
+                return;
+            }
             if (exoPlayer != null) {
                 exoPlayer.pause();
                 return;
@@ -4882,6 +5003,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private int getEffectiveVideoDurationMs() {
         boolean isTs = targetFile != null && MpegTsNormalizer.isLikelyMpegTsName(targetFile.getName());
+        if (vlcPlayer != null) {
+            int raw = vlcPlayer.getDurationMs();
+            if (raw > 0) {
+                knownVideoDurationMs = raw;
+                return raw;
+            }
+            return knownVideoDurationMs;
+        }
         if (exoPlayer != null) {
             try {
                 long raw = exoPlayer.getDuration();
@@ -4913,6 +5042,9 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private int getCurrentVideoPositionMs() {
         try {
+            if (vlcPlayer != null) {
+                return vlcPlayer.getCurrentPositionMs();
+            }
             if (exoPlayer != null) {
                 return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, exoPlayer.getCurrentPosition()));
             }
@@ -4929,6 +5061,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         unexpectedPosResetCount = 0;
         firstPosResetObservedMs = 0L;
         lastObservedVideoPosMs = clamped;
+        if (vlcPlayer != null) {
+            vlcPlayer.seekTo(clamped);
+            return;
+        }
         if (exoPlayer != null) {
             try {
                 exoPlayer.seekTo(clamped);
@@ -4949,7 +5085,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     }
 
     private void seekVideoBy(int deltaMs) {
-        if (!videoPrepared || (exoPlayer == null && videoPlayer == null)) return;
+        if (!videoPrepared || !hasActiveVideoPlayer()) return;
         try {
             int dur = getEffectiveVideoDurationMs();
             long now = System.currentTimeMillis();
@@ -4968,6 +5104,14 @@ public class BuiltInViewerActivity extends AppCompatActivity {
 
     private void applyVideoSpeedInternal(boolean shouldPlay) {
         if (!videoPrepared) return;
+        if (vlcPlayer != null) {
+            if (shouldPlay) vlcPlayer.play();
+            else vlcPlayer.pause();
+            if (speedModifiedFromDefault || Math.abs(videoSpeed - 1.0f) >= 0.02f) {
+                vlcPlayer.setPlaybackSpeed(videoSpeed);
+            }
+            return;
+        }
         if (exoPlayer != null) {
             try {
                 if (!shouldPlay && exoPlayer.isPlaying()) {
@@ -5036,6 +5180,10 @@ public class BuiltInViewerActivity extends AppCompatActivity {
         lastObservedVideoPosMs = 0;
         unexpectedPosResetCount = 0;
         if (rewindPulseRunnable != null) uiHandler.removeCallbacks(rewindPulseRunnable);
+        if (vlcPlayer != null) {
+            try { vlcPlayer.release(); } catch (Exception ignored) {}
+            vlcPlayer = null;
+        }
         if (exoPlayer != null) {
             try { exoPlayer.stop(); } catch (Exception ignored) {}
             try { exoPlayer.release(); } catch (Exception ignored) {}
@@ -5194,6 +5342,7 @@ public class BuiltInViewerActivity extends AppCompatActivity {
     private void applyCurrentVideoVolume() {
         float vol = isEffectiveVideoMuted() ? 0f : 1f;
         try {
+            if (vlcPlayer != null) vlcPlayer.setMuted(isEffectiveVideoMuted());
             if (exoPlayer != null) exoPlayer.setVolume(vol);
             if (videoPlayer != null) videoPlayer.setVolume(vol, vol);
         } catch (Exception ignored) {
