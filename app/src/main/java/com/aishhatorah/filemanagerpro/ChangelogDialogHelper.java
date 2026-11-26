@@ -96,6 +96,19 @@ public class ChangelogDialogHelper {
         headerRow.addView(rightTitleGroup, rightLp);
         outer.addView(headerRow);
 
+        // ===================== גירסה 0.3.8.1 =====================
+        SpannableStringBuilder v381 = new SpannableStringBuilder();
+        appendBullet(v381, "מציגי PDF ותמונות צפים ללא הבהוב וללא פס תחתון: ", accent,
+                "סרגלים צפים על כל המסך עם הסתרה והחזרה בלחיצה במרכז המסך במציג ה-PDF, ביטול חלונית הטעינה במעבר בין עמודים למניעת הבהוב, והיעלמות הפס הלבן בתחתית במציג ה-PDF ובמציג התמונות.", textPrimary);
+        appendBullet(v381, "\n\nשדרוגי הגדרות, גרירה ידנית, SD/USB צף וגיבוי APKS מפוצל: ", accent,
+                "שילוב כל ההגדרות בתוך הקטגוריות המתאימות, החזרת סידור הקטגוריות בגרירה ידנית במקום חיצים בתוך ההגדרות, תפריט הוצאה בטוחה צף לכרטיס SD ו-USB שאינו דוחף אריחים, ותמיכה מלאה בגיבוי ושיתוף של אפליקציות מפוצלות לחבילת .apks.", textPrimary);
+        appendBullet(v381, "\n\nארגון מחדש של הקוד, שילוב תיקוני MTS/תצוגה מקדימה ומדריך מעודכן: ", accent,
+                "פיצול הקוד למודולים מסודרים (viewer, browser, settings), שילוב תיקוני MTS/M2TS ותצוגת מקדימה ללא מריחה, הוספת רישיון MIT, README מלא לכל האפליקציה, עדכון המדריך למשתמש ובדיקות יחידה מלאות.", textPrimary);
+
+        addCollapsibleVersionCard(outer, activity, true,
+                "גירסה 0.3.8.1", "הגירסה הנוכחית • שדרוג PDF/תמונות צף, גיבוי .apks, גרירת הגדרות וסידור הקוד",
+                accent, textPrimary, textSecondary, subtleBg, divider, v381);
+
         // ===================== גירסה 0.3.8 =====================
         SpannableStringBuilder v38 = new SpannableStringBuilder();
         appendBullet(v38, "מסך הגדרות חדש ומקצועי באקורדיונים מתרחבים: ", accent,
@@ -105,8 +118,8 @@ public class ChangelogDialogHelper {
         appendBullet(v38, "\n\nשיפורי מיון, בחירה מרובה ובועת השמע: ", accent,
                 "זכירת מיון עצמאית לכל תיקייה, שליטה בתמונות ממוזערות לתיקיות ובניווט החזרה מבועת המוזיקה, אנימציית משיכה רציפה מהבועה לנגן המלא, ושדרוג וילון הבחירה המרובה בהחלקה.", textPrimary);
 
-        addCollapsibleVersionCard(outer, activity, true,
-                "גירסה 0.3.8", "הגירסה הנוכחית • שדרוג הגדרות, ביצועים, PDF ונגישות",
+        addCollapsibleVersionCard(outer, activity, false,
+                "גירסה 0.3.8", "שדרוג הגדרות, ביצועים, PDF, MTS ותצוגה מקדימה",
                 accent, textPrimary, textSecondary, subtleBg, divider, v38);
 
         // ===================== גירסה 0.3.7.1 =====================

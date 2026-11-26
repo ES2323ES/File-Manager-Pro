@@ -10,8 +10,8 @@ android {
         applicationId "com.aishhatorah.filemanagerpro"
         minSdk 26
         targetSdk 34
-        versionCode 39
-        versionName "0.3.8"
+        versionCode 40
+        versionName "0.3.8.1"
     }
 
     signingConfigs {
