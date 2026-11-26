@@ -21,7 +21,6 @@ import android.view.ViewGroup;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -29,6 +28,10 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.ColorUtils;
+import androidx.core.widget.NestedScrollView;
+import androidx.recyclerview.widget.RecyclerView;
+
+import com.aishhatorah.filemanagerpro.settings.HomeOrderDragAdapter;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -43,7 +46,7 @@ import java.util.Set;
 
 /**
  * מסך הגדרות מתקדם בעיצוב זכוכית מודרני עם אקורדיונים נפתחים, תתי-רשימות מוטמעות,
- * בחירת רקע וטשטוש, מחוות מפורטות, סידור קטגוריות מסך הבית ומיון ברירת מחדל.
+ * בחירת רקע וטשטוש, מחוות מפורטות, סידור קטגוריות מסך הבית בגרירה ומיון ברירת מחדל.
  */
 public class SettingsActivity extends AppCompatActivity {
 
@@ -57,7 +60,7 @@ public class SettingsActivity extends AppCompatActivity {
     private static final String SEC_STORAGE = "storage";
     private static final String SEC_UPDATES = "updates";
 
-    private ScrollView activeScroll;
+    private NestedScrollView activeScroll;
     private LinearLayout rootLayout;
     private LinearLayout bodyLayout;
     private int savedScrollY = 0;
@@ -209,7 +212,7 @@ public class SettingsActivity extends AppCompatActivity {
         topBar.addView(tvTitle, lpTitle);
         root.addView(topBar);
 
-        ScrollView scroll = new ScrollView(this);
+        NestedScrollView scroll = new NestedScrollView(this);
         scroll.setVerticalScrollBarEnabled(false);
         activeScroll = scroll;
         LinearLayout body = new LinearLayout(this);
@@ -239,47 +242,23 @@ public class SettingsActivity extends AppCompatActivity {
         );
         populateMediaSection(mediaBox, theme, textPrimary, textSecondary, accent, divider, dark);
 
-        // 3. סידור קטגוריות במסך הבית (תת-רשימה מוטמעת)
+        // 3. סידור קטגוריות במסך הבית (תת-רשימה מוטמעת + הצגת שמות)
         LinearLayout homeOrderBox = createAccordionSection(
                 body,
                 SEC_HOME_LAYOUT,
                 "סידור קטגוריות במסך הבית",
-                "שינוי סדר האריחים והסתרת קטגוריות ממסך הבית",
+                "שמות קטגוריות, סידור בגרירה ידנית והסתרת קטגוריות מהבית",
                 R.drawable.ic_drag_handle,
                 theme, textPrimary, textSecondary, accent, divider, dark
         );
-        populateHomeLayoutSection(homeOrderBox, theme, textPrimary, textSecondary, accent, divider, dark);
+        populateHomeLayoutSection(homeOrderBox, theme, textPrimary, textSecondary, accent, divider);
 
-        // 4. שלוש ההגדרות המרכזיות נשמרות גלויות ישירות בכרטיסייה נקייה
-        LinearLayout quickTogglesCard = createSectionCard(theme);
-        addSwitchRow(quickTogglesCard,
-                "שמות קטגוריות במסך הבית",
-                "הצגת שמות הקטגוריות מתחת לאייקונים בדף הבית",
-                PrefsManager.isShowHomeCategoryLabels(this),
-                textPrimary, textSecondary,
-                checked -> PrefsManager.setShowHomeCategoryLabels(this, checked));
-
-        addSwitchRow(quickTogglesCard,
-                "קיצור לתיקייה האחרונה",
-                "שמירת כרטיס גישה מהירה לתיקייה האחרונה שנפתחה",
-                PrefsManager.isQuickAccessEnabled(this),
-                textPrimary, textSecondary,
-                checked -> PrefsManager.setQuickAccessEnabled(this, checked));
-
-        addSwitchRow(quickTogglesCard,
-                "גיבוי .bak אוטומטי",
-                "שמירת עותק גיבוי אוטומטי לפני שמירת שינויים בקבצים",
-                PrefsManager.isCreateBackupOnSave(this),
-                textPrimary, textSecondary,
-                checked -> PrefsManager.setCreateBackupOnSave(this, checked));
-        body.addView(quickTogglesCard);
-
-        // 5. תצוגה ומיון (כולל תת-רשימה למיון ברירת מחדל)
+        // 4. תצוגה ומיון (כולל קיצור לתיקייה האחרונה, גיבוי .bak, ותת-רשימה למיון ברירת מחדל)
         LinearLayout displayBox = createAccordionSection(
                 body,
                 SEC_DISPLAY_SORT,
                 "תצוגה ומיון",
-                "רשת או רשימה, קבצים מוסתרים, תמונות ממוזערות ומיון",
+                "רשת או רשימה, קבצים מוסתרים, גיבוי .bak, קיצור מהיר ומיון",
                 R.drawable.ic_sort,
                 theme, textPrimary, textSecondary, accent, divider, dark
         );
@@ -395,6 +374,7 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(ThemeHelper.createGlassCardBackground(this, theme, 18f, true, false));
+        card.setElevation(dp(dark ? 1 : 2));
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         cardLp.bottomMargin = dp(12);
@@ -589,14 +569,14 @@ public class SettingsActivity extends AppCompatActivity {
         for (int rowStart = 0; rowStart < swatches.length; rowStart += 8) {
             LinearLayout swatchRow = new LinearLayout(this);
             swatchRow.setOrientation(LinearLayout.HORIZONTAL);
-            swatchRow.setGravity(Gravity.CENTER_VERTICAL);
+            swatchRow.setGravity(Gravity.CENTER);
             int end = Math.min(swatches.length, rowStart + 8);
             for (int i = rowStart; i < end; i++) {
                 final int swColor = swatches[i];
                 View dot = new View(this);
-                int sz = dp(26);
+                int sz = dp(27);
                 LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(sz, sz);
-                dlp.setMarginEnd(dp(8));
+                dlp.setMargins(dp(4), 0, dp(4), 0);
                 dot.setLayoutParams(dlp);
                 GradientDrawable gd = new GradientDrawable();
                 gd.setShape(GradientDrawable.OVAL);
@@ -613,7 +593,7 @@ public class SettingsActivity extends AppCompatActivity {
             }
             LinearLayout.LayoutParams srLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (rowStart > 0) srLp.topMargin = dp(8);
+            if (rowStart > 0) srLp.topMargin = dp(9);
             box.addView(swatchRow, srLp);
         }
 
@@ -929,213 +909,43 @@ public class SettingsActivity extends AppCompatActivity {
             int textPrimary,
             int textSecondary,
             int accent,
-            int divider,
-            boolean dark
+            int divider
     ) {
+        addSwitchRow(box,
+                "שמות קטגוריות במסך הבית",
+                "הצגת שמות הקטגוריות מתחת לאייקונים בדף הבית",
+                PrefsManager.isShowHomeCategoryLabels(this),
+                textPrimary, textSecondary,
+                checked -> PrefsManager.setShowHomeCategoryLabels(this, checked));
+
+        addRowDivider(box, divider, 4, 6);
+
         TextView tvHint = new TextView(this);
-        tvHint.setText("הזז קטגוריות למעלה/למטה או הסתר אותן ממסך הבית.");
+        tvHint.setText("גרור את ידית האחיזה לשינוי הסדר. כל פריט מתחת לקו האדום מוסתר מהבית.");
         tvHint.setTextColor(textSecondary);
         tvHint.setTextSize(ThemeHelper.spScaled(this, 12f));
-        tvHint.setPadding(0, dp(4), 0, dp(8));
+        tvHint.setPadding(0, dp(2), 0, dp(8));
         box.addView(tvHint);
 
-        LinearLayout organizerContainer = new LinearLayout(this);
-        organizerContainer.setOrientation(LinearLayout.VERTICAL);
-        box.addView(organizerContainer);
+        RecyclerView rvOrder = new RecyclerView(this);
+        rvOrder.setNestedScrollingEnabled(false);
+        rvOrder.setFocusable(false);
+        final HomeOrderDragAdapter dragAdapter = HomeOrderDragAdapter.attachToRecyclerView(
+                rvOrder, this, theme, true, null);
+        box.addView(rvOrder, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        rebuildInlineHomeOrganizer(organizerContainer, theme, textPrimary, textSecondary, accent, divider, dark);
-
-        addRowDivider(box, divider, 4, 2);
+        addRowDivider(box, divider, 6, 2);
         addActionListRow(box,
                 "איפוס סדר ברירת מחדל",
                 "החזרת כל הקטגוריות לסדר המקורי",
                 R.drawable.ic_reset,
                 accent, accent, textSecondary, divider, false,
                 v -> {
-                    PrefsManager.setHomeCategoryOrder(this, null);
-                    PrefsManager.setHomeVisibleLimit(this, -1);
                     beginSmoothTransition();
-                    rebuildInlineHomeOrganizer(organizerContainer, theme, textPrimary, textSecondary, accent, divider, dark);
+                    dragAdapter.resetToDefault();
                     Toast.makeText(this, "סדר הקטגוריות אופס לברירת המחדל", Toast.LENGTH_SHORT).show();
                 });
-    }
-
-    private void rebuildInlineHomeOrganizer(
-            LinearLayout container,
-            int theme,
-            int textPrimary,
-            int textSecondary,
-            int accent,
-            int divider,
-            boolean dark
-    ) {
-        container.removeAllViews();
-        List<String> fullOrder = PrefsManager.getHomeCategoryOrder(this);
-        int limit = PrefsManager.getHomeVisibleLimit(this);
-        int split = (limit > 0 && limit < fullOrder.size()) ? limit : fullOrder.size();
-
-        final List<String> visibleKeys = new ArrayList<>(fullOrder.subList(0, split));
-        final List<String> hiddenKeys = new ArrayList<>(fullOrder.subList(split, fullOrder.size()));
-
-        for (int i = 0; i < visibleKeys.size(); i++) {
-            final int idx = i;
-            final String key = visibleKeys.get(i);
-            if (i > 0) {
-                addRowDivider(container, divider, 0, 0);
-            }
-            addInlineCategoryRow(
-                    container, key, true,
-                    idx > 0, idx < visibleKeys.size() - 1,
-                    textPrimary, textSecondary, accent, dark,
-                    () -> {
-                        Collections.swap(visibleKeys, idx, idx - 1);
-                        persistInlineHomeOrganizer(visibleKeys, hiddenKeys);
-                        beginSmoothTransition();
-                        rebuildInlineHomeOrganizer(container, theme, textPrimary, textSecondary, accent, divider, dark);
-                    },
-                    () -> {
-                        Collections.swap(visibleKeys, idx, idx + 1);
-                        persistInlineHomeOrganizer(visibleKeys, hiddenKeys);
-                        beginSmoothTransition();
-                        rebuildInlineHomeOrganizer(container, theme, textPrimary, textSecondary, accent, divider, dark);
-                    },
-                    () -> {
-                        if (visibleKeys.size() <= 1) {
-                            Toast.makeText(this, "חייבת להישאר לפחות קטגוריה אחת גלויה", Toast.LENGTH_SHORT).show();
-                            return;
-                        }
-                        String moved = visibleKeys.remove(idx);
-                        hiddenKeys.add(0, moved);
-                        persistInlineHomeOrganizer(visibleKeys, hiddenKeys);
-                        beginSmoothTransition();
-                        rebuildInlineHomeOrganizer(container, theme, textPrimary, textSecondary, accent, divider, dark);
-                    }
-            );
-        }
-
-        if (!hiddenKeys.isEmpty()) {
-            TextView tvHiddenSep = new TextView(this);
-            tvHiddenSep.setText("מוסתר ממסך הבית (" + hiddenKeys.size() + ")");
-            tvHiddenSep.setTextColor(dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626"));
-            tvHiddenSep.setTextSize(ThemeHelper.spScaled(this, 12f));
-            tvHiddenSep.setTypeface(Typeface.DEFAULT_BOLD);
-            tvHiddenSep.setPadding(dp(4), dp(10), dp(4), dp(4));
-            container.addView(tvHiddenSep);
-
-            for (int i = 0; i < hiddenKeys.size(); i++) {
-                final int idx = i;
-                final String key = hiddenKeys.get(i);
-                if (i > 0) {
-                    addRowDivider(container, divider, 0, 0);
-                }
-                addInlineCategoryRow(
-                        container, key, false,
-                        idx > 0, idx < hiddenKeys.size() - 1,
-                        textPrimary, textSecondary, accent, dark,
-                        () -> {
-                            Collections.swap(hiddenKeys, idx, idx - 1);
-                            persistInlineHomeOrganizer(visibleKeys, hiddenKeys);
-                            beginSmoothTransition();
-                            rebuildInlineHomeOrganizer(container, theme, textPrimary, textSecondary, accent, divider, dark);
-                        },
-                        () -> {
-                            Collections.swap(hiddenKeys, idx, idx + 1);
-                            persistInlineHomeOrganizer(visibleKeys, hiddenKeys);
-                            beginSmoothTransition();
-                            rebuildInlineHomeOrganizer(container, theme, textPrimary, textSecondary, accent, divider, dark);
-                        },
-                        () -> {
-                            String moved = hiddenKeys.remove(idx);
-                            visibleKeys.add(moved);
-                            persistInlineHomeOrganizer(visibleKeys, hiddenKeys);
-                            beginSmoothTransition();
-                            rebuildInlineHomeOrganizer(container, theme, textPrimary, textSecondary, accent, divider, dark);
-                        }
-                );
-            }
-        }
-    }
-
-    private void addInlineCategoryRow(
-            LinearLayout parent,
-            String key,
-            boolean visible,
-            boolean canMoveUp,
-            boolean canMoveDown,
-            int textPrimary,
-            int textSecondary,
-            int accent,
-            boolean dark,
-            Runnable onUp,
-            Runnable onDown,
-            Runnable onToggleVisibility
-    ) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(2), dp(8), dp(2), dp(8));
-
-        TextView tvName = new TextView(this);
-        tvName.setText(categoryLabelForKey(key));
-        tvName.setTextColor(visible ? textPrimary : textSecondary);
-        tvName.setAlpha(visible ? 1f : 0.72f);
-        tvName.setTextSize(ThemeHelper.spScaled(this, 13.5f));
-        tvName.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tLp.setMarginEnd(dp(6));
-        row.addView(tvName, tLp);
-
-        ImageButton btnUp = ThemeHelper.createBorderlessSvgButton(
-                this, R.drawable.ic_chevron_up, canMoveUp ? accent : textSecondary, "הזז למעלה", 32, 5,
-                canMoveUp ? v -> onUp.run() : null);
-        btnUp.setAlpha(canMoveUp ? 1f : 0.3f);
-        btnUp.setEnabled(canMoveUp);
-        row.addView(btnUp);
-
-        ImageButton btnDown = ThemeHelper.createBorderlessSvgButton(
-                this, R.drawable.ic_chevron_down, canMoveDown ? accent : textSecondary, "הזז למטה", 32, 5,
-                canMoveDown ? v -> onDown.run() : null);
-        btnDown.setAlpha(canMoveDown ? 1f : 0.3f);
-        btnDown.setEnabled(canMoveDown);
-        row.addView(btnDown);
-
-        int visTint = visible ? accent : (dark ? Color.parseColor("#F87171") : Color.parseColor("#DC2626"));
-        ImageButton btnVis = ThemeHelper.createBorderlessSvgButton(
-                this,
-                visible ? R.drawable.ic_visibility : R.drawable.ic_visibility_off,
-                visTint,
-                visible ? "הסתר ממסך הבית" : "הצג במסך הבית",
-                34, 6,
-                v -> onToggleVisibility.run());
-        row.addView(btnVis);
-
-        parent.addView(row);
-    }
-
-    private void persistInlineHomeOrganizer(List<String> visibleKeys, List<String> hiddenKeys) {
-        List<String> combined = new ArrayList<>(visibleKeys.size() + hiddenKeys.size());
-        combined.addAll(visibleKeys);
-        combined.addAll(hiddenKeys);
-        PrefsManager.setHomeCategoryOrder(this, combined);
-        PrefsManager.setHomeVisibleLimit(this, hiddenKeys.isEmpty() ? -1 : visibleKeys.size());
-    }
-
-    private String categoryLabelForKey(String key) {
-        switch (key) {
-            case "internal": return getString(R.string.cat_internal);
-            case "sd_card": return getString(R.string.cat_sd_card);
-            case "downloads": return getString(R.string.cat_downloads);
-            case "images": return getString(R.string.cat_images);
-            case "audio": return getString(R.string.cat_audio);
-            case "videos": return getString(R.string.cat_videos);
-            case "documents": return getString(R.string.cat_documents);
-            case "apps": return getString(R.string.cat_apps);
-            case "recent": return getString(R.string.cat_recent);
-            case "recycle_bin": return getString(R.string.cat_recycle_bin);
-            case "audio_cutter": return getString(R.string.cat_audio_cutter);
-            case "video_cutter": return getString(R.string.cat_video_cutter);
-            default: return key;
-        }
     }
 
     private void populateDisplaySortSection(
@@ -1178,7 +988,10 @@ public class SettingsActivity extends AppCompatActivity {
                 "",
                 PrefsManager.isShowHidden(this),
                 textPrimary, textSecondary,
-                checked -> PrefsManager.setShowHidden(this, checked));
+                checked -> {
+                    PrefsManager.setShowHidden(this, checked);
+                    FileScanCache.invalidate();
+                });
 
         addSwitchRow(box,
                 "תצוגה מקדימה לקבצים",
@@ -1196,10 +1009,24 @@ public class SettingsActivity extends AppCompatActivity {
 
         addSwitchRow(box,
                 "חישוב גודל תיקיות",
-                "",
+                "הצגת נפח התיקייה במקום מספר הפריטים",
                 PrefsManager.isShowFolderSizes(this),
                 textPrimary, textSecondary,
                 checked -> PrefsManager.setShowFolderSizes(this, checked));
+
+        addSwitchRow(box,
+                "קיצור לתיקייה האחרונה",
+                "שמירת כרטיס גישה מהירה לתיקייה האחרונה שנפתחה",
+                PrefsManager.isQuickAccessEnabled(this),
+                textPrimary, textSecondary,
+                checked -> PrefsManager.setQuickAccessEnabled(this, checked));
+
+        addSwitchRow(box,
+                "גיבוי .bak אוטומטי",
+                "שמירת עותק גיבוי אוטומטי לפני שמירת שינויים בקבצים",
+                PrefsManager.isCreateBackupOnSave(this),
+                textPrimary, textSecondary,
+                checked -> PrefsManager.setCreateBackupOnSave(this, checked));
 
         // מיון ברירת מחדל כתת-רשימה מוטמעת
         addRowDivider(box, divider, 2, 2);
